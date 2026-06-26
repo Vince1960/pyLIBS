@@ -15728,6 +15728,7 @@ def clear_all_spectra(self):
     if messagebox.askyesno("Clear", "Clear all spectra?"):
         self.spectra.clear()
         self.clear_plot_annotations()
+        self.clear_template_data()
         self.redraw()
         if self.active_window and self.active_window.winfo_exists():
             self.active_window.refresh()
@@ -15849,6 +15850,14 @@ def close_template_from_menu(self):
     self.template_lines.clear()
     self.redraw()
     self.status("Template closed")
+
+def clear_template_data(self):
+    self.template_lines.clear()
+    if self.template_window and self.template_window.winfo_exists():
+        try:
+            self.template_window.refresh()
+        except Exception:
+            pass
 
 
 def _nearest_spectrum_point(self, wavelength):
@@ -16427,7 +16436,7 @@ _RETRO_METHODS = [
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
-    close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
+    close_template_from_menu, clear_template_data, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     full_y_main_visible_x,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
