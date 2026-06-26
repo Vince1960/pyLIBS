@@ -13388,6 +13388,63 @@ class BatchStatisticsWindow(tk.Toplevel):
             win.tree.insert("", "end", iid=str(i), values=(Path(fn).name, f"{total:.6g}"))
 
 
+def _population_statistics(values):
+    n = len(values)
+    mean = sum(values) / n
+    variance = sum((v - mean) ** 2 for v in values) / n
+    if variance <= 0:
+        return {
+            "Min": min(values),
+            "Max": max(values),
+            "Average": mean,
+            "Variance": variance,
+            "Skewness": 0.0,
+            "Kurtosis": 0.0,
+        }
+    sigma = math.sqrt(variance)
+    skewness = sum(((v - mean) / sigma) ** 3 for v in values) / n
+    kurtosis = sum(((v - mean) / sigma) ** 4 for v in values) / n
+    return {
+        "Min": min(values),
+        "Max": max(values),
+        "Average": mean,
+        "Variance": variance,
+        "Skewness": skewness,
+        "Kurtosis": kurtosis,
+    }
+
+
+class SpectrumStatisticsWindow(tk.Toplevel):
+    """Historical LIBS++ Statistics window for the main spectrum."""
+    rows = ("Min", "Max", "Average", "Variance", "Skewness", "Kurtosis")
+
+    def __init__(self, master: "MainWindow"):
+        super().__init__(master)
+        self.master_app = master
+        self.title("Statistics")
+        self.resizable(False, False)
+
+        sp = master.spectra[0]
+        n = min(len(sp.x), len(sp.y))
+        xstats = _population_statistics(list(sp.x[:n]))
+        ystats = _population_statistics(list(sp.y[:n]))
+
+        frame = ttk.Frame(self, padding=(14, 12))
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="").grid(row=0, column=0, padx=8, pady=(0, 6))
+        ttk.Label(frame, text="X", anchor="center").grid(row=0, column=1, padx=16, pady=(0, 6), sticky="ew")
+        ttk.Label(frame, text="Y", anchor="center").grid(row=0, column=2, padx=16, pady=(0, 6), sticky="ew")
+        for row, label in enumerate(self.rows, start=1):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w", padx=8, pady=3)
+            ttk.Label(frame, text=self._fmt(xstats[label]), anchor="e").grid(row=row, column=1, sticky="e", padx=16, pady=3)
+            ttk.Label(frame, text=self._fmt(ystats[label]), anchor="e").grid(row=row, column=2, sticky="e", padx=16, pady=3)
+        ttk.Label(frame, text=f"Number of points: {n}").grid(row=len(self.rows) + 1, column=0, columnspan=3, sticky="w", padx=8, pady=(12, 4))
+        ttk.Button(frame, text="Close", command=self.destroy).grid(row=len(self.rows) + 2, column=0, columnspan=3, pady=(8, 0))
+
+    def _fmt(self, value):
+        return f"{value:.6g}"
+
+
 class VerticalShiftWindow(tk.Toplevel):
     """Unit4: shift verticale dello spettro principale."""
     def __init__(self, master):
@@ -15451,7 +15508,7 @@ def build_retro_menu(self):
     util_menu.add_command(label="Info Template", command=self.template_info_from_menu)
     util_menu.add_command(label="Close Template", command=self.close_template_from_menu)
     util_menu.add_separator()
-    util_menu.add_command(label="Statistics", command=self.show_batch_statistics)
+    util_menu.add_command(label="Statistics", command=self.show_statistics)
     util_menu.add_separator()
     util_menu.add_command(label="GoTo...", command=self.show_goto_dialog)
 
@@ -16106,6 +16163,12 @@ def show_spectrum_offset(self):
 def show_batch_statistics(self):
     return BatchStatisticsWindow(self)
 
+def show_statistics(self):
+    if not self.spectra or not self.spectra[0].x or not self.spectra[0].y:
+        messagebox.showinfo("Statistics", "Load a spectrum before opening Statistics.")
+        return None
+    return SpectrumStatisticsWindow(self)
+
 def show_auto_element_identification(self):
     return AutoElementIdentificationWindow(self)
 
@@ -16301,7 +16364,7 @@ _RETRO_METHODS = [
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
     close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
-    expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics,
+    expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
     show_sac_window, load_template_file, save_template_file,
     _full_x_limits, _update_xscroll, _xscroll_changed, _zoom_out_from_box, _release,
