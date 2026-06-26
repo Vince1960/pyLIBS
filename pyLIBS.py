@@ -14124,6 +14124,23 @@ class NeHalphaWindow(tk.Toplevel):
         self.out.grid(row=len(labels), column=0, columnspan=3, pady=8, sticky="nsew")
         frm.rowconfigure(len(labels), weight=1)
         frm.columnconfigure(2, weight=1)
+        self.show_fit_window_on_spectrum()
+
+    def show_fit_window_on_spectrum(self):
+        if not self.master_app.spectra or not getattr(self.master_app, "ax", None):
+            self.master_app.status("H-alpha fit: load a spectrum before fitting.")
+            return
+        wl1 = safe_float(self.vars["wl1"].get(), self.master_app.options.ha_wl1)
+        delta = abs(safe_float(self.vars["Delta"].get(), self.master_app.options.ha_range)) or 1.0
+        self.master_app.ax.set_xlim(wl1 - delta, wl1 + delta)
+        self.master_app.full_y_main_visible_x()
+        self.master_app.canvas.draw_idle()
+        self.master_app._update_xscroll()
+        self.lift(self.master_app)
+        try:
+            self.focus_set()
+        except Exception:
+            pass
 
     def _initial_amplitude(self, xs, ys, center, baseline):
         idx = int(np.argmin(np.abs(xs - center)))
