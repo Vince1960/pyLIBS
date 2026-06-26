@@ -11413,11 +11413,50 @@ def safe_int(value, default=0):
 
 
 def _messagebox_parent(owner):
+    root = owner
     for attr in ("master_app", "app"):
         parent = getattr(owner, attr, None)
         if parent is not None:
-            return parent
-    return owner
+            root = parent
+            break
+    try:
+        focused = root.focus_get()
+        if focused is not None:
+            top = focused.winfo_toplevel()
+            if top is not None and top.winfo_exists():
+                return top
+    except Exception:
+        pass
+    return root
+
+
+def _prepare_messagebox_parent(owner):
+    parent = _messagebox_parent(owner)
+    try:
+        parent.lift()
+        parent.focus_force()
+    except Exception:
+        try:
+            parent.focus_set()
+        except Exception:
+            pass
+    return parent
+
+
+def _showinfo(owner, title, message):
+    return messagebox.showinfo(title, message, parent=_prepare_messagebox_parent(owner))
+
+
+def _showwarning(owner, title, message):
+    return messagebox.showwarning(title, message, parent=_prepare_messagebox_parent(owner))
+
+
+def _showerror(owner, title, message):
+    return messagebox.showerror(title, message, parent=_prepare_messagebox_parent(owner))
+
+
+def _askyesno(owner, title, message):
+    return messagebox.askyesno(title, message, parent=_prepare_messagebox_parent(owner))
 
 
 @dataclass
@@ -12694,7 +12733,7 @@ class ActiveSpectraWindow(tk.Toplevel):
         idx = self._current_index()
         if idx is None or idx == 0:
             if idx == 0:
-                messagebox.showinfo("Active Spectra", "Lo spettro principale resta sempre visibile.", parent=_messagebox_parent(self))
+                _showinfo(self, "Active Spectra", "Lo spettro principale resta sempre visibile.")
             return
         self.master_app.spectra[idx].visible = not self.master_app.spectra[idx].visible
         self.refresh()
@@ -12743,7 +12782,7 @@ class ActiveSpectraWindow(tk.Toplevel):
     def combine_selected(self, label, mode):
         specs = self._selected_spectra()
         if len(specs) < 2:
-            messagebox.showinfo("Active Spectra", "Selezionare almeno due spettri con click destro.", parent=_messagebox_parent(self))
+            _showinfo(self, "Active Spectra", "Selezionare almeno due spettri con click destro.")
             return
         n = min(len(s.y) for s in specs)
         x = specs[0].x[:n]
@@ -12915,9 +12954,9 @@ class LineIdentificationWindow(tk.Toplevel):
             self.atomic_lines = []  # ricerca lazy da SQLite
             self.master_app.atomic_lines = []
             self.master_app.status(f"LIBS.db attivo: {self.master_app.libs_db.filename}")
-            messagebox.showinfo("LIBS.db", "Database SQLite attivo. Le ricerche useranno la tabella selezionata.", parent=_messagebox_parent(self))
+            _showinfo(self, "LIBS.db", "Database SQLite attivo. Le ricerche useranno la tabella selezionata.")
         except Exception as e:
-            messagebox.showerror("LIBS.db", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "LIBS.db", str(e))
 
     def populate(self, lines):
         self.results=lines
@@ -13068,7 +13107,7 @@ class TraceLinesWindow(tk.Toplevel):
                     enriched.append(l)
             lines = enriched
         except Exception as e:
-            messagebox.showerror("Trace Lines", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Trace Lines", str(e))
             return
         # Repeated Trace calls accumulate, as in LIBS++.
         existing = getattr(self.master_app, "trace_markers", [])
@@ -13156,11 +13195,11 @@ class AutoElementIdentificationWindow(tk.Toplevel):
             self.master_app.libs_db.filename=self.master_app.options.libs_db_file
             self.master_app.libs_db.connect()
         except Exception as e:
-            messagebox.showerror("LIBS.db", str(e), parent=_messagebox_parent(self)); return
+            _showerror(self, "LIBS.db", str(e)); return
         rg=safe_float(self.range_var.get(), self.master_app.options.search_range)
         candidates=self.template_candidates()
         if not candidates:
-            messagebox.showinfo("Auto Element Identification", "Nessuna riga/template nel range.", parent=_messagebox_parent(self))
+            _showinfo(self, "Auto Element Identification", "Nessuna riga/template nel range.")
             return
         scores: dict[str, float] = {}
         nls=0.0
@@ -13329,7 +13368,7 @@ class BatchStatisticsWindow(tk.Toplevel):
             msg += f"; skipped odd last file {Path(skipped).name}"
         self.master_app.status(msg)
         if errors:
-            messagebox.showwarning("Batch Join", "\n".join(errors[:10]), parent=_messagebox_parent(self))
+            _showwarning(self, "Batch Join", "\n".join(errors[:10]))
 
     def _common_grid_values(self, specs):
         base = sorted(zip(specs[0].x, specs[0].y), key=lambda p: p[0])
@@ -13356,7 +13395,7 @@ class BatchStatisticsWindow(tk.Toplevel):
                 errors.append(f"{Path(fn).name}: {e}")
         if not specs:
             if errors:
-                messagebox.showerror("Batch Average", "\n".join(errors[:10]), parent=_messagebox_parent(self))
+                _showerror(self, "Batch Average", "\n".join(errors[:10]))
             return
         x, rows = self._common_grid_values(specs)
         avg=[sum(vals)/len(vals) for vals in zip(*rows)]
@@ -13373,7 +13412,7 @@ class BatchStatisticsWindow(tk.Toplevel):
             outputs.append(out_sd)
         self.master_app.status(f"Batch Average: saved {', '.join(Path(o).name for o in outputs)} from {len(specs)} file(s)")
         if errors:
-            messagebox.showwarning("Batch Average", "\n".join(errors[:10]), parent=_messagebox_parent(self))
+            _showwarning(self, "Batch Average", "\n".join(errors[:10]))
 
     def load_fls(self):
         self.load_list()
@@ -13561,12 +13600,12 @@ class SpectrumShiftWindow(tk.Toplevel):
     def ok(self):
         if not self.master_app.spectra:
             self.master_app.status("Shift: no spectrum loaded")
-            messagebox.showinfo("Shift", "Load a spectrum before shifting.", parent=_messagebox_parent(self))
+            _showinfo(self, "Shift", "Load a spectrum before shifting.")
             return
         source = safe_float(self.source_var.get(), None)
         target = safe_float(self.target_var.get(), None)
         if source is None or target is None:
-            messagebox.showerror("Shift", "Enter both source and target wavelengths.", parent=_messagebox_parent(self))
+            _showerror(self, "Shift", "Enter both source and target wavelengths.")
             return
         shift = target - source
         if self.shift_all_spectra_var.get():
@@ -13647,12 +13686,12 @@ class SpectrumOffsetWindow(SpectrumShiftWindow):
     def ok(self):
         if not self.master_app.spectra:
             self.master_app.status("Offset: no spectrum loaded")
-            messagebox.showinfo("Offset", "Load a spectrum before applying an offset.", parent=_messagebox_parent(self))
+            _showinfo(self, "Offset", "Load a spectrum before applying an offset.")
             return
         source = safe_float(self.source_var.get(), None)
         target = safe_float(self.target_var.get(), None)
         if source is None or target is None:
-            messagebox.showerror("Offset", "Enter both source and target intensities.", parent=_messagebox_parent(self))
+            _showerror(self, "Offset", "Enter both source and target intensities.")
             return
         offset = target - source
         if self.offset_all_spectra_var.get():
@@ -13810,20 +13849,20 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
     def fit_region(self):
         if np is None:
-            messagebox.showerror("Fit", "numpy non disponibile", parent=_messagebox_parent(self))
+            _showerror(self, "Fit", "numpy non disponibile")
             return
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            messagebox.showerror("Fit", "scipy.optimize non disponibile. Installare scipy.", parent=_messagebox_parent(self))
+            _showerror(self, "Fit", "scipy.optimize non disponibile. Installare scipy.")
             return
         if not self.master_app.spectra:
-            messagebox.showinfo("Fit", "Caricare prima uno spettro.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit", "Caricare prima uno spettro.")
             return
         sp = self.master_app.spectra[0]
         lines = self.candidate_lines()
         if not lines:
-            messagebox.showinfo("Fit", "Nessuna riga template nel range visibile.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit", "Nessuna riga template nel range visibile.")
             return
         rg = safe_float(self.range_var.get(), 2.0)
         lo = min(t.wavelen for t in lines) - rg
@@ -13831,7 +13870,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i,x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
         if len(xs) < 6:
-            messagebox.showinfo("Fit", "Troppi pochi punti nel range scelto.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit", "Troppi pochi punti nel range scelto.")
             return
         baseline = float(np.percentile(ys, 5))
         slope = 0.0
@@ -13853,7 +13892,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         try:
             popt, pcov = curve_fit(multigaussian_model, xs, ys, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=max(1000, self.master_app.options.iterations*200))
         except Exception as e:
-            messagebox.showerror("Fit", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Fit", str(e))
             return
         self.tree.delete(*self.tree.get_children())
         for idx, t in enumerate(lines):
@@ -13881,27 +13920,27 @@ class MultiGaussianFitWindow(tk.Toplevel):
     def fit_voigt_visible(self):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
         if np is None:
-            messagebox.showerror("Fit Voigt", "numpy non disponibile", parent=_messagebox_parent(self))
+            _showerror(self, "Fit Voigt", "numpy non disponibile")
             return
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            messagebox.showerror("Fit Voigt", "scipy.optimize non disponibile. Installare scipy.", parent=_messagebox_parent(self))
+            _showerror(self, "Fit Voigt", "scipy.optimize non disponibile. Installare scipy.")
             return
         sp = self._active_spectrum()
         if sp is None or not getattr(sp, "x", None):
-            messagebox.showinfo("Fit Voigt", "Caricare prima uno spettro.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit Voigt", "Caricare prima uno spettro.")
             return
         xlim, ylim = self.master_app.current_plot_view()
         lo, hi = sorted(xlim)
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i, x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
         if len(xs) < 8:
-            messagebox.showinfo("Fit Voigt", "Troppi pochi punti nella finestra visibile.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit Voigt", "Troppi pochi punti nella finestra visibile.")
             return
         lines = [t for t in self.master_app.template_lines if lo <= (abs(t.fitwavelen) if t.fitwavelen else t.wavelen) <= hi]
         if not lines:
-            messagebox.showinfo("Fit Voigt", "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit.", parent=_messagebox_parent(self))
+            _showinfo(self, "Fit Voigt", "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit.")
             return
         lines = lines[:10]
         xmin, xmax = float(xs.min()), float(xs.max())
@@ -13934,7 +13973,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         try:
             popt, pcov = curve_fit(multivoigt_model, xs, ys, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=max(2000, self.master_app.options.iterations*400))
         except Exception as e:
-            messagebox.showerror("Fit Voigt", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Fit Voigt", str(e))
             return
         self.tree.delete(*self.tree.get_children())
         for idx, t in enumerate(lines):
@@ -13987,15 +14026,15 @@ class NeHalphaWindow(tk.Toplevel):
 
     def run(self):
         if np is None:
-            messagebox.showerror("Ne", "numpy non disponibile", parent=_messagebox_parent(self))
+            _showerror(self, "Ne", "numpy non disponibile")
             return
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            messagebox.showerror("Ne", "scipy.optimize non disponibile", parent=_messagebox_parent(self))
+            _showerror(self, "Ne", "scipy.optimize non disponibile")
             return
         if not self.master_app.spectra:
-            messagebox.showinfo("Ne", "Caricare prima uno spettro.", parent=_messagebox_parent(self))
+            _showinfo(self, "Ne", "Caricare prima uno spettro.")
             return
         sp = self.master_app.spectra[0]
         c0 = safe_float(self.vars["Hα wavelength"].get(), 6565.0)
@@ -14003,14 +14042,14 @@ class NeHalphaWindow(tk.Toplevel):
         xs = np.asarray([x for x in sp.x if c0-rg <= x <= c0+rg], dtype=float)
         ys = np.asarray([sp.y[i] for i,x in enumerate(sp.x) if c0-rg <= x <= c0+rg], dtype=float)
         if len(xs) < 8:
-            messagebox.showinfo("Ne", "Troppi pochi punti intorno ad Hα.", parent=_messagebox_parent(self))
+            _showinfo(self, "Ne", "Troppi pochi punti intorno ad Hα.")
             return
         baseline = float(np.percentile(ys, 5)); amp = float(max(ys)-baseline)
         p0 = [amp, c0, safe_float(self.vars["Initial wg"].get(), 1.0), safe_float(self.vars["Initial wl"].get(), 1.0), baseline, 0.0, 0.5]
         try:
             popt, _ = curve_fit(pseudo_voigt, xs, ys, p0=p0, maxfev=5000)
         except Exception as e:
-            messagebox.showerror("Ne", str(e), parent=_messagebox_parent(self)); return
+            _showerror(self, "Ne", str(e)); return
         amp, center, wg, wl, baseline, slope, eta = popt
         wg, wl = abs(wg), abs(wl)
         wtot = math.sqrt((wl/2.0)**2 + wg**2) + wl/2.0
@@ -14358,7 +14397,7 @@ class SACWindow(tk.Toplevel):
 
     def compute(self):
         if not self.master_app.template_lines:
-            messagebox.showinfo("SAC", "Serve prima un template con righe assegnate.", parent=_messagebox_parent(self))
+            _showinfo(self, "SAC", "Serve prima un template con righe assegnate.")
             return
         try:
             self.master_app.libs_db.filename = self.master_app.options.libs_db_file
@@ -14443,7 +14482,7 @@ class StandardCorrectionWindow(tk.Toplevel):
         self.master_app.standard_refs.update(refs)
         self.refresh()
         if mismatch:
-            messagebox.showwarning("STD", "WARNING: Standard mismatch for: " + ", ".join(mismatch), parent=_messagebox_parent(self))
+            _showwarning(self, "STD", "WARNING: Standard mismatch for: " + ", ".join(mismatch))
         self.master_app.status(f"STD caricato: {fn}")
 
     def save_std(self):
@@ -14507,12 +14546,12 @@ class CFLibsWindow(tk.Toplevel):
             self.master_app.libs_db.filename = self.master_app.options.libs_db_file
             self.master_app.libs_db.connect()
         except Exception as e:
-            messagebox.showerror("LIBS.db", str(e), parent=_messagebox_parent(self)); return
+            _showerror(self, "LIBS.db", str(e)); return
         groups = libspp_boltzmann_groups(self.master_app, getattr(self.master_app, "sac_factors", {}))
         fits = libspp_fit_boltzmann(self.master_app, groups)
         kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
         if kt <= 0:
-            messagebox.showinfo("CF-LIBS", "Nessun fit Boltzmann valido: servono almeno due righe per specie/ione con Aki, gk, Ek e intensità.", parent=_messagebox_parent(self))
+            _showinfo(self, "CF-LIBS", "Nessun fit Boltzmann valido: servono almeno due righe per specie/ione con Aki, gk, Ek e intensità.")
             return
         libspp_recompute_q_at_temperature(fits, kt)
         ne = safe_float(self.ne_var.get(), self.master_app.options.ne_low)
@@ -14629,7 +14668,7 @@ class RetroTemplateManager(tk.Toplevel):
         try:
             self.master_app.load_template_file(fn)
         except Exception as e:
-            messagebox.showerror("Template", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Template", str(e))
         self.refresh()
         self.master_app.redraw()
 
@@ -14647,7 +14686,7 @@ class RetroTemplateManager(tk.Toplevel):
             self.master_app.save_template_file(fn)
             self.master_app.status(f"Template saved: {fn}")
         except Exception as e:
-            messagebox.showerror("Template", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Template", str(e))
 
     def template_info(self):
         lines = self.master_app.template_lines
@@ -14659,17 +14698,17 @@ class RetroTemplateManager(tk.Toplevel):
         msg = f"Lines: {len(lines)}\nAssigned lines: {sum(1 for l in lines if l.specie)}"
         if by_species:
             msg += "\n\n" + "\n".join(f"{k}: {v}" for k, v in sorted(by_species.items()))
-        messagebox.showinfo("Template Info", msg, parent=_messagebox_parent(self))
+        _showinfo(self, "Template Info", msg)
 
     def clear_template(self):
-        if messagebox.askyesno("Template", "This will clear the current template. Continue?", parent=_messagebox_parent(self)):
+        if _askyesno(self, "Template", "This will clear the current template. Continue?"):
             self.master_app.template_lines.clear()
             self.master_app.clear_element_markers()
             self.refresh()
             self.master_app.redraw()
 
     def close_template(self):
-        if messagebox.askyesno("Template", "This will close the current template. Continue?", parent=_messagebox_parent(self)):
+        if _askyesno(self, "Template", "This will close the current template. Continue?"):
             self.master_app.template_lines.clear()
             self.refresh()
             self.master_app.redraw()
@@ -14683,12 +14722,12 @@ class RetroTemplateManager(tk.Toplevel):
         )
         if fn:
             remember_working_dir(self.master_app.options, fn)
-        if fn and messagebox.askyesno("Delete Template", f"Delete template?\n{fn}", parent=_messagebox_parent(self)):
+        if fn and _askyesno(self, "Delete Template", f"Delete template?\n{fn}"):
             try:
                 Path(fn).unlink()
-                messagebox.showinfo("Delete Template", "Template deleted", parent=_messagebox_parent(self))
+                _showinfo(self, "Delete Template", "Template deleted")
             except Exception:
-                messagebox.showerror("Delete Template", "Template not deleted", parent=_messagebox_parent(self))
+                _showerror(self, "Delete Template", "Template not deleted")
 
     def on_double_click(self, event=None):
         item = self.tree.focus()
@@ -14803,7 +14842,7 @@ class RetroActiveSpectraWindow(tk.Toplevel):
 
     def change_color(self):
         # matplotlib auto-colors are currently used; keep this as a retro-compatible placeholder.
-        messagebox.showinfo("Active Spectra", "Color selection will be stored in a later pyLIBS build.", parent=_messagebox_parent(self))
+        _showinfo(self, "Active Spectra", "Color selection will be stored in a later pyLIBS build.")
 
     def swap(self):
         idx = self.selected_index
@@ -14816,7 +14855,7 @@ class RetroActiveSpectraWindow(tk.Toplevel):
     def _combine(self, mode):
         specs = [self.master_app.spectra[i] for i in self.selected_indices() if 0 <= i < len(self.master_app.spectra)]
         if len(specs) < 2:
-            messagebox.showinfo("Active Spectra", "Select at least two spectra.", parent=_messagebox_parent(self))
+            _showinfo(self, "Active Spectra", "Select at least two spectra.")
             return
         n = min(len(s.y) for s in specs)
         x = specs[0].x[:n]
@@ -14973,7 +15012,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.populate_results()
         except Exception as e:
             self.msg_var.set(str(e))
-            messagebox.showerror("Fit", str(e), parent=_messagebox_parent(self))
+            _showerror(self, "Fit", str(e))
 
     def populate_results(self):
         self.results.delete(*self.results.get_children())
@@ -15101,12 +15140,12 @@ class MainWindow(tk.Tk):
             assign_default_spectrum_color(sp, 0)
             self.spectra=[sp]
         except Exception as e:
-            messagebox.showerror("Open",str(e), parent=_messagebox_parent(self)); return
+            _showerror(self, "Open",str(e)); return
         for fn in fns[1:]:
             try:
                 self.add_spectrum(load_spectrum_for_open(fn, self.options))
             except Exception as e:
-                messagebox.showerror("Compare", f"{fn}: {e}", parent=_messagebox_parent(self))
+                _showerror(self, "Compare", f"{fn}: {e}")
         self.redraw()
         if len(fns) == 1:
             self.status(f"Spettro caricato: {first_fn}")
@@ -15128,7 +15167,7 @@ class MainWindow(tk.Tk):
                 else:
                     merged = merge_spectra_by_wavelength(merged, sp, name=f"{merged.name} + {sp.name}")
             except Exception as e:
-                messagebox.showerror("Append",f"{fn}: {e}", parent=_messagebox_parent(self))
+                _showerror(self, "Append",f"{fn}: {e}")
         if merged is not None:
             assign_default_spectrum_color(merged, 0)
             self.spectra = [merged]
@@ -15150,13 +15189,13 @@ class MainWindow(tk.Tk):
 
     def load_response_file(self, fn):
         try: self.response=ResponseCurve.from_ascii(fn,self.options.convert_to_angstrom)
-        except Exception as e: messagebox.showerror("Response",str(e), parent=_messagebox_parent(self)); return
+        except Exception as e: _showerror(self, "Response",str(e)); return
         self.options.response_file=fn
         if self.response_window and self.response_window.winfo_exists(): self.response_window.redraw()
         self.status(f"Risposta caricata: {fn}")
 
     def apply_response_now(self):
-        if not self.response.x: messagebox.showinfo("Response","Caricare prima la curva.", parent=_messagebox_parent(self)); return
+        if not self.response.x: _showinfo(self, "Response","Caricare prima la curva."); return
         for sp in self.spectra: sp.apply_response(self.response)
         self.redraw()
 
@@ -15683,7 +15722,7 @@ def swap_spectra(self):
     count = len(getattr(self, "spectra", []))
     if count < 2:
         self.status("Swap Spectra: load at least two spectra.")
-        messagebox.showinfo("Swap Spectra", "Load at least two spectra before swapping.", parent=_messagebox_parent(self))
+        _showinfo(self, "Swap Spectra", "Load at least two spectra before swapping.")
         return
     if count == 2:
         first, second = 0, 1
@@ -15709,7 +15748,7 @@ def swap_spectra(self):
             return
         if first_num == second_num:
             self.status("Swap Spectra: choose two different spectra.")
-            messagebox.showinfo("Swap Spectra", "Choose two different spectra.", parent=_messagebox_parent(self))
+            _showinfo(self, "Swap Spectra", "Choose two different spectra.")
             return
         first, second = first_num - 1, second_num - 1
     self.spectra[first], self.spectra[second] = self.spectra[second], self.spectra[first]
@@ -15729,11 +15768,11 @@ def compare_spectrum(self):
         try:
             self.add_spectrum(load_spectrum_for_open(fn, self.options))
         except Exception as e:
-            messagebox.showerror("Compare", f"{fn}: {e}", parent=_messagebox_parent(self))
+            _showerror(self, "Compare", f"{fn}: {e}")
     self.redraw()
 
 def clear_all_spectra(self):
-    if messagebox.askyesno("Clear", "Clear all spectra?", parent=_messagebox_parent(self)):
+    if _askyesno(self, "Clear", "Clear all spectra?"):
         self.spectra.clear()
         self.clear_plot_annotations()
         self.clear_template_data()
@@ -15760,10 +15799,10 @@ def print_plot(self):
         self.fig.savefig(fn)
         self.status(f"Plot exported: {fn}")
     except Exception as e:
-        messagebox.showerror("Print", str(e), parent=_messagebox_parent(self))
+        _showerror(self, "Print", str(e))
 
 def copy_plot(self):
-    messagebox.showinfo("Copy", "Clipboard copy is not available in this prototype. Use File > Print to export the plot.", parent=_messagebox_parent(self))
+    _showinfo(self, "Copy", "Clipboard copy is not available in this prototype. Use File > Print to export the plot.")
 
 def change_background(self):
     try:
@@ -15812,7 +15851,7 @@ def toggle_log(self, axis="y"):
     try:
         self.redraw(preserve_view=True)
     except Exception as e:
-        messagebox.showerror("Log Scale", str(e), parent=_messagebox_parent(self))
+        _showerror(self, "Log Scale", str(e))
 
 def toggle_labels(self):
     self.status("Show Labels toggled")
@@ -15847,7 +15886,7 @@ def load_template_from_menu(self):
         self.redraw()
         self.status(f"Template loaded: {fn}")
     except Exception as e:
-        messagebox.showerror("Load Template", str(e), parent=_messagebox_parent(self))
+        _showerror(self, "Load Template", str(e))
 
 def template_info_from_menu(self):
     win = RetroTemplateManager(self)
@@ -16020,7 +16059,7 @@ def find_peaks_basic(self):
     if not self.spectra:
         return
     if scipy_find_peaks is None:
-        messagebox.showerror("Find Peaks", "scipy.signal.find_peaks is not available. Install scipy to use Find Peaks.", parent=_messagebox_parent(self))
+        _showerror(self, "Find Peaks", "scipy.signal.find_peaks is not available. Install scipy to use Find Peaks.")
         return
     sp = self.spectra[0]
     if len(sp.x) < 3:
@@ -16079,7 +16118,7 @@ def find_peaks_basic(self):
 def show_manual(self):
     manual = app_base_dir() / "docs" / "LIBS++_Manual.pdf"
     if not manual.exists():
-        messagebox.showinfo("Manual", f"Manual not found:\n{manual}", parent=_messagebox_parent(self))
+        _showinfo(self, "Manual", f"Manual not found:\n{manual}")
         return
     try:
         if sys.platform.startswith("win"):
@@ -16089,7 +16128,7 @@ def show_manual(self):
         else:
             subprocess.Popen(["xdg-open", str(manual)])
     except Exception as exc:
-        messagebox.showerror("Manual", f"Could not open the manual:\n{exc}", parent=_messagebox_parent(self))
+        _showerror(self, "Manual", f"Could not open the manual:\n{exc}")
 
 def show_about(self):
     win = tk.Toplevel(self)
@@ -16223,7 +16262,7 @@ def show_batch_statistics(self):
 
 def show_statistics(self):
     if not self.spectra or not self.spectra[0].x or not self.spectra[0].y:
-        messagebox.showinfo("Statistics", "Load a spectrum before opening Statistics.", parent=_messagebox_parent(self))
+        _showinfo(self, "Statistics", "Load a spectrum before opening Statistics.")
         return None
     return SpectrumStatisticsWindow(self)
 
@@ -16334,7 +16373,7 @@ class GoToWindow(tk.Toplevel):
         try:
             wave = float(self.wave_var.get().replace(",", "."))
         except Exception:
-            messagebox.showerror("GoTo", "Insert a valid wavelength.", parent=_messagebox_parent(self))
+            _showerror(self, "GoTo", "Insert a valid wavelength.")
             return
         self.app.goto_wavelength(wave)
         self.destroy()
