@@ -55,3 +55,13 @@ Before modifying code:
 python3 -m py_compile pyLIBS_python_prototype_v8_18_incremental_template_update.py
 
 6. Report modified files, summary, and syntax-check result.
+
+## Documentation maintenance
+
+When a task changes the project:
+
+- update PROJECT_STATE.md if the project status changes;
+- update TODO.md if tasks are completed;
+- update CHANGELOG.md if functionality changes;
+- update DECISIONS.md only when a new architectural decision is taken;
+- update ARCHITECTURE.md only when the software architecture changes.
