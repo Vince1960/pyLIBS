@@ -12797,16 +12797,16 @@ class TraceLinesWindow(tk.Toplevel):
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
         self.species_var = tk.StringVar(value="Si")
         ttk.Entry(top, textvariable=self.species_var, width=10).grid(row=0, column=1, sticky="w", padx=3)
-        self.neutral_var = tk.BooleanVar(value=True)
-        self.ionized_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="I", variable=self.neutral_var).grid(row=0, column=2, padx=6)
-        ttk.Checkbutton(top, text="II", variable=self.ionized_var).grid(row=0, column=3, padx=6)
-        ttk.Label(top, text="Max Lines").grid(row=0, column=4, sticky="w", padx=(16,3))
+        self.mode_var = tk.StringVar(value="Both")
+        ttk.Label(top, text="Mode").grid(row=0, column=2, sticky="w", padx=(8, 2))
+        for c, mode in enumerate(("I", "II", "Both", "All"), start=3):
+            ttk.Radiobutton(top, text=mode, variable=self.mode_var, value=mode).grid(row=0, column=c, padx=3)
+        ttk.Label(top, text="Max Lines").grid(row=0, column=7, sticky="w", padx=(16,3))
         self.max_var = tk.StringVar(value="20")
-        ttk.Entry(top, textvariable=self.max_var, width=7).grid(row=0, column=5, sticky="w", padx=3)
-        ttk.Button(top, text="OK", command=self.trace).grid(row=0, column=6, padx=8)
-        ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=7, padx=3)
-        ttk.Button(top, text="Clear", command=self.clear).grid(row=0, column=8, padx=3)
+        ttk.Entry(top, textvariable=self.max_var, width=7).grid(row=0, column=8, sticky="w", padx=3)
+        ttk.Button(top, text="OK", command=self.trace).grid(row=0, column=9, padx=8)
+        ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=10, padx=3)
+        ttk.Button(top, text="Clear", command=self.clear).grid(row=0, column=11, padx=3)
         self.info_var = tk.StringVar(value="Trace usa il range di lunghezze d'onda attualmente visibile.")
         ttk.Label(self, textvariable=self.info_var).pack(anchor="w", padx=8)
         self.tree = ttk.Treeview(self, columns=self.columns, show="headings")
@@ -12824,12 +12824,7 @@ class TraceLinesWindow(tk.Toplevel):
         element = self.species_var.get().strip().capitalize()
         if not element:
             return
-        ions = []
-        if self.neutral_var.get(): ions.append(1)
-        if self.ionized_var.get(): ions.append(2)
-        if not ions:
-            messagebox.showwarning("Trace Lines", "Select at least one ionization stage: I or II.")
-            return
+        mode = self.mode_var.get()
         # Use exactly the wavelength interval that is visible in the main plot
         # at the moment the user presses OK.  This reproduces the LIBS++ Trace
         # behaviour and avoids searching the full spectrum after a zoom.
@@ -12838,7 +12833,17 @@ class TraceLinesWindow(tk.Toplevel):
         maxn = safe_int(self.max_var.get(), 20)
         try:
             self.master_app.libs_db.filename = self.master_app.options.libs_db_file
-            lines = self.master_app.libs_db.trace_lines(element, lo, hi, ions=ions, max_lines=maxn, table="Datalibs")
+            if mode == "I":
+                lines = self.master_app.libs_db.trace_lines(element, lo, hi, ions=[1], max_lines=maxn, table="Datalibs")
+            elif mode == "II":
+                lines = self.master_app.libs_db.trace_lines(element, lo, hi, ions=[2], max_lines=maxn, table="Datalibs")
+            elif mode == "All":
+                lines = self.master_app.libs_db.trace_lines(element, lo, hi, ions=[1, 2], max_lines=maxn, table="Datalibs")
+            else:
+                lines = (
+                    self.master_app.libs_db.trace_lines(element, lo, hi, ions=[1], max_lines=maxn, table="Datalibs") +
+                    self.master_app.libs_db.trace_lines(element, lo, hi, ions=[2], max_lines=maxn, table="Datalibs")
+                )
             # Enrich each traced line with complete transition data when available.
             enriched = []
             for l in lines:
@@ -12860,7 +12865,7 @@ class TraceLinesWindow(tk.Toplevel):
         self.refresh()
         self.master_app.redraw(preserve_view=True)
         self.master_app.restore_plot_view(view_xlim, view_ylim)
-        self.info_var.set(f"Tracciate {len(lines)} righe {element} nell'intervallo visibile {min(lo,hi):.2f}-{max(lo,hi):.2f} Å; totale righe tracciate: {len(existing)}.")
+        self.info_var.set(f"Tracciate {len(lines)} righe {element} ({mode}) nell'intervallo visibile {min(lo,hi):.2f}-{max(lo,hi):.2f} Å; totale righe tracciate: {len(existing)}.")
         self.master_app.status(self.info_var.get())
 
     def assign(self):
