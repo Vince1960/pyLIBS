@@ -14701,7 +14701,7 @@ class MainWindow(tk.Tk):
         self.after(SPLASH_DURATION_MS, self.deiconify)
 
     def _build(self):
-        self._menu(); self._toolbar(); self._plot(); self._status()
+        self._menu(); self._plot(); self._status()
 
     def _menu(self):
         m=tk.Menu(self)
@@ -15196,6 +15196,32 @@ def build_retro_menu(self):
     menu.add_cascade(label="Help", menu=help_menu)
     help_menu.add_command(label="About", command=self.show_about)
 
+class ToolbarTooltip:
+    """Small tooltip helper for toolbar image buttons."""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+        widget.bind("<ButtonPress>", self.hide)
+
+    def show(self, _event=None):
+        if self.tip or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 16
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)
+        self.tip.wm_geometry(f"+{x}+{y}")
+        label = ttk.Label(self.tip, text=self.text, relief="solid", borderwidth=1, padding=(4, 2))
+        label.pack()
+
+    def hide(self, _event=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
 def build_retro_toolbar(self):
     """Build original-like toolbar order."""
     if hasattr(self, "retro_toolbar"):
@@ -15227,8 +15253,52 @@ def build_retro_toolbar(self):
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
     ]
+    icon_dir = Path(__file__).resolve().parent / "icons"
+    icon_names = {
+        "Open": "open.png",
+        "Compare": "compare.png",
+        "Append": "append.png",
+        "Save": "save.png",
+        "Print": "print.png",
+        "Full Y": "full_y.png",
+        "Full X": "full_x.png",
+        "Full Scale": "full_view.png",
+        "Load Template": "load_template.png",
+        "Trace": "trace.png",
+        "Autofit": "fit.png",
+        "Manual Fit": "fit.png",
+        "Saha Boltzmann": "calculator.png",
+        "CF LIBS": "database.png",
+    }
+    icon_fallbacks = {
+        "Full Y": "zoom_y_out.png",
+        "Full X": "zoom_x_out.png",
+    }
+    tooltip_text = {
+        "Trace": "Trace Lines",
+        "Full Scale": "Full View",
+    }
+    self.toolbar_icons = {}
+    self.toolbar_tooltips = []
+    self.toolbar_missing_icons = []
     for label, cmd in buttons:
-        ttk.Button(self.retro_toolbar, text=label, command=cmd).pack(side="left", padx=1, pady=1)
+        icon_name = icon_names.get(label)
+        icon_path = icon_dir / icon_name if icon_name else None
+        if icon_path and not icon_path.exists():
+            fallback_name = icon_fallbacks.get(label)
+            fallback_path = icon_dir / fallback_name if fallback_name else None
+            if fallback_path and fallback_path.exists():
+                icon_name = fallback_name
+                icon_path = fallback_path
+        if icon_path and icon_path.exists():
+            image = tk.PhotoImage(file=str(icon_path))
+            self.toolbar_icons[label] = image
+            button = ttk.Button(self.retro_toolbar, image=image, command=cmd)
+            button.pack(side="left", padx=1, pady=1)
+            self.toolbar_tooltips.append(ToolbarTooltip(button, tooltip_text.get(label, label)))
+        else:
+            self.toolbar_missing_icons.append(label)
+            ttk.Button(self.retro_toolbar, text=label, command=cmd).pack(side="left", padx=1, pady=1)
 
 def install_retro_ui(self):
     self.build_retro_menu()
