@@ -14153,6 +14153,7 @@ class NeHalphaWindow(tk.Toplevel):
             return
         wl1 = safe_float(self.vars["wl1"].get(), self.master_app.options.ha_wl1)
         delta = abs(safe_float(self.vars["Delta"].get(), self.master_app.options.ha_range)) or 1.0
+        self.master_app.clear_fit_artists()
         self.master_app.ax.set_xlim(wl1 - delta, wl1 + delta)
         self.master_app.full_y_main_visible_x()
         self.master_app.canvas.draw_idle()
@@ -14188,6 +14189,7 @@ class NeHalphaWindow(tk.Toplevel):
         delta = abs(safe_float(self.vars["Delta"].get(), self.master_app.options.ha_range)) or 1.0
         lo, hi = wl1 - delta, wl1 + delta
         if getattr(self.master_app, "ax", None):
+            self.master_app.clear_fit_artists()
             self.master_app.ax.set_xlim(lo, hi)
             self.master_app.full_y_main_visible_x()
             self.master_app.canvas.draw_idle()
@@ -15485,6 +15487,32 @@ class MainWindow(tk.Tk):
         self.trace_markers = []
         self.fit_overlay = None
 
+    def clear_fit_artists(self):
+        self.fit_overlay = None
+        ax = getattr(self, "ax", None)
+        if not ax:
+            return False
+        removed = False
+        for artist in list(getattr(ax, "lines", [])):
+            try:
+                if artist.get_label() == "fit":
+                    artist.remove()
+                    removed = True
+            except Exception:
+                pass
+        if removed:
+            try:
+                legend = ax.get_legend()
+                if legend is not None:
+                    legend.remove()
+                handles, labels = ax.get_legend_handles_labels()
+                pairs = [(h, l) for h, l in zip(handles, labels) if l and not l.startswith("_") and l != "fit"]
+                if pairs:
+                    ax.legend([p[0] for p in pairs], [p[1] for p in pairs], loc="best")
+            except Exception:
+                pass
+        return removed
+
     def _active_spectrum_y_at(self, wavelength):
         """Intensity of the selected active spectrum at the nearest wavelength.
 
@@ -15713,6 +15741,7 @@ class MainWindow(tk.Tk):
     def zoom_around(self,wave):
         if self.ax:
             width=max(5,self.options.search_range*5)
+            self.clear_fit_artists()
             self.ax.set_xlim(wave-width,wave+width); self.canvas.draw_idle()
 
     def show_fit(self): MultiGaussianFitWindow(self)
@@ -16438,6 +16467,7 @@ def full_x(self):
         return
     xs = [x for sp in self.spectra if sp.visible for x in sp.x]
     if xs:
+        self.clear_fit_artists()
         self.ax.set_xlim(min(xs), max(xs)); self.canvas.draw_idle(); self._update_xscroll()
 
 def full_y(self):
@@ -16452,6 +16482,7 @@ def full_y(self):
         ys = [y for sp in self.spectra if sp.visible for y in sp.y]
     if ys:
         pad = 0.03 * (max(ys)-min(ys) or 1.0)
+        self.clear_fit_artists()
         self.ax.set_ylim(min(ys)-pad, max(ys)+pad); self.canvas.draw_idle(); self._update_xscroll()
 
 def full_y_main_visible_x(self):
@@ -16463,6 +16494,7 @@ def full_y_main_visible_x(self):
     if not ys:
         return False
     pad = 0.03 * (max(ys) - min(ys) or 1.0)
+    self.clear_fit_artists()
     self.ax.set_ylim(min(ys) - pad, max(ys) + pad)
     return True
 
@@ -16489,6 +16521,7 @@ def expand_x_50(self):
     if new_xmax > data_max:
         new_xmax = data_max
         new_xmin = max(data_min, data_max - new_width)
+    self.clear_fit_artists()
     self.ax.set_xlim(new_xmin, new_xmax)
     self.canvas.draw_idle()
     self._update_xscroll()
@@ -16497,6 +16530,7 @@ def expand_x_50(self):
 def full_scale(self):
     if not getattr(self, "ax", None):
         return
+    self.clear_fit_artists()
     self.ax.relim(); self.ax.autoscale(True); self.canvas.draw_idle(); self._update_xscroll()
 
 def show_options(self):
@@ -16670,6 +16704,7 @@ def _xscroll_changed(self, value):
         return
     frac = max(0.0, min(100.0, float(value))) / 100.0
     new_lo = f0 + frac * (span - width)
+    self.clear_fit_artists()
     self.ax.set_xlim(new_lo, new_lo + width)
     self.canvas.draw_idle()
 
@@ -16683,6 +16718,7 @@ def _zoom_out_from_box(self, x0, x1, y0, y1):
     factor_y = max(1.5, min(20.0, (cury[1] - cury[0]) / box_h))
     new_w = (curx[1] - curx[0]) * factor_x
     new_h = (cury[1] - cury[0]) * factor_y
+    self.clear_fit_artists()
     self.ax.set_xlim(cx - new_w/2, cx + new_w/2)
     self.ax.set_ylim(cy - new_h/2, cy + new_h/2)
 
@@ -16703,6 +16739,7 @@ def _release(self, event):
         # Old LIBS++ convention: drag left-high -> right-low to zoom in;
         # reverse direction restores the full spectrum.
         if dxdata > 0 and dydata < 0:
+            self.clear_fit_artists()
             self.ax.set_xlim(min(x0, event.xdata), max(x0, event.xdata))
             self.ax.set_ylim(min(y0, event.ydata), max(y0, event.ydata))
         elif dxdata < 0 and dydata > 0:
@@ -16713,6 +16750,7 @@ def _release(self, event):
     elif button == 3:
         dx = event.xdata - x0
         dy = event.ydata - y0
+        self.clear_fit_artists()
         self.ax.set_xlim(old_xlim[0]-dx, old_xlim[1]-dx)
         self.ax.set_ylim(old_ylim[0]-dy, old_ylim[1]-dy)
         self.canvas.draw_idle(); self._update_xscroll()
@@ -16723,6 +16761,7 @@ def goto_wavelength(self, wavelength):
         return
     delta = max(float(getattr(self.options, "delta_min", 1.0) or 1.0), 1e-9)
     half_window = 3.0 * delta
+    self.clear_fit_artists()
     self.ax.set_xlim(wavelength - half_window, wavelength + half_window)
     self.full_y_main_visible_x()
     self.canvas.draw_idle(); self._update_xscroll()
