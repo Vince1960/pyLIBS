@@ -15148,10 +15148,11 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     Up to 10 template lines are edited, each with wavelength, wg, wl and fixed/free flags.
     """
-    def __init__(self, master: "MainWindow"):
+    def __init__(self, master: "MainWindow", automatic=False):
         super().__init__(master)
         self.master_app = master
-        self.title("Fit")
+        self.automatic = bool(automatic)
+        self.title("Automatic Fit" if self.automatic else "Manual Fit")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "760x520"))
         self.configure(bg=RETRO_BG)
         self.line_vars = []
@@ -15162,15 +15163,18 @@ class RetroFitManagerWindow(tk.Toplevel):
         self._build()
         self.load_from_template()
         self.prepare_initial_region()
+        if self.automatic:
+            self.after(100, self.run_fit)
 
     def _build(self):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=4, pady=3)
-        ttk.Button(top, text="Fit", command=self.run_fit).pack(side="left", padx=2)
+        ttk.Button(top, text=("Auto Fit" if self.automatic else "Fit"), command=self.run_fit).pack(side="left", padx=2)
         ttk.Button(top, text="Stop", command=self.stop_fit).pack(side="left", padx=2)
         ttk.Button(top, text="Close", command=self.destroy).pack(side="left", padx=2)
-        ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
-        ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
+        if not self.automatic:
+            ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
+            ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
         ttk.Button(top, text="Expand", command=self.toggle_expand).pack(side="right", padx=2)
 
         self.msg_var = tk.StringVar(value="")
@@ -15302,13 +15306,36 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app._update_xscroll()
         self.load_from_template(group)
 
+    def _show_group_region(self, group):
+        if not group:
+            return 0, False
+        self._display_manual_group(group)
+        min_points = self._minimum_fit_points(group)
+        point_count = self._current_fit_point_count()
+        expanded = False
+        if point_count < min_points:
+            point_count, expanded, _retries = self._expand_manual_window_to_points(group, min_points)
+        status = (
+            f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}; "
+            f"{len(group)} line(s), {point_count} point(s)"
+        )
+        if expanded:
+            status += ", expanded"
+        self.msg_var.set(status)
+        self.master_app.status(status)
+        return point_count, expanded
+
     def prepare_initial_region(self):
         self.manual_fit_lines = self._sorted_template_lines()
         self.manual_fit_index = 0
         group, _ = self._group_from_index(0)
         if group:
-            self._display_manual_group(group)
-            self.msg_var.set(f"Ready: {len(group)} line(s), {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
+            self._show_group_region(group)
+
+    def _current_group(self):
+        if not self.manual_fit_lines:
+            self.manual_fit_lines = self._sorted_template_lines()
+        return self._group_from_index(self.manual_fit_index)
 
     def _current_fit_point_count(self):
         if not self.master_app.spectra or not getattr(self.master_app, "ax", None):
@@ -15385,72 +15412,93 @@ class RetroFitManagerWindow(tk.Toplevel):
                 pass
         return ok, message
 
+    def _prepare_group_for_fit(self, group, mode_label):
+        first = group[0].wavelen
+        last = group[-1].wavelen
+        self.msg_var.set(f"Fitting {len(group)} line(s): {first:.4f} - {last:.4f}")
+        self._display_manual_group(group)
+        self.update_idletasks()
+        min_points = self._minimum_fit_points(group)
+        point_count = self._current_fit_point_count()
+        if point_count < min_points:
+            point_count, expanded, retries = self._expand_manual_window_to_points(group, min_points)
+            self.update_idletasks()
+        else:
+            expanded = False
+            retries = 0
+        report = (
+            f"{mode_label}: {'expanded window, ' if expanded else ''}"
+            f"fitting {len(group)} line(s) using {point_count} points"
+        )
+        self.msg_var.set(report)
+        self.master_app.status(report)
+        if point_count < min_points:
+            message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+            return False, report, message, retries
+        return True, report, "", retries
+
+    def _fit_group_once(self, group, mode_label):
+        ready, report, message, retries = self._prepare_group_for_fit(group, mode_label)
+        first = group[0].wavelen
+        last = group[-1].wavelen
+        if not ready:
+            self.manual_fit_failed = True
+            self.msg_var.set(f"{report}; {message}")
+            _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
+            return False
+        ok, message = self._fit_manual_group(group)
+        if not ok:
+            self.manual_fit_failed = True
+            self.msg_var.set(f"{report}; Fit failed: {message}")
+            _showerror(self, mode_label, f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
+            return False
+        self.populate_results(group)
+        self.msg_var.set(f"{report}; fitted")
+        self.master_app.status(f"{report}; fitted")
+        self.update_idletasks()
+        return True
+
     def run_fit(self):
         if not self.master_app.spectra:
             _showinfo(self, "Fit", "Caricare prima uno spettro.")
             return
-        self.manual_fit_lines = self._sorted_template_lines()
-        self.manual_fit_index = 0
+        if not self.manual_fit_lines:
+            self.manual_fit_lines = self._sorted_template_lines()
         self.manual_fit_failed = False
         self.manual_fit_stop = False
         if not self.manual_fit_lines:
             self.msg_var.set("No lines for fitting")
             _showinfo(self, "Fit", "No template lines to fit.")
             return
-        self.msg_var.set("Starting Manual Fit....")
-        self.progress["value"] = 0
-        self._continue_manual_fit()
+        if self.automatic:
+            self._run_automatic_fit()
+            return
+        group, _ = self._current_group()
+        if not group:
+            self.msg_var.set("No current region")
+            return
+        if self._fit_group_once(group, "Manual Fit"):
+            self.progress["value"] = min(100, int(100 * self.manual_fit_index / max(1, len(self.manual_fit_lines))))
 
-    def _continue_manual_fit(self):
+    def _run_automatic_fit(self):
         total = len(self.manual_fit_lines)
+        self.msg_var.set("Starting Automatic Fit....")
         while self.manual_fit_index < total and not self.manual_fit_stop:
             group, next_index = self._group_from_index(self.manual_fit_index)
             if not group:
                 break
-            first = group[0].wavelen
-            last = group[-1].wavelen
-            self.msg_var.set(f"Fitting {len(group)} line(s): {first:.4f} - {last:.4f}")
-            self._display_manual_group(group)
-            self.update_idletasks()
-            min_points = self._minimum_fit_points(group)
-            point_count = self._current_fit_point_count()
-            if point_count < min_points:
-                point_count, expanded, retries = self._expand_manual_window_to_points(group, min_points)
-                self.update_idletasks()
-            else:
-                expanded = False
-                retries = 0
-            report = (
-                f"Manual Fit: {'expanded window, ' if expanded else ''}"
-                f"fitting {len(group)} line(s) using {point_count} points"
-            )
-            self.msg_var.set(report)
-            self.master_app.status(report)
-            if point_count < min_points:
-                self.manual_fit_failed = True
-                message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
-                self.msg_var.set(f"{report}; {message}")
-                _showerror(self, "Manual Fit", f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
-                return
-            ok, message = self._fit_manual_group(group)
-            if not ok:
-                self.manual_fit_failed = True
-                self.msg_var.set(f"{report}; Fit failed: {message}")
-                _showerror(self, "Manual Fit", f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
+            if not self._fit_group_once(group, "Automatic Fit"):
                 return
             self.manual_fit_index = next_index
             self.progress["value"] = min(100, int(100 * self.manual_fit_index / total))
-            self.populate_results(group)
-            self.msg_var.set(f"{report}; fitted")
-            self.master_app.status(f"{report}; fitted")
             self.update_idletasks()
         if self.manual_fit_stop:
-            self.msg_var.set("Fit stopped")
+            self.msg_var.set("Automatic Fit stopped")
             return
         self.progress["value"] = 100
-        self.msg_var.set("Manual Fit completed")
+        self.msg_var.set("Automatic Fit completed")
         self.populate_results()
-        _showinfo(self, "Manual Fit", "Manual Fit completed")
+        _showinfo(self, "Automatic Fit", "Automatic Fit completed")
 
     def populate_results(self, lines=None):
         self.results.delete(*self.results.get_children())
@@ -15464,14 +15512,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.msg_var.set("Fit stopped")
 
     def next_region(self):
-        if self.manual_fit_lines and self.manual_fit_failed:
-            group, next_index = self._group_from_index(self.manual_fit_index)
-            self.manual_fit_index = next_index
-            self.manual_fit_failed = False
-            self.msg_var.set("Skipped failed group")
-            self._continue_manual_fit()
-            return
         self.manual_fit_lines = self._sorted_template_lines()
+        self.manual_fit_failed = False
         if not self.manual_fit_lines:
             self.msg_var.set("No lines for fitting")
             return
@@ -15479,9 +15521,10 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not group:
             self.manual_fit_index = 0
             group, next_index = self._group_from_index(self.manual_fit_index)
-        self.manual_fit_index = next_index
-        self._display_manual_group(group)
-        self.msg_var.set(f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
+        else:
+            self.manual_fit_index = next_index if next_index < len(self.manual_fit_lines) else self.manual_fit_index
+            group, _ = self._group_from_index(self.manual_fit_index)
+        self._show_group_region(group)
 
     def previous_region(self):
         self.manual_fit_lines = self._sorted_template_lines()
@@ -15494,8 +15537,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             target -= 1
         self.manual_fit_index = target
         group, next_index = self._group_from_index(self.manual_fit_index)
-        self._display_manual_group(group)
-        self.msg_var.set(f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
+        self._show_group_region(group)
 
     def toggle_expand(self):
         if self.winfo_width() > 500:
@@ -15551,7 +15593,7 @@ class MainWindow(tk.Tk):
         e=tk.Menu(m,tearoff=False); e.add_command(label="Options",command=lambda:OptionsWindow(self)); m.add_cascade(label="Edit",menu=e)
         u=tk.Menu(m,tearoff=False); u.add_command(label="Instrument response",command=self.show_response_window); u.add_command(label="Apply response now",command=self.apply_response_now); u.add_command(label="Vertical shift",command=lambda:VerticalShiftWindow(self)); u.add_command(label="Smooth main",command=self.smooth_main); u.add_command(label="nm → Å main",command=self.nm_to_a_main); m.add_cascade(label="Utilities",menu=u)
         t=tk.Menu(m,tearoff=False); t.add_command(label="Template Manager",command=self.show_template); t.add_command(label="Line Identification",command=self.show_line_identification); t.add_command(label="Element Locator",command=lambda:ElementLocatorWindow(self)); t.add_command(label="Auto Element Identification",command=lambda:AutoElementIdentificationWindow(self)); m.add_cascade(label="Template",menu=t)
-        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Auto / Manual Fit",command=self.show_fit); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
+        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
         h=tk.Menu(m,tearoff=False); h.add_command(label="Manual...",command=self.show_manual); h.add_separator(); h.add_command(label="About pyLIBS...",command=self.show_about); m.add_cascade(label="Help",menu=h)
         self.config(menu=m)
 
@@ -16086,7 +16128,7 @@ def build_retro_menu(self):
     analysis_menu.add_separator()
     analysis_menu.add_command(label="Calculate Ne from Ha", command=self.show_ne_halpha)
     analysis_menu.add_command(label="Manual Fit", command=self.show_retro_fit_manager)
-    analysis_menu.add_command(label="Auto Fit", command=self.show_retro_fit_manager)
+    analysis_menu.add_command(label="Auto Fit", command=self.show_auto_fit_manager)
     analysis_menu.add_command(label="Saha Boltzmann plot", command=self.show_saha_boltzmann)
     analysis_menu.add_command(label="CF LIBS", command=self.show_cf_libs)
     analysis_menu.add_separator()
@@ -16151,7 +16193,7 @@ def build_retro_toolbar(self):
         ("Show Template", self.show_template_manager),
         ("Trace", self.show_trace_lines),
         ("Ne from H", self.show_ne_halpha),
-        ("Autofit", self.show_retro_fit_manager),
+        ("Autofit", self.show_auto_fit_manager),
         ("Manual Fit", self.show_retro_fit_manager),
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
@@ -16232,7 +16274,10 @@ def show_active_spectra(self):
     return self.active_window
 
 def show_retro_fit_manager(self):
-    return RetroFitManagerWindow(self)
+    return RetroFitManagerWindow(self, automatic=False)
+
+def show_auto_fit_manager(self):
+    return RetroFitManagerWindow(self, automatic=True)
 
 def swap_spectra(self):
     count = len(getattr(self, "spectra", []))
@@ -17017,7 +17062,7 @@ def show_goto_dialog(self):
 
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
-    show_template_manager, show_active_spectra, show_retro_fit_manager,
+    show_template_manager, show_active_spectra, show_retro_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
