@@ -52,8 +52,10 @@ except Exception:
     np = None
 
 try:
+    from scipy.signal import find_peaks as scipy_find_peaks
     from scipy.signal import savgol_filter
 except Exception:
+    scipy_find_peaks = None
     savgol_filter = None
 
 try:
@@ -15997,27 +15999,48 @@ def _click(self, event):
         pass
 
 def find_peaks_basic(self):
-    """Automatic local-maxima finder used by Analyse > Find Peaks.
-
-    It fills the Template table ordered by increasing wavelength, matching the
-    LIBS++ behavior described in the manual.
-    """
+    """Prominence-based automatic peak finder used by Analyse > Find Peaks."""
     if not self.spectra:
+        return
+    if scipy_find_peaks is None:
+        messagebox.showerror("Find Peaks", "scipy.signal.find_peaks is not available. Install scipy to use Find Peaks.")
         return
     sp = self.spectra[0]
     if len(sp.x) < 3:
         return
-    ys = list(sp.y)
-    baseline = sorted(ys)[max(0, int(0.50*len(ys))-1)]
-    high = sorted(ys)[max(0, int(0.95*len(ys))-1)]
-    threshold = baseline + 0.05 * max(1.0, high - baseline)
+
+    if getattr(self, "ax", None):
+        lo, hi = self.current_xlim()
+        if lo > hi:
+            lo, hi = hi, lo
+        points = [(x, y) for x, y in zip(sp.x, sp.y) if lo <= x <= hi]
+    else:
+        points = list(zip(sp.x, sp.y))
+    if len(points) < 3:
+        self.status("Find Peaks: no points in the current wavelength window")
+        return
+
+    xs = [x for x, _ in points]
+    ys = [y for _, y in points]
+    threshold = max(0.0, safe_float(getattr(self.options, "threshold", 1.0), 1.0))
+    ordered = sorted(ys)
+    baseline = ordered[max(0, int(0.50 * len(ordered)) - 1)]
+    height = baseline + threshold
+    dx = [abs(b - a) for a, b in zip(xs, xs[1:]) if b != a]
+    median_dx = sorted(dx)[len(dx) // 2] if dx else 1.0
+    delta_min = max(0.0, safe_float(getattr(self.options, "delta_min", 1.0), 1.0))
+    min_distance = max(3, min(50, int(max(1.0, 0.25 * delta_min / max(median_dx, 1e-12)))))
+
+    peak_indices, props = scipy_find_peaks(
+        ys,
+        prominence=threshold,
+        height=height,
+        distance=min_distance,
+    )
+    prominences = props.get("prominences", [])
     peaks = []
-    for i in range(1, len(ys)-1):
-        if ys[i] > threshold and ys[i] > ys[i-1] and ys[i] >= ys[i+1]:
-            # Prominence estimated on a small local window.
-            w0 = max(0, i-5); w1 = min(len(ys), i+6)
-            prom = ys[i] - min(ys[w0:w1])
-            peaks.append((sp.x[i], ys[i], prom))
+    for pos, prom in zip(peak_indices, prominences):
+        peaks.append((xs[int(pos)], ys[int(pos)], float(prom)))
     peaks.sort(key=lambda p: p[2], reverse=True)
     selected = peaks[:100]
     selected.sort(key=lambda p: p[0])
