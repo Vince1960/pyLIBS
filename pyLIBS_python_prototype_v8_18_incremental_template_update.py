@@ -14626,7 +14626,9 @@ class MainWindow(tk.Tk):
         self.fig=Figure(figsize=(8,5),dpi=100); self.ax=self.fig.add_subplot(111)
         self.canvas=FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        NavigationToolbar2Tk(self.canvas,self.plot_frame).update()
+        self.nav_toolbar = NavigationToolbar2Tk(self.canvas,self.plot_frame)
+        self.nav_toolbar.set_message = lambda _message: None
+        self.nav_toolbar.update()
         # LIBS++-compatible navigation state: left drag zoom, right drag pan.
         self._nav_press = None
         self._nav_dragged = False
@@ -14641,7 +14643,7 @@ class MainWindow(tk.Tk):
         self.redraw()
 
     def _status(self):
-        self.status_var=tk.StringVar(value=f"Ready - options: {Path(self.options.ini_file).name}"); self.cursor_var=tk.StringVar(value="λ: -- I: --")
+        self.status_var=tk.StringVar(value=f"Ready - options: {Path(self.options.ini_file).name}"); self.cursor_var=tk.StringVar(value="Wavelength: --  Intensity: --")
         bar=ttk.Frame(self); bar.pack(fill="x",side="bottom")
         ttk.Label(bar,textvariable=self.status_var).pack(side="left",fill="x",expand=True,padx=6)
         ttk.Label(bar,textvariable=self.cursor_var).pack(side="right",padx=6)
@@ -14997,7 +14999,10 @@ class MainWindow(tk.Tk):
     def show_standard_correction(self): StandardCorrectionWindow(self)
 
     def _mouse(self,event):
-        self.cursor_var.set("λ: -- I: --" if event.xdata is None else f"λ: {event.xdata:.3f} I: {event.ydata:.3g}")
+        if event.inaxes is not getattr(self, "ax", None) or event.xdata is None or event.ydata is None:
+            self.cursor_var.set("Wavelength: --  Intensity: --")
+        else:
+            self.cursor_var.set(f"Wavelength: {event.xdata:.3f}  Intensity: {event.ydata:.3g}")
 
     def _click(self,event):
         if event.xdata is not None and event.button==1 and event.key=="control":
@@ -15050,7 +15055,7 @@ def build_retro_menu(self):
     view_menu.add_separator()
     view_menu.add_command(label="Auto X", command=self.full_x)
     view_menu.add_command(label="Auto Y", command=self.full_y)
-    view_menu.add_command(label="Enlarge X Scale", command=self.full_x)
+    view_menu.add_command(label="Expand X 50%", command=self.expand_x_50)
     view_menu.add_command(label="Full Y Scale", command=self.full_y)
     view_menu.add_command(label="Show All", command=self.full_scale)
 
@@ -15518,6 +15523,34 @@ def full_y(self):
         pad = 0.03 * (max(ys)-min(ys) or 1.0)
         self.ax.set_ylim(min(ys)-pad, max(ys)+pad); self.canvas.draw_idle(); self._update_xscroll()
 
+def expand_x_50(self):
+    if not getattr(self, "ax", None) or not self.spectra:
+        self.status("Expand X: no spectrum loaded")
+        return
+    lim = self._full_x_limits()
+    if not lim:
+        self.status("Expand X: no visible spectrum")
+        return
+    data_min, data_max = lim
+    xmin, xmax = self.ax.get_xlim()
+    center = (xmin + xmax) / 2.0
+    current_width = abs(xmax - xmin)
+    if current_width <= 0:
+        return
+    new_width = min(current_width * 1.5, data_max - data_min)
+    new_xmin = center - new_width / 2.0
+    new_xmax = center + new_width / 2.0
+    if new_xmin < data_min:
+        new_xmin = data_min
+        new_xmax = min(data_max, data_min + new_width)
+    if new_xmax > data_max:
+        new_xmax = data_max
+        new_xmin = max(data_min, data_max - new_width)
+    self.ax.set_xlim(new_xmin, new_xmax)
+    self.canvas.draw_idle()
+    self._update_xscroll()
+    self.status(f"Expand X 50%: {new_xmin:.3f} - {new_xmax:.3f}")
+
 def full_scale(self):
     if not getattr(self, "ax", None):
         return
@@ -15727,7 +15760,7 @@ _RETRO_METHODS = [
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
     close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
-    full_scale, show_options, show_vertical_shift, show_batch_statistics,
+    expand_x_50, full_scale, show_options, show_vertical_shift, show_batch_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
     show_sac_window, load_template_file, save_template_file,
     _full_x_limits, _update_xscroll, _xscroll_changed, _zoom_out_from_box, _release,
