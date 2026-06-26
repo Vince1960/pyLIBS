@@ -40,7 +40,7 @@ from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
 from pathlib import Path
-from tkinter import filedialog, messagebox, ttk, colorchooser
+from tkinter import filedialog, messagebox, ttk, colorchooser, simpledialog
 from typing import Optional
 
 try:
@@ -15137,6 +15137,10 @@ def build_retro_menu(self):
     menu.add_cascade(label="Edit", menu=edit_menu)
     edit_menu.add_command(label="Copy", command=self.copy_plot)
     edit_menu.add_separator()
+    edit_menu.add_command(label="Swap Spectra", command=self.swap_spectra)
+    edit_menu.add_command(label="Show Active Spectra", command=self.show_active_spectra)
+    edit_menu.add_command(label="Clear Graph", command=self.clear_all_spectra)
+    edit_menu.add_separator()
     edit_menu.add_command(label="Options", command=self.show_options)
 
     view_menu = tk.Menu(menu, tearoff=0)
@@ -15317,10 +15321,54 @@ def show_template_manager(self):
     return win
 
 def show_active_spectra(self):
-    return RetroActiveSpectraWindow(self)
+    if self.active_window is None or not self.active_window.winfo_exists():
+        self.active_window = RetroActiveSpectraWindow(self)
+    else:
+        self.active_window.lift()
+        self.active_window.refresh()
+    return self.active_window
 
 def show_retro_fit_manager(self):
     return RetroFitManagerWindow(self)
+
+def swap_spectra(self):
+    count = len(getattr(self, "spectra", []))
+    if count < 2:
+        self.status("Swap Spectra: load at least two spectra.")
+        messagebox.showinfo("Swap Spectra", "Load at least two spectra before swapping.")
+        return
+    if count == 2:
+        first, second = 0, 1
+    else:
+        names = "\n".join(f"{i + 1}: {sp.name}" for i, sp in enumerate(self.spectra))
+        first_num = simpledialog.askinteger(
+            "Swap Spectra",
+            f"Select first spectrum number:\n\n{names}",
+            parent=self,
+            minvalue=1,
+            maxvalue=count,
+        )
+        if first_num is None:
+            return
+        second_num = simpledialog.askinteger(
+            "Swap Spectra",
+            f"Select second spectrum number:\n\n{names}",
+            parent=self,
+            minvalue=1,
+            maxvalue=count,
+        )
+        if second_num is None:
+            return
+        if first_num == second_num:
+            self.status("Swap Spectra: choose two different spectra.")
+            messagebox.showinfo("Swap Spectra", "Choose two different spectra.")
+            return
+        first, second = first_num - 1, second_num - 1
+    self.spectra[first], self.spectra[second] = self.spectra[second], self.spectra[first]
+    self.redraw()
+    if self.active_window and self.active_window.winfo_exists():
+        self.active_window.refresh()
+    self.status(f"Swap Spectra: swapped {first + 1} and {second + 1}.")
 
 def compare_spectrum(self):
     files = filedialog.askopenfilenames(
@@ -15340,6 +15388,9 @@ def clear_all_spectra(self):
     if messagebox.askyesno("Clear", "Clear all spectra?"):
         self.spectra.clear()
         self.redraw()
+        if self.active_window and self.active_window.winfo_exists():
+            self.active_window.refresh()
+        self.status("Clear Graph: all spectra cleared.")
 
 def save_with_labels(self):
     # Compatible fallback: save current spectrum as ASCII; labels export is planned.
@@ -15924,7 +15975,7 @@ def show_goto_dialog(self):
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
     show_template_manager, show_active_spectra, show_retro_fit_manager,
-    compare_spectrum, clear_all_spectra, save_with_labels, print_plot,
+    compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
