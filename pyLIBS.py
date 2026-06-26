@@ -14149,6 +14149,15 @@ class NeHalphaWindow(tk.Toplevel):
         dl2 = abs(safe_float(self.vars["dl2"].get(), self.master_app.options.ha_dl2)) or dl1
         delta = abs(safe_float(self.vars["Delta"].get(), self.master_app.options.ha_range)) or 1.0
         lo, hi = wl1 - delta, wl1 + delta
+        if getattr(self.master_app, "ax", None):
+            self.master_app.ax.set_xlim(lo, hi)
+            self.master_app.full_y_main_visible_x()
+            self.master_app.canvas.draw_idle()
+            self.master_app._update_xscroll()
+            try:
+                self.master_app.update_idletasks()
+            except Exception:
+                pass
         points = [(x, sp.y[i]) for i, x in enumerate(sp.x) if lo <= x <= hi]
         xs = np.asarray([x for x, _ in points], dtype=float)
         ys = np.asarray([y for _, y in points], dtype=float)
@@ -14178,11 +14187,10 @@ class NeHalphaWindow(tk.Toplevel):
             corrected_lorentz = primary_width
         else:
             corrected_lorentz = max(primary_width - inst*inst/primary_width, 0.0)
-        ne = 2.84e15 * (corrected_lorentz ** 1.5) if corrected_lorentz > 0 else 0.0
         kt = safe_float(self.vars["kT"].get(), 1.0)
         T = 11600.0 * kt
         self.master_app.fit_overlay = (xs.tolist(), halpha_lorentzian_model(xs, *popt).tolist())
-        self.master_app.redraw()
+        self.master_app.redraw(preserve_view=True)
         self.out.delete("1.0", "end")
         lines = [
             f"Fit window: {lo:.4f} - {hi:.4f} Å",
@@ -14196,11 +14204,11 @@ class NeHalphaWindow(tk.Toplevel):
             "",
             f"Instrumental width: {inst:.4f} Å",
             f"Corrected primary Lorentzian width: {corrected_lorentz:.4f} Å",
-            "Ne formula: Ne = 2.84e15 * width^1.5 cm^-3",
-            f"Ne ≈ {ne:.3e} cm^-3",
+            "Ne formula: not verified in the available LIBS++ sources/manual.",
+            "Ne was not calculated. Use the fitted Lorentzian width after verifying the historical formula.",
         ])
         self.out.insert("end", "\n".join(lines) + "\n")
-        self.master_app.status(f"Ne da Hα ≈ {ne:.3e} cm⁻³")
+        self.master_app.status("H-alpha fit complete; Ne formula not verified")
 
 
 class SahaBoltzmannWindow(tk.Toplevel):
