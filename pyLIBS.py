@@ -16115,6 +16115,18 @@ def full_y(self):
         pad = 0.03 * (max(ys)-min(ys) or 1.0)
         self.ax.set_ylim(min(ys)-pad, max(ys)+pad); self.canvas.draw_idle(); self._update_xscroll()
 
+def full_y_main_visible_x(self):
+    if not getattr(self, "ax", None) or not self.spectra:
+        return False
+    lo, hi = self.ax.get_xlim()
+    sp = self.spectra[0]
+    ys = [y for x, y in zip(sp.x, sp.y) if lo <= x <= hi]
+    if not ys:
+        return False
+    pad = 0.03 * (max(ys) - min(ys) or 1.0)
+    self.ax.set_ylim(min(ys) - pad, max(ys) + pad)
+    return True
+
 def expand_x_50(self):
     if not getattr(self, "ax", None) or not self.spectra:
         self.status("Expand X: no spectrum loaded")
@@ -16223,24 +16235,54 @@ class GoToWindow(tk.Toplevel):
     """Small LIBS++-style Utilities/GoTo dialog.
 
     The typed wavelength becomes the centre of the main window.  The displayed
-    interval is 2*Delta min, where Delta min is read from Options/Search Range.
+    interval is center +/- 3*Delta min.
     """
+    common_lines = (
+        "H I 6562.8",
+        "H I 4861.3",
+        "C I 2478.6",
+        "N I 7468.3",
+        "O I 7771.9",
+        "Na I 5890.0",
+        "Mg I 2852.1",
+        "Al I 3961.5",
+        "Si I 2881.6",
+        "Ca II 3933.7",
+        "Ca II 3968.5",
+        "Fe I 2483.3",
+        "Fe I 3581.2",
+        "Cu I 3247.5",
+        "Cu I 3274.0",
+        "Zn I 2138.6",
+        "Pb I 4057.8",
+    )
+
     def __init__(self, app):
         super().__init__(app)
         self.app = app
         self.title("GoTo...")
         self.resizable(False, False)
-        ttk.Label(self, text="Central wavelength (Angstrom):").grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 2), sticky="w")
+        ttk.Label(self, text="Common line:").grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 2), sticky="w")
+        self.line_var = tk.StringVar(value="")
+        line_box = ttk.Combobox(self, textvariable=self.line_var, values=self.common_lines, state="readonly", width=24)
+        line_box.grid(row=1, column=0, columnspan=2, padx=10, pady=2, sticky="ew")
+        line_box.bind("<<ComboboxSelected>>", self.select_common_line)
+        ttk.Label(self, text="Central wavelength (Angstrom):").grid(row=2, column=0, columnspan=2, padx=10, pady=(8, 2), sticky="w")
         self.wave_var = tk.StringVar()
-        ttk.Entry(self, textvariable=self.wave_var, width=18).grid(row=1, column=0, columnspan=2, padx=10, pady=2, sticky="ew")
-        ttk.Button(self, text="Go", command=self.go).grid(row=2, column=0, padx=10, pady=10)
-        ttk.Button(self, text="Cancel", command=self.destroy).grid(row=2, column=1, padx=10, pady=10)
+        ttk.Entry(self, textvariable=self.wave_var, width=18).grid(row=3, column=0, columnspan=2, padx=10, pady=2, sticky="ew")
+        ttk.Button(self, text="OK", command=self.go).grid(row=4, column=0, padx=10, pady=10)
+        ttk.Button(self, text="Cancel", command=self.destroy).grid(row=4, column=1, padx=10, pady=10)
         self.bind("<Return>", lambda e: self.go())
         self.bind("<Escape>", lambda e: self.destroy())
         self.transient(app)
         self.grab_set()
         self.wave_var.set("")
         self.after(50, lambda: self.focus_force())
+
+    def select_common_line(self, _event=None):
+        parts = self.line_var.get().split()
+        if parts:
+            self.wave_var.set(parts[-1])
 
     def go(self):
         try:
@@ -16339,18 +16381,12 @@ def _release(self, event):
 def goto_wavelength(self, wavelength):
     if not getattr(self, "ax", None):
         return
-    delta = max(float(getattr(self.options, "search_range", 1.0) or 1.0), 1e-9)
-    self.ax.set_xlim(wavelength - delta, wavelength + delta)
-    # Auto-scale Y only in the selected new interval, matching the old program.
-    ys = []
-    for sp in getattr(self, "spectra", []):
-        if getattr(sp, "visible", True):
-            ys.extend([y for x, y in zip(sp.x, sp.y) if wavelength - delta <= x <= wavelength + delta])
-    if ys:
-        pad = 0.05 * (max(ys)-min(ys) or 1.0)
-        self.ax.set_ylim(min(ys)-pad, max(ys)+pad)
+    delta = max(float(getattr(self.options, "delta_min", 1.0) or 1.0), 1e-9)
+    half_window = 3.0 * delta
+    self.ax.set_xlim(wavelength - half_window, wavelength + half_window)
+    self.full_y_main_visible_x()
     self.canvas.draw_idle(); self._update_xscroll()
-    self.status(f"GoTo: {wavelength:.4f} Å  (window ±{delta:g} Å)")
+    self.status(f"GoTo: {wavelength:.4f} Å  (window ±{half_window:g} Å)")
 
 def show_goto_dialog(self):
     return GoToWindow(self)
@@ -16364,6 +16400,7 @@ _RETRO_METHODS = [
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
     close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
+    full_y_main_visible_x,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
     show_sac_window, load_template_file, save_template_file,
