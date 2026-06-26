@@ -15399,7 +15399,24 @@ def _click(self, event):
     Double left click: query LIBS.db around the clicked wavelength and open
     the Identifications window. Ctrl+left is kept as a compatibility shortcut.
     """
-    if event.xdata is None:
+    if event.xdata is None or event.inaxes is not getattr(self, "ax", None):
+        return
+    key = (event.key or "").lower()
+    if "shift" in key and event.button == 1:
+        self._nav_press = None
+        self.add_template_peak_at(event.xdata, event.ydata)
+        return
+    if "shift" in key and event.button == 3:
+        self._nav_press = None
+        self.delete_template_peak_at(event.xdata)
+        return
+    if event.button == 1 and (getattr(event, "dblclick", False) or "control" in key):
+        self._nav_press = None
+        self.current_identification_wavelength = float(event.xdata)
+        self.show_line_identification()
+        self.line_window.wave_var.set(f"{event.xdata:.4f}")
+        self.line_window.range_var.set(str(self.options.search_range))
+        self.line_window.search()
         return
     # Store press point for LIBS++ zoom/pan.  Release decides whether it was
     # a navigation drag or just a click.
@@ -15408,19 +15425,6 @@ def _click(self, event):
         self._nav_dragged = False
     except Exception:
         pass
-    key = (event.key or "").lower()
-    if "shift" in key and event.button == 1:
-        self.add_template_peak_at(event.xdata, event.ydata)
-        return
-    if "shift" in key and event.button == 3:
-        self.delete_template_peak_at(event.xdata)
-        return
-    if event.button == 1 and (getattr(event, "dblclick", False) or "control" in key):
-        self.current_identification_wavelength = float(event.xdata)
-        self.show_line_identification()
-        self.line_window.wave_var.set(f"{event.xdata:.4f}")
-        self.line_window.range_var.set(str(self.options.search_range))
-        self.line_window.search()
 
 def find_peaks_basic(self):
     """Automatic local-maxima finder used by Analyse > Find Peaks.
@@ -15666,22 +15670,26 @@ def _zoom_out_from_box(self, x0, x1, y0, y1):
 def _release(self, event):
     press = getattr(self, "_nav_press", None)
     self._nav_press = None
-    if not press or event.xdata is None or event.ydata is None or not getattr(self, "ax", None):
+    if not press or event.xdata is None or event.ydata is None or event.inaxes is not getattr(self, "ax", None) or not getattr(self, "ax", None):
         return
     button, x0, y0, px0, py0, old_xlim, old_ylim = press
     dxpix = (event.x or px0) - px0
     dypix = (event.y or py0) - py0
-    if abs(dxpix) < 6 and abs(dypix) < 6:
+    if abs(dxpix) < 6 or abs(dypix) < 6:
         self._nav_dragged = False
         return
+    dxdata = event.xdata - x0
+    dydata = event.ydata - y0
     if button == 1:
         # Old LIBS++ convention: drag left-high -> right-low to zoom in;
-        # reverse direction to zoom out.
-        if dxpix > 0 and dypix < 0:
+        # reverse direction restores the full spectrum.
+        if dxdata > 0 and dydata < 0:
             self.ax.set_xlim(min(x0, event.xdata), max(x0, event.xdata))
             self.ax.set_ylim(min(y0, event.ydata), max(y0, event.ydata))
-        elif dxpix < 0 and dypix > 0:
-            self._zoom_out_from_box(x0, event.xdata, y0, event.ydata)
+        elif dxdata < 0 and dydata > 0:
+            self.full_scale()
+            self._nav_dragged = True
+            return
         self.canvas.draw_idle(); self._update_xscroll()
     elif button == 3:
         dx = event.xdata - x0
