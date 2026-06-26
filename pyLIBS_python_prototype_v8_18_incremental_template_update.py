@@ -12386,8 +12386,9 @@ class OptionsWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Options")
-        self.resizable(False, False)
-        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "470x355")
+        self.resizable(True, True)
+        self.minsize(720, 480)
+        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "900x650")
         if geom:
             self.geometry(geom)
         self.vars: dict[str, tk.Variable] = {}
@@ -12420,8 +12421,50 @@ class OptionsWindow(tk.Toplevel):
         return lf
 
     def _build_original_layout(self):
-        outer = ttk.Frame(self, padding=4)
-        outer.pack(fill="both", expand=True)
+        scroll_host = ttk.Frame(self, padding=4)
+        scroll_host.pack(fill="both", expand=True)
+        scroll_host.rowconfigure(0, weight=1)
+        scroll_host.columnconfigure(0, weight=1)
+
+        canvas = tk.Canvas(scroll_host, highlightthickness=0)
+        vscroll = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
+        hscroll = ttk.Scrollbar(scroll_host, orient="horizontal", command=canvas.xview)
+        canvas.configure(yscrollcommand=vscroll.set, xscrollcommand=hscroll.set)
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll.grid(row=0, column=1, sticky="ns")
+        hscroll.grid(row=1, column=0, sticky="ew")
+
+        outer = ttk.Frame(canvas)
+        outer_id = canvas.create_window((0, 0), window=outer, anchor="nw")
+
+        def update_scrollregion(_event=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def resize_inner(event):
+            canvas.itemconfigure(outer_id, width=max(outer.winfo_reqwidth(), event.width))
+
+        def on_mousewheel(event):
+            if getattr(event, "num", None) == 4:
+                canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                canvas.yview_scroll(1, "units")
+            else:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        outer.bind("<Configure>", update_scrollregion)
+        canvas.bind("<Configure>", resize_inner)
+        def bind_wheel(_event):
+            canvas.bind_all("<MouseWheel>", on_mousewheel)
+            canvas.bind_all("<Button-4>", on_mousewheel)
+            canvas.bind_all("<Button-5>", on_mousewheel)
+
+        def unbind_wheel(_event):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        canvas.bind("<Enter>", bind_wheel)
+        canvas.bind("<Leave>", unbind_wheel)
 
         left = ttk.Frame(outer)
         mid = ttk.Frame(outer)
@@ -12511,11 +12554,13 @@ class OptionsWindow(tk.Toplevel):
         g_shift = self.group(right, "AutoShift", 2, 0)
         self.entry(g_shift, "auto_shift", 0, 0, width=8)
 
-        buttons = ttk.Frame(outer)
-        buttons.grid(row=1, column=0, columnspan=3, sticky="e", pady=5)
-        ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left", padx=5)
-        ttk.Button(buttons, text="Save Options", command=self.save).pack(side="left", padx=5)
+        buttons = ttk.Frame(self, padding=(4, 4))
+        buttons.pack(fill="x", side="bottom", before=scroll_host)
+        buttons_inner = ttk.Frame(buttons)
+        buttons_inner.pack(side="right")
+        ttk.Button(buttons_inner, text="OK", command=self.ok).pack(side="left", padx=5)
+        ttk.Button(buttons_inner, text="Cancel", command=self.cancel).pack(side="left", padx=5)
+        ttk.Button(buttons_inner, text="Save Options", command=self.save).pack(side="left", padx=5)
 
     def _set_global_mode(self, mode):
         self.vars["apply_before"].set(mode == "before") if "apply_before" in self.vars else None
