@@ -11412,6 +11412,28 @@ def safe_int(value, default=0):
         return default
 
 
+def format_template_display_value(value):
+    """Format Template-window display values without changing stored data."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if text == "":
+            return ""
+        try:
+            number = float(text.replace(",", "."))
+        except Exception:
+            return value
+    else:
+        try:
+            number = float(value)
+        except Exception:
+            return value
+    if not math.isfinite(number):
+        return str(value)
+    return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
 def _messagebox_parent(owner):
     root = owner
     for attr in ("master_app", "app"):
@@ -12856,9 +12878,18 @@ class TemplateManager(tk.Toplevel):
         self.refresh()
 
     def refresh(self):
+        selected = list(self.tree.selection())
+        focus = self.tree.focus()
         self.tree.delete(*self.tree.get_children())
         for i,l in enumerate(self.master_app.template_lines):
-            self.tree.insert("", "end", iid=str(i), values=[getattr(l,c) for c in self.columns])
+            self.tree.insert("", "end", iid=str(i), values=[format_template_display_value(getattr(l,c)) for c in self.columns])
+        children = set(self.tree.get_children())
+        for item in selected:
+            if item in children:
+                self.tree.selection_add(item)
+        if focus in children:
+            self.tree.focus(focus)
+            self.tree.see(focus)
 
     def load(self):
         fn = filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("CSV", "*.csv"), ("All", "*.*")])
@@ -14654,12 +14685,21 @@ class RetroTemplateManager(tk.Toplevel):
         self.refresh()
 
     def refresh(self):
+        selected = list(self.tree.selection())
+        focus = self.tree.focus()
         self.tree.delete(*self.tree.get_children())
         for i, l in enumerate(self.master_app.template_lines):
             vals = []
             for c in self.columns:
-                vals.append(getattr(l, c, ""))
+                vals.append(format_template_display_value(getattr(l, c, "")))
             self.tree.insert("", "end", iid=str(i), values=vals)
+        children = set(self.tree.get_children())
+        for item in selected:
+            if item in children:
+                self.tree.selection_add(item)
+        if focus in children:
+            self.tree.focus(focus)
+            self.tree.see(focus)
 
     def load_template(self):
         fn = filedialog.askopenfilename(
@@ -14714,6 +14754,8 @@ class RetroTemplateManager(tk.Toplevel):
         if _askyesno(self, "Template", "This will close the current template. Continue?"):
             self.master_app.template_lines.clear()
             self.master_app.notify_template_changed(redraw=True)
+            if getattr(self.master_app, "template_window", None) is self:
+                self.master_app.template_window = None
             self.destroy()
 
     def delete_template(self):
@@ -15713,8 +15755,12 @@ def install_retro_ui(self):
         pass
 
 def show_template_manager(self):
-    win = RetroTemplateManager(self)
-    return win
+    if self.template_window is None or not self.template_window.winfo_exists() or not isinstance(self.template_window, RetroTemplateManager):
+        self.template_window = RetroTemplateManager(self)
+    else:
+        self.template_window.refresh()
+        self.template_window.lift()
+    return self.template_window
 
 def show_active_spectra(self):
     if self.active_window is None or not self.active_window.winfo_exists():
@@ -15913,11 +15959,22 @@ def clear_template_data(self):
     self.notify_template_changed(redraw=False)
 
 def notify_template_changed(self, redraw=False):
+    refreshed = set()
     if self.template_window and self.template_window.winfo_exists():
         try:
             self.template_window.refresh()
+            refreshed.add(self.template_window)
         except Exception:
             pass
+    try:
+        for child in self.winfo_children():
+            if child in refreshed:
+                continue
+            if isinstance(child, (TemplateManager, RetroTemplateManager)) and child.winfo_exists():
+                child.refresh()
+                refreshed.add(child)
+    except Exception:
+        pass
     if redraw:
         self.redraw(preserve_view=True)
 
