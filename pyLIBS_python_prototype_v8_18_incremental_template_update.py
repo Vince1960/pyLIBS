@@ -11723,9 +11723,10 @@ def load_pylibs_ini(options: AppOptions, filename: str = "pyLIBS.ini"):
             return False
     values = []
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        if not line.strip():
+            continue
         clean = parse_legacy_ini_value(line)
-        if clean != "":
-            values.append(clean)
+        values.append(clean)
     for (attr, typ), value in zip(PYLIBS_INI_ORDER, values):
         if hasattr(options, attr):
             setattr(options, attr, _ini_cast(value, typ))
