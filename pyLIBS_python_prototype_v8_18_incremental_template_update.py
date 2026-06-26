@@ -11832,6 +11832,7 @@ class Spectrum:
     name: str = "Spectrum"
     filename: str = ""
     visible: bool = True
+    color: Optional[str] = None
 
     @classmethod
     def from_ascii(cls, filename: str, convert_nm_to_a: bool = False, name: Optional[str] = None) -> "Spectrum":
@@ -11949,6 +11950,27 @@ class Spectrum:
 
     def scaled(self, factor: float, name: str) -> "Spectrum":
         return Spectrum(list(self.x), [v * factor for v in self.y], name=name)
+
+
+LIBS_SPECTRUM_COLORS = ["black", "red", "blue", "green", "magenta", "cyan", "orange", "brown"]
+
+
+def default_spectrum_color(index: int) -> str:
+    if index < len(LIBS_SPECTRUM_COLORS):
+        return LIBS_SPECTRUM_COLORS[index]
+    try:
+        cycle = matplotlib.rcParams["axes.prop_cycle"].by_key().get("color", [])
+    except Exception:
+        cycle = []
+    if cycle:
+        return cycle[(index - len(LIBS_SPECTRUM_COLORS)) % len(cycle)]
+    return LIBS_SPECTRUM_COLORS[index % len(LIBS_SPECTRUM_COLORS)]
+
+
+def assign_default_spectrum_color(sp: Spectrum, index: int) -> Spectrum:
+    if not getattr(sp, "color", None):
+        sp.color = default_spectrum_color(index)
+    return sp
 
 
 def _interp_spectrum_value(points: list[tuple[float, float]], wavelength: float) -> float:
@@ -14751,6 +14773,7 @@ class MainWindow(tk.Tk):
     def status(self,msg): self.status_var.set(msg)
 
     def add_spectrum(self, sp):
+        assign_default_spectrum_color(sp, len(self.spectra))
         self.spectra.append(sp); self.redraw(); self.status(f"Aggiunto spettro: {sp.name}")
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
@@ -14763,6 +14786,7 @@ class MainWindow(tk.Tk):
             sp=load_spectrum_for_open(first_fn,self.options)
             if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
             if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
+            assign_default_spectrum_color(sp, 0)
             self.spectra=[sp]
         except Exception as e:
             messagebox.showerror("Open",str(e)); return
@@ -14794,6 +14818,7 @@ class MainWindow(tk.Tk):
             except Exception as e:
                 messagebox.showerror("Append",f"{fn}: {e}")
         if merged is not None:
+            assign_default_spectrum_color(merged, 0)
             self.spectra = [merged]
         self.redraw()
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
@@ -14914,7 +14939,8 @@ class MainWindow(tk.Tk):
         self.ax.grid(bool(getattr(self, "view_grid_y", True)), axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
         for sp in self.spectra:
             if sp.visible and sp.x:
-                self.ax.plot(sp.x, sp.y, linewidth=0.8, label=sp.name)
+                kwargs = {"color": sp.color} if getattr(sp, "color", None) else {}
+                self.ax.plot(sp.x, sp.y, linewidth=0.8, label=sp.name, **kwargs)
         ymin,ymax=self.ax.get_ylim()
         h=ymax-ymin if ymax>ymin else 1
         for line in self.template_lines:
