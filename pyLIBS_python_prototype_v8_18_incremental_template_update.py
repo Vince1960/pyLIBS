@@ -14974,7 +14974,7 @@ def build_retro_toolbar(self):
         ("Full Scale", self.full_scale),
         ("Load Template", self.load_template_from_menu),
         ("Show Template", self.show_template_manager),
-        ("Trace", self.show_line_identification),
+        ("Trace", self.show_trace_lines),
         ("Ne from H", self.show_ne_halpha),
         ("Autofit", self.show_retro_fit_manager),
         ("Manual Fit", self.show_retro_fit_manager),
