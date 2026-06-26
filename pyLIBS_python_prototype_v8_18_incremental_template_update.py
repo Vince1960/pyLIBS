@@ -14666,14 +14666,14 @@ class MainWindow(tk.Tk):
         self.redraw(); self.status(f"Spettro caricato: {fn}")
 
     def append_spectrum(self):
-        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
         remember_working_dir(self.options, fns)
         if not fns:
             return
         merged = self.spectra[0] if self.spectra else None
         for fn in fns:
             try:
-                sp=Spectrum.from_ascii(fn,self.options.convert_to_angstrom)
+                sp=load_spectrum_for_open(fn,self.options)
                 if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
                 if merged is None:
                     merged = sp
@@ -15141,12 +15141,12 @@ def compare_spectrum(self):
     files = filedialog.askopenfilenames(
         title="Compare Spectra",
         initialdir=remembered_initial_dir(self.options),
-        filetypes=[("Spectra", "*.txt *.dat *.asc *.csv"), ("All", "*.*")]
+        filetypes=[("Spectra", "*.roh *.ROH *.txt *.dat *.asc *.csv"), ("Avantes ROH", "*.roh *.ROH"), ("ASCII", "*.txt *.dat *.asc *.csv"), ("All", "*.*")]
     )
     remember_working_dir(self.options, files)
     for fn in files:
         try:
-            self.add_spectrum(Spectrum.from_ascii(fn, self.options.convert_to_angstrom))
+            self.add_spectrum(load_spectrum_for_open(fn, self.options))
         except Exception as e:
             messagebox.showerror("Compare", f"{fn}: {e}")
     self.redraw()
