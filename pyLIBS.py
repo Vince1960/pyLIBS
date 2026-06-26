@@ -15298,6 +15298,21 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app._update_xscroll()
         self.load_from_template(group)
 
+    def _current_fit_point_count(self):
+        if not self.master_app.spectra or not getattr(self.master_app, "ax", None):
+            return 0
+        lo, hi = sorted(self.master_app.ax.get_xlim())
+        sp = self.master_app.spectra[0]
+        return sum(1 for x in sp.x if lo <= x <= hi)
+
+    def _minimum_fit_points(self, group):
+        nparams = 2 + 4 * len(group)
+        return max(8, 3 * nparams)
+
+    def _expand_manual_window_once(self):
+        self.master_app.expand_x_50()
+        self.master_app.full_y_main_visible_x()
+
     def _fit_manual_group(self, group):
         tmp = None
         try:
@@ -15341,15 +15356,37 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set(f"Fitting {len(group)} line(s): {first:.4f} - {last:.4f}")
             self._display_manual_group(group)
             self.update_idletasks()
+            min_points = self._minimum_fit_points(group)
+            point_count = self._current_fit_point_count()
+            expanded = False
+            if point_count < min_points:
+                self._expand_manual_window_once()
+                expanded = True
+                self.update_idletasks()
+                point_count = self._current_fit_point_count()
+            report = (
+                f"Manual Fit {first:.4f}-{last:.4f}: {len(group)} line(s), "
+                f"Fit points: {point_count}, expanded: {'yes' if expanded else 'no'}"
+            )
+            self.msg_var.set(report)
+            self.master_app.status(report)
+            if point_count < min_points:
+                self.manual_fit_failed = True
+                message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+                self.msg_var.set(f"{report}; {message}")
+                _showerror(self, "Manual Fit", f"{message}\nRegion: {first:.4f} - {last:.4f}")
+                return
             ok, message = self._fit_manual_group(group)
             if not ok:
                 self.manual_fit_failed = True
-                self.msg_var.set(f"Fit failed: {message}")
+                self.msg_var.set(f"{report}; Fit failed: {message}")
                 _showerror(self, "Manual Fit", f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
                 return
             self.manual_fit_index = next_index
             self.progress["value"] = min(100, int(100 * self.manual_fit_index / total))
             self.populate_results(group)
+            self.msg_var.set(f"{report}; fitted")
+            self.master_app.status(f"{report}; fitted")
             self.update_idletasks()
         if self.manual_fit_stop:
             self.msg_var.set("Fit stopped")
