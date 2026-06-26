@@ -14033,29 +14033,51 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
     def fit_voigt_visible(self):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
+        self.fit_voigt_lines()
+
+    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True):
+        """Fit explicit template lines with the existing visible-window Voigt model."""
         if np is None:
-            _showerror(self, "Fit Voigt", "numpy non disponibile")
-            return
+            if show_messages:
+                _showerror(self, "Fit Voigt", "numpy non disponibile")
+            return False, "numpy non disponibile"
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            _showerror(self, "Fit Voigt", "scipy.optimize non disponibile. Installare scipy.")
-            return
+            msg = "scipy.optimize non disponibile. Installare scipy."
+            if show_messages:
+                _showerror(self, "Fit Voigt", msg)
+            return False, msg
         sp = self._active_spectrum()
         if sp is None or not getattr(sp, "x", None):
-            _showinfo(self, "Fit Voigt", "Caricare prima uno spettro.")
-            return
+            msg = "Caricare prima uno spettro."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg
         xlim, ylim = self.master_app.current_plot_view()
         lo, hi = sorted(xlim)
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i, x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
         if len(xs) < 8:
-            _showinfo(self, "Fit Voigt", "Troppi pochi punti nella finestra visibile.")
-            return
-        lines = [t for t in self.master_app.template_lines if lo <= (abs(t.fitwavelen) if t.fitwavelen else t.wavelen) <= hi]
+            msg = "Troppi pochi punti nella finestra visibile."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg
+        explicit_lines = lines is not None
+        if lines is None:
+            lines = [t for t in self.master_app.template_lines if lo <= (abs(t.fitwavelen) if t.fitwavelen else t.wavelen) <= hi]
+        else:
+            lines = list(lines)
         if not lines:
-            _showinfo(self, "Fit Voigt", "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit.")
-            return
+            msg = "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg
+        if explicit_lines and len(lines) > 10:
+            msg = "Manual Fit group has more than 10 lines; the existing Voigt fit supports up to 10."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg
         lines = lines[:10]
         xmin, xmax = float(xs.min()), float(xs.max())
         width = max(xmax - xmin, 1e-9)
@@ -14087,8 +14109,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
         try:
             popt, pcov = curve_fit(multivoigt_model, xs, ys, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=max(2000, self.master_app.options.iterations*400))
         except Exception as e:
-            _showerror(self, "Fit Voigt", str(e))
-            return
+            msg = str(e)
+            if show_messages:
+                _showerror(self, "Fit Voigt", msg)
+            return False, msg
         self.tree.delete(*self.tree.get_children())
         for idx, t in enumerate(lines):
             area, cen, sigma, gamma = popt[2+4*idx], popt[3+4*idx], abs(popt[4+4*idx]), abs(popt[5+4*idx])
@@ -14109,8 +14133,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
         self.master_app.fit_overlay = (xs.tolist(), multivoigt_model(xs, *popt).tolist())
         self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
-        self.master_app.restore_plot_view(old_xlim, old_ylim)
+        if preserve_view:
+            self.master_app.restore_plot_view(old_xlim, old_ylim)
         self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
+        return True, f"Fit Voigt: {len(lines)} line(s)"
 
     def clear_overlay(self):
         self.master_app.fit_overlay = None
@@ -15129,6 +15155,10 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "760x520"))
         self.configure(bg=RETRO_BG)
         self.line_vars = []
+        self.manual_fit_lines = []
+        self.manual_fit_index = 0
+        self.manual_fit_failed = False
+        self.manual_fit_stop = False
         self._build()
         self.load_from_template()
 
@@ -15189,9 +15219,20 @@ class RetroFitManagerWindow(tk.Toplevel):
         e2.configure(bg=RETRO_FIXED if fwg.get() else RETRO_FREE)
         e3.configure(bg=RETRO_FIXED if fwl.get() else RETRO_FREE)
 
-    def load_from_template(self):
-        lines = self.master_app.template_lines[:10]
+    def load_from_template(self, lines=None):
+        lines = list(lines if lines is not None else self.master_app.template_lines[:10])
+        for r in range(10):
+            lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
+            lam.set("")
+            wg.set("")
+            wl.set("")
+            flam.set(False)
+            fwg.set(False)
+            fwl.set(False)
+            self._color_row(r)
         for r, t in enumerate(lines):
+            if r >= 10:
+                break
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             center = t.fitwavelen if t.fitwavelen else t.wavelen
             lam.set(f"{abs(center):.6g}")
@@ -15218,39 +15259,150 @@ class RetroFitManagerWindow(tk.Toplevel):
             t.wg = -abs(gw) if fwg.get() else abs(gw)
             t.wl = -abs(lw) if fwl.get() else abs(lw)
 
-    def run_fit(self):
-        self.apply_to_template()
-        self.msg_var.set("Starting Fit....")
-        self.progress["value"] = 10
-        # Use the already implemented scipy multi-gaussian backend.
+    def _sorted_template_lines(self):
+        return sorted(
+            [t for t in self.master_app.template_lines if getattr(t, "wavelen", 0.0)],
+            key=lambda t: t.wavelen,
+        )
+
+    def _manual_delta_min(self):
+        return max(safe_float(getattr(self.master_app.options, "delta_min", 1.0), 1.0), 1e-9)
+
+    def _group_from_index(self, index):
+        lines = self.manual_fit_lines
+        if index < 0 or index >= len(lines):
+            return [], index
+        delta = self._manual_delta_min()
+        group = [lines[index]]
+        next_index = index + 1
+        while next_index < len(lines):
+            previous = lines[next_index - 1].wavelen
+            current = lines[next_index].wavelen
+            if abs(current - previous) < delta:
+                group.append(lines[next_index])
+                next_index += 1
+            else:
+                break
+        return group, next_index
+
+    def _display_manual_group(self, group):
+        if not group or not getattr(self.master_app, "ax", None):
+            return
+        delta = self._manual_delta_min()
+        xmin = group[0].wavelen - delta
+        xmax = group[-1].wavelen + delta
+        self.master_app.clear_fit_artists()
+        self.master_app.ax.set_xlim(xmin, xmax)
+        self.master_app.full_y_main_visible_x()
+        self.master_app.canvas.draw_idle()
+        self.master_app._update_xscroll()
+        self.load_from_template(group)
+
+    def _fit_manual_group(self, group):
+        tmp = None
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
-            tmp.fit_region()
-            tmp.destroy()
-            self.progress["value"] = 100
-            self.msg_var.set("Fit completed")
-            self.populate_results()
+            tmp.withdraw()
+            ok, message = tmp.fit_voigt_lines(lines=group, preserve_view=True, show_messages=False)
         except Exception as e:
-            self.msg_var.set(str(e))
-            _showerror(self, "Fit", str(e))
+            ok, message = False, str(e)
+        finally:
+            try:
+                if tmp is not None:
+                    tmp.destroy()
+            except Exception:
+                pass
+        return ok, message
 
-    def populate_results(self):
+    def run_fit(self):
+        if not self.master_app.spectra:
+            _showinfo(self, "Fit", "Caricare prima uno spettro.")
+            return
+        self.manual_fit_lines = self._sorted_template_lines()
+        self.manual_fit_index = 0
+        self.manual_fit_failed = False
+        self.manual_fit_stop = False
+        if not self.manual_fit_lines:
+            self.msg_var.set("No lines for fitting")
+            _showinfo(self, "Fit", "No template lines to fit.")
+            return
+        self.msg_var.set("Starting Manual Fit....")
+        self.progress["value"] = 0
+        self._continue_manual_fit()
+
+    def _continue_manual_fit(self):
+        total = len(self.manual_fit_lines)
+        while self.manual_fit_index < total and not self.manual_fit_stop:
+            group, next_index = self._group_from_index(self.manual_fit_index)
+            if not group:
+                break
+            first = group[0].wavelen
+            last = group[-1].wavelen
+            self.msg_var.set(f"Fitting {len(group)} line(s): {first:.4f} - {last:.4f}")
+            self._display_manual_group(group)
+            self.update_idletasks()
+            ok, message = self._fit_manual_group(group)
+            if not ok:
+                self.manual_fit_failed = True
+                self.msg_var.set(f"Fit failed: {message}")
+                _showerror(self, "Manual Fit", f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
+                return
+            self.manual_fit_index = next_index
+            self.progress["value"] = min(100, int(100 * self.manual_fit_index / total))
+            self.populate_results(group)
+            self.update_idletasks()
+        if self.manual_fit_stop:
+            self.msg_var.set("Fit stopped")
+            return
+        self.progress["value"] = 100
+        self.msg_var.set("Manual Fit completed")
+        self.populate_results()
+        _showinfo(self, "Manual Fit", "Manual Fit completed")
+
+    def populate_results(self, lines=None):
         self.results.delete(*self.results.get_children())
-        for i, t in enumerate(self.master_app.template_lines[:10], start=1):
+        lines = list(lines if lines is not None else self.master_app.template_lines[:10])
+        for i, t in enumerate(lines[:10], start=1):
             self.results.insert("", "end", values=(f"Line {i} λ", f"{t.fitwavelen:.6g}", ""))
             self.results.insert("", "end", values=(f"Line {i} I", f"{t.inte:.6g}", f"{t.error_inte:.3g}" if t.error_inte else ""))
 
     def stop_fit(self):
+        self.manual_fit_stop = True
         self.msg_var.set("Fit stopped")
-        self.progress["value"] = 0
 
     def next_region(self):
-        self.msg_var.set("Moving to next region")
-        self.progress["value"] = 0
+        if self.manual_fit_lines and self.manual_fit_failed:
+            group, next_index = self._group_from_index(self.manual_fit_index)
+            self.manual_fit_index = next_index
+            self.manual_fit_failed = False
+            self.msg_var.set("Skipped failed group")
+            self._continue_manual_fit()
+            return
+        self.manual_fit_lines = self._sorted_template_lines()
+        if not self.manual_fit_lines:
+            self.msg_var.set("No lines for fitting")
+            return
+        group, next_index = self._group_from_index(self.manual_fit_index)
+        if not group:
+            self.manual_fit_index = 0
+            group, next_index = self._group_from_index(self.manual_fit_index)
+        self.manual_fit_index = next_index
+        self._display_manual_group(group)
+        self.msg_var.set(f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
 
     def previous_region(self):
-        self.msg_var.set("Moving to previous region")
-        self.progress["value"] = 0
+        self.manual_fit_lines = self._sorted_template_lines()
+        if not self.manual_fit_lines:
+            self.msg_var.set("No lines for fitting")
+            return
+        delta = self._manual_delta_min()
+        target = max(0, self.manual_fit_index - 1)
+        while target > 0 and abs(self.manual_fit_lines[target].wavelen - self.manual_fit_lines[target - 1].wavelen) < delta:
+            target -= 1
+        self.manual_fit_index = target
+        group, next_index = self._group_from_index(self.manual_fit_index)
+        self._display_manual_group(group)
+        self.msg_var.set(f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
 
     def toggle_expand(self):
         if self.winfo_width() > 500:
