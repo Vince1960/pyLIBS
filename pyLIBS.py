@@ -15244,6 +15244,7 @@ class MainWindow(tk.Tk):
         self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
+        self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None
         self.shift_capture_window=None
         self._build()
@@ -15301,9 +15302,26 @@ class MainWindow(tk.Tk):
 
     def status(self,msg): self.status_var.set(msg)
 
+    def infer_wavelength_unit(self):
+        xs = [x for sp in self.spectra for x in sp.x]
+        if xs and max(xs) < 1500:
+            return "nm"
+        return "angstrom"
+
+    def current_wavelength_unit_label(self):
+        return "nm" if getattr(self, "wavelength_unit", "angstrom") == "nm" else "Å"
+
+    def update_axis_labels(self):
+        if not getattr(self, "ax", None):
+            return
+        self.ax.set_xlabel(f"Wavelength ({self.current_wavelength_unit_label()})")
+        self.ax.set_ylabel("Intensity (counts)")
+
     def add_spectrum(self, sp):
         assign_default_spectrum_color(sp, len(self.spectra))
-        self.spectra.append(sp); self.redraw(); self.status(f"Aggiunto spettro: {sp.name}")
+        self.spectra.append(sp)
+        self.wavelength_unit = self.infer_wavelength_unit()
+        self.redraw(); self.status(f"Aggiunto spettro: {sp.name}")
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
     def open_spectrum(self):
@@ -15317,6 +15335,7 @@ class MainWindow(tk.Tk):
             if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
             assign_default_spectrum_color(sp, 0)
             self.spectra=[sp]
+            self.wavelength_unit = self.infer_wavelength_unit()
         except Exception as e:
             _showerror(self, "Open",str(e)); return
         for fn in fns[1:]:
@@ -15349,6 +15368,7 @@ class MainWindow(tk.Tk):
         if merged is not None:
             assign_default_spectrum_color(merged, 0)
             self.spectra = [merged]
+            self.wavelength_unit = self.infer_wavelength_unit()
         self.redraw()
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
@@ -15381,7 +15401,10 @@ class MainWindow(tk.Tk):
         if self.spectra: self.spectra[0].smooth(); self.redraw()
 
     def nm_to_a_main(self):
-        if self.spectra: self.spectra[0].x=[x*10 for x in self.spectra[0].x]; self.redraw()
+        if self.spectra:
+            self.spectra[0].x=[x*10 for x in self.spectra[0].x]
+            self.wavelength_unit = "angstrom"
+            self.redraw()
 
     def current_xlim(self):
         if self.ax:
@@ -15456,7 +15479,7 @@ class MainWindow(tk.Tk):
                 old_xlim = self.ax.get_xlim(); old_ylim = self.ax.get_ylim()
             except Exception:
                 old_xlim = old_ylim = None
-        self.ax.clear(); self.ax.set_xlabel("Wavelength (Å)"); self.ax.set_ylabel("Intensity (counts)")
+        self.ax.clear(); self.update_axis_labels()
         self.ax.set_facecolor(getattr(self, "plot_background", "white"))
         try:
             self.ax.set_xscale("log" if getattr(self, "view_log_x", False) else "linear", nonpositive="clip")
@@ -16049,6 +16072,7 @@ def convert_nm_to_angstrom(self):
     for sp in self.spectra:
         sp.x = [x*10 if x < 1500 else x for x in sp.x]
     self.options.convert_to_angstrom = True
+    self.wavelength_unit = "angstrom"
     self.redraw()
 
 def load_template_from_menu(self):
