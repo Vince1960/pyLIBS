@@ -12383,23 +12383,50 @@ class LibsDatabase:
                    f'ORDER BY CAST(Aki AS REAL) DESC LIMIT ?')
             params = [xmin, xmax] + [int(i) for i in ions] + [max_lines]
             rows = conn.execute(sql, params).fetchall()
-        out: list[AtomicLine] = []
-        for r in rows:
+
+        def row_to_atomic(r) -> Optional[AtomicLine]:
             try:
                 wav = float(r["wavelen"])
             except Exception:
-                continue
+                return None
             sp = str(r["specie"]).strip() if r["specie"] is not None else element
             try:
                 iz = int(float(r["ion"]))
             except Exception:
                 iz = 1
-            out.append(AtomicLine(
+            return AtomicLine(
                 wavelen=wav, specie=sp or element, ion=iz, inte=safe_float(r["inte"]),
                 ei=safe_float(r["Ei"]), ek=safe_float(r["Ek"]),
                 gi=safe_int(r["gi"]), gk=safe_int(r["gk"]),
                 aki=safe_float(r["Aki"]), acc=safe_int(r["acc"])
-            ))
+            )
+
+        def is_duplicate(candidate: AtomicLine, existing: list[AtomicLine]) -> bool:
+            return any(
+                abs(candidate.wavelen - line.wavelen) <= 0.05
+                and candidate.specie == line.specie
+                and candidate.ion == line.ion
+                for line in existing
+            )
+
+        out: list[AtomicLine] = []
+        for r in rows:
+            line = row_to_atomic(r)
+            if line and not is_duplicate(line, out):
+                out.append(line)
+
+        if table in ("Datalibs", "Daticerti") and len(out) < max_lines and element in self.tables():
+            fallback_sql = (f'SELECT specie, ion, wavelen, Ei, Ek, gi, gk, Aki, acc, 0 AS inte '
+                            f'FROM "{element}" WHERE typeof(wavelen) IN ("real","integer") '
+                            f'AND wavelen BETWEEN ? AND ? AND CAST(ion AS INTEGER) IN ({placeholders}) '
+                            f'ORDER BY CAST(Aki AS REAL) DESC LIMIT ?')
+            fallback_params = [xmin, xmax] + [int(i) for i in ions] + [max_lines]
+            for r in conn.execute(fallback_sql, fallback_params).fetchall():
+                line = row_to_atomic(r)
+                if line and not is_duplicate(line, out):
+                    out.append(line)
+                if len(out) >= max_lines:
+                    break
         return out
 
     def load_all_atomic_lines(self, table: str = "Datalibs", limit: int = 200000) -> list[AtomicLine]:
@@ -13097,7 +13124,7 @@ class TraceLinesWindow(tk.Toplevel):
         for c, mode in enumerate(("I", "II", "Both", "All"), start=3):
             ttk.Radiobutton(top, text=mode, variable=self.mode_var, value=mode).grid(row=0, column=c, padx=3)
         ttk.Label(top, text="Max Lines").grid(row=0, column=7, sticky="w", padx=(16,3))
-        self.max_var = tk.StringVar(value="20")
+        self.max_var = tk.StringVar(value="5")
         ttk.Entry(top, textvariable=self.max_var, width=7).grid(row=0, column=8, sticky="w", padx=3)
         ttk.Button(top, text="OK", command=self.trace).grid(row=0, column=9, padx=8)
         ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=10, padx=3)
