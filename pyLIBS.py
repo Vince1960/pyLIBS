@@ -33,9 +33,12 @@ from __future__ import annotations
 
 import csv
 import math
+import os
 import re
 import sqlite3
 import struct
+import subprocess
+import sys
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -63,9 +66,21 @@ except Exception:
     FigureCanvasTkAgg = None
 
 
-APP_TITLE = "pyLIBS"
-APP_VERSION = "8.15"
-APP_SUBTITLE = "Laser-Induced Breakdown Spectroscopy"
+APP_NAME = "pyLIBS"
+APP_VERSION = "9.0 Beta"
+APP_DESCRIPTION = "Advanced LIBS Spectrum Analysis"
+APP_AUTHOR = (
+    "Developed at the Applied Laser Spectroscopy "
+    "Laboratory, ICCOM–CNR, Pisa"
+)
+APP_HISTORY = (
+    "Originally developed as LIBS++ "
+    "by Vincenzo Palleschi and co-workers"
+)
+APP_COPYRIGHT = "© CNR Pisa 1999–2026"
+
+APP_TITLE = APP_NAME
+APP_SUBTITLE = APP_DESCRIPTION
 SPLASH_SECONDS = 3
 
 SPLASH_DURATION_MS = 2800
@@ -14965,7 +14980,7 @@ class MainWindow(tk.Tk):
         u=tk.Menu(m,tearoff=False); u.add_command(label="Instrument response",command=self.show_response_window); u.add_command(label="Apply response now",command=self.apply_response_now); u.add_command(label="Vertical shift",command=lambda:VerticalShiftWindow(self)); u.add_command(label="Smooth main",command=self.smooth_main); u.add_command(label="nm → Å main",command=self.nm_to_a_main); m.add_cascade(label="Utilities",menu=u)
         t=tk.Menu(m,tearoff=False); t.add_command(label="Template Manager",command=self.show_template); t.add_command(label="Line Identification",command=self.show_line_identification); t.add_command(label="Element Locator",command=lambda:ElementLocatorWindow(self)); t.add_command(label="Auto Element Identification",command=lambda:AutoElementIdentificationWindow(self)); m.add_cascade(label="Template",menu=t)
         a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Auto / Manual Fit",command=self.show_fit); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
-        h=tk.Menu(m,tearoff=False); h.add_command(label="About",command=lambda:messagebox.showinfo("About","pyLIBS consolidated prototype")); m.add_cascade(label="Help",menu=h)
+        h=tk.Menu(m,tearoff=False); h.add_command(label="Manual...",command=self.show_manual); h.add_separator(); h.add_command(label="About pyLIBS...",command=self.show_about); m.add_cascade(label="Help",menu=h)
         self.config(menu=m)
 
     def _toolbar(self):
@@ -15457,7 +15472,9 @@ def build_retro_menu(self):
 
     help_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Help", menu=help_menu)
-    help_menu.add_command(label="About", command=self.show_about)
+    help_menu.add_command(label="Manual...", command=self.show_manual)
+    help_menu.add_separator()
+    help_menu.add_command(label="About pyLIBS...", command=self.show_about)
 
 class ToolbarTooltip:
     """Small tooltip helper for toolbar image buttons."""
@@ -15956,11 +15973,44 @@ def find_peaks_basic(self):
     self.redraw()
     self.status(f"Find Peaks: {added} nuove righe, {updated} aggiornate; template totale {len(self.template_lines)}")
 
+def show_manual(self):
+    manual = app_base_dir() / "docs" / "LIBS++_Manual.pdf"
+    if not manual.exists():
+        messagebox.showinfo("Manual", f"Manual not found:\n{manual}")
+        return
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(str(manual))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(manual)])
+        else:
+            subprocess.Popen(["xdg-open", str(manual)])
+    except Exception as exc:
+        messagebox.showerror("Manual", f"Could not open the manual:\n{exc}")
+
 def show_about(self):
-    messagebox.showinfo(
-        "About pyLIBS",
-        "pyLIBS\nSoftware for Spectral Analysis\n\nRetro Edition reconstructed from LIBS++ sources."
-    )
+    win = tk.Toplevel(self)
+    win.title(f"About {APP_NAME}")
+    win.resizable(False, False)
+    win.transient(self)
+
+    body = ttk.Frame(win, padding=(28, 24))
+    body.pack(fill="both", expand=True)
+
+    ttk.Label(body, text=APP_NAME, font=("TkDefaultFont", 18, "bold"), anchor="center").pack(fill="x", pady=(0, 10))
+    ttk.Label(body, text=APP_DESCRIPTION, font=("TkDefaultFont", 11, "bold"), anchor="center").pack(fill="x")
+    ttk.Label(body, text=f"Version {APP_VERSION}", anchor="center").pack(fill="x", pady=(8, 16))
+    ttk.Label(body, text=APP_AUTHOR, anchor="center", justify="center", wraplength=420).pack(fill="x", pady=(0, 12))
+    ttk.Label(body, text=APP_HISTORY, anchor="center", justify="center", wraplength=420).pack(fill="x", pady=(0, 16))
+    ttk.Label(body, text=APP_COPYRIGHT, anchor="center").pack(fill="x")
+    ttk.Button(body, text="OK", command=win.destroy).pack(pady=(22, 0))
+
+    win.update_idletasks()
+    x = self.winfo_rootx() + max(0, (self.winfo_width() - win.winfo_width()) // 2)
+    y = self.winfo_rooty() + max(0, (self.winfo_height() - win.winfo_height()) // 2)
+    win.geometry(f"+{x}+{y}")
+    win.lift(self)
+    win.focus_set()
 
 def on_close(self):
     try:
@@ -16249,7 +16299,7 @@ _RETRO_METHODS = [
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
-    close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_about, on_close,
+    close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,

@@ -20,7 +20,7 @@ This repository is the Python rewrite of the historical LIBS++ software.
 ## Before finishing any task
 Always run:
 
-python -m py_compile pyLIBS_python_prototype_v8_18_incremental_template_update.py
+python -m py_compile pyLIBS.py
 
 ## Report
 Always report:
@@ -52,7 +52,7 @@ Before modifying code:
 4. Modify only the missing parts.
 5. Run:
 
-python3 -m py_compile pyLIBS_python_prototype_v8_18_incremental_template_update.py
+python3 -m py_compile pyLIBS.py
 
 6. Report modified files, summary, and syntax-check result.
 

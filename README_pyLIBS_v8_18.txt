@@ -9,4 +9,4 @@ Modifica rispetto a v8.17:
 - Il fit Voigt continua a scrivere i parametri nelle righe template corrispondenti.
 
 File principale:
-pyLIBS_python_prototype_v8_18_incremental_template_update.py
+pyLIBS.py

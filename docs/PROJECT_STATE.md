@@ -86,7 +86,7 @@ Before every modification:
 6. Modify only the requested functionality.
 7. Run
 
-python3 -m py_compile pyLIBS_python_prototype_v8_18_incremental_template_update.py
+python3 -m py_compile pyLIBS.py
 
 8. Report
 
