@@ -14114,12 +14114,14 @@ class MultiGaussianFitWindow(tk.Toplevel):
                 _showerror(self, "Fit Voigt", msg)
             return False, msg
         self.tree.delete(*self.tree.get_children())
+        fit_results = []
         for idx, t in enumerate(lines):
             area, cen, sigma, gamma = popt[2+4*idx], popt[3+4*idx], abs(popt[4+4*idx]), abs(popt[5+4*idx])
             t.fitwavelen = float(cen)
             t.inte = float(area)
             t.wg = float(2.354820045 * sigma)   # Gaussian FWHM
             t.wl = float(2.0 * gamma)           # Lorentzian FWHM
+            peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
             # If the row is already identified, keep the identification and
             # complete Ek/Aki/gk/gi from LIBS.db so Save Template writes a
             # self-contained fit+assignment record.
@@ -14130,8 +14132,18 @@ class MultiGaussianFitWindow(tk.Toplevel):
                 enriched = False
             status = "Voigt OK + DB" if enriched else ("Voigt OK" if getattr(t, "specie", "") else "Voigt OK, not ID")
             self.tree.insert("", "end", values=(idx+1, f"{cen:.5f}", f"{area:.5g}", f"{t.wg:.5g}", f"{t.wl:.5g}", status))
+            fit_results.append({
+                "key": id(t),
+                "template_wavelength": float(t.wavelen),
+                "fit_center": float(cen),
+                "peak_intensity": peak_height,
+                "lorentzian_width": float(t.wl),
+                "gaussian_width": float(t.wg),
+                "integrated_area": float(area),
+            })
         self.master_app.fit_overlay = (xs.tolist(), multivoigt_model(xs, *popt).tolist())
         self.master_app.notify_template_changed(redraw=False)
+        self.master_app.update_fit_results(fit_results)
         self.master_app.redraw(preserve_view=True)
         if preserve_view:
             self.master_app.restore_plot_view(old_xlim, old_ylim)
@@ -15143,6 +15155,53 @@ class RetroActiveSpectraWindow(tk.Toplevel):
         self.master_app.redraw()
 
 
+class FitResultsWindow(tk.Toplevel):
+    columns = (
+        ("template_wavelength", "Template Wavelength", 130),
+        ("fit_center", "Fit Center Wavelength", 150),
+        ("peak_intensity", "Peak Intensity", 110),
+        ("lorentzian_width", "Lorentzian Width", 120),
+        ("gaussian_width", "Gaussian Width", 120),
+        ("integrated_area", "Integrated Area", 120),
+    )
+
+    def __init__(self, master: "MainWindow"):
+        super().__init__(master)
+        self.master_app = master
+        self.title("Fit Results")
+        self.geometry("820x360")
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=6, pady=6)
+        names = [name for name, _label, _width in self.columns]
+        self.tree = ttk.Treeview(frame, columns=names, show="headings")
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=vsb.set)
+        self.tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        for name, label, width in self.columns:
+            self.tree.heading(name, text=label)
+            self.tree.column(name, width=width, anchor="center")
+        self.refresh()
+
+    def refresh(self):
+        widths = {name: self.tree.column(name, "width") for name, _label, _width in self.columns}
+        self.tree.delete(*self.tree.get_children())
+        rows = getattr(self.master_app, "fit_results_rows", {})
+        for key, row in rows.items():
+            values = [format_template_display_value(row.get(name, "")) for name, _label, _width in self.columns]
+            self.tree.insert("", "end", iid=str(key), values=values)
+        for name, _label, _width in self.columns:
+            self.tree.column(name, width=widths.get(name, self.tree.column(name, "width")), anchor="center")
+
+    def close(self):
+        if getattr(self.master_app, "fit_results_window", None) is self:
+            self.master_app.fit_results_window = None
+        self.destroy()
+
+
 class RetroFitManagerWindow(tk.Toplevel):
     """Manual/Auto Fit editor reconstructed from Unit14.
 
@@ -15570,6 +15629,8 @@ class MainWindow(tk.Tk):
         self.view_log_y = bool(getattr(self.options, "view_log_y", False))
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
+        self.fit_results_rows = {}
+        self.fit_results_window = None
         self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
@@ -15799,6 +15860,19 @@ class MainWindow(tk.Tk):
             except Exception:
                 pass
         return removed
+
+    def update_fit_results(self, rows):
+        if not hasattr(self, "fit_results_rows"):
+            self.fit_results_rows = {}
+        for row in rows or []:
+            key = str(row.get("key", len(self.fit_results_rows)))
+            self.fit_results_rows[key] = dict(row)
+        win = getattr(self, "fit_results_window", None)
+        if win is None or not win.winfo_exists():
+            self.fit_results_window = FitResultsWindow(self)
+        else:
+            win.refresh()
+        self.fit_results_window.lift()
 
     def _active_spectrum_y_at(self, wavelength):
         """Intensity of the selected active spectrum at the nearest wavelength.
