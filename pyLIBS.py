@@ -12846,6 +12846,7 @@ class TemplateManager(tk.Toplevel):
         bar = ttk.Frame(self); bar.pack(fill="x", padx=5, pady=5)
         ttk.Button(bar, text="Load CSV", command=self.load).pack(side="left")
         ttk.Button(bar, text="Save CSV", command=self.save).pack(side="left", padx=3)
+        ttk.Button(bar, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=3)
         ttk.Button(bar, text="Line Identification", command=master.show_line_identification).pack(side="left", padx=3)
         self.tree = ttk.Treeview(self, columns=self.columns, show="headings")
         for c in self.columns:
@@ -12877,7 +12878,7 @@ class TemplateManager(tk.Toplevel):
                     fitwavelen=safe_float(r.get("fitwavelen"))
                 ))
         self.master_app.template_lines = lines
-        self.refresh(); self.master_app.redraw()
+        self.master_app.notify_template_changed(redraw=True)
 
     def save(self):
         fn = filedialog.asksaveasfilename(initialdir=remembered_initial_dir(self.master_app.options), defaultextension=".csv")
@@ -12892,6 +12893,15 @@ class TemplateManager(tk.Toplevel):
         item=self.tree.focus()
         if item:
             self.master_app.zoom_around(self.master_app.template_lines[int(item)].wavelen)
+
+    def delete_selected_row(self):
+        item = self.tree.focus()
+        if item == "":
+            return
+        idx = int(item)
+        if 0 <= idx < len(self.master_app.template_lines):
+            self.master_app.template_lines.pop(idx)
+            self.master_app.notify_template_changed(redraw=True)
 
 
 class LineIdentificationWindow(tk.Toplevel):
@@ -13616,11 +13626,7 @@ class SpectrumShiftWindow(tk.Toplevel):
             sp.x = [x + shift for x in sp.x]
         if self.shift_identifications_var.get():
             self._shift_identifications(shift)
-            if self.master_app.template_window and self.master_app.template_window.winfo_exists():
-                try:
-                    self.master_app.template_window.refresh()
-                except Exception:
-                    pass
+            self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
         self.master_app.status(f"Shift: applied {shift:.6g} to {len(spectra)} spectrum/spectra")
         self.cancel()
@@ -13993,9 +13999,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             status = "Voigt OK + DB" if enriched else ("Voigt OK" if getattr(t, "specie", "") else "Voigt OK, not ID")
             self.tree.insert("", "end", values=(idx+1, f"{cen:.5f}", f"{area:.5g}", f"{t.wg:.5g}", f"{t.wl:.5g}", status))
         self.master_app.fit_overlay = (xs.tolist(), multivoigt_model(xs, *popt).tolist())
-        if self.master_app.template_window and self.master_app.template_window.winfo_exists():
-            try: self.master_app.template_window.refresh()
-            except Exception: pass
+        self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
         self.master_app.restore_plot_view(old_xlim, old_ylim)
         self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
@@ -14630,6 +14634,7 @@ class RetroTemplateManager(tk.Toplevel):
         ttk.Button(panel, text="Show Boltzmann", command=self.master_app.show_saha_boltzmann).pack(side="left", padx=2)
         ttk.Button(panel, text="Clear Template", command=self.clear_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Close Template", command=self.close_template).pack(side="left", padx=2)
+        ttk.Button(panel, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=2)
         ttk.Button(panel, text="Delete Template", command=self.delete_template).pack(side="left", padx=2)
 
         self.tree = ttk.Treeview(self, columns=self.columns, show="headings", height=22)
@@ -14669,8 +14674,7 @@ class RetroTemplateManager(tk.Toplevel):
             self.master_app.load_template_file(fn)
         except Exception as e:
             _showerror(self, "Template", str(e))
-        self.refresh()
-        self.master_app.redraw()
+        self.master_app.notify_template_changed(redraw=True)
 
     def save_template(self):
         fn = filedialog.asksaveasfilename(
@@ -14704,14 +14708,12 @@ class RetroTemplateManager(tk.Toplevel):
         if _askyesno(self, "Template", "This will clear the current template. Continue?"):
             self.master_app.template_lines.clear()
             self.master_app.clear_element_markers()
-            self.refresh()
-            self.master_app.redraw()
+            self.master_app.notify_template_changed(redraw=True)
 
     def close_template(self):
         if _askyesno(self, "Template", "This will close the current template. Continue?"):
             self.master_app.template_lines.clear()
-            self.refresh()
-            self.master_app.redraw()
+            self.master_app.notify_template_changed(redraw=True)
             self.destroy()
 
     def delete_template(self):
@@ -14747,6 +14749,15 @@ class RetroTemplateManager(tk.Toplevel):
                     w.search()
         except Exception:
             pass
+
+    def delete_selected_row(self):
+        item = self.tree.focus()
+        if item == "":
+            return
+        idx = int(item)
+        if 0 <= idx < len(self.master_app.template_lines):
+            self.master_app.template_lines.pop(idx)
+            self.master_app.notify_template_changed(redraw=True)
 
 
 class RetroActiveSpectraWindow(tk.Toplevel):
@@ -15404,8 +15415,7 @@ class MainWindow(tk.Tk):
             t.gk = atomic.gk
             t.gi = atomic.gi
             assigned += 1
-        if self.template_window and self.template_window.winfo_exists():
-            self.template_window.refresh()
+        self.notify_template_changed(redraw=False)
         self.redraw(preserve_view=True)
         self.status(f"Trace Assign: {assigned} template lines assigned")
         return assigned
@@ -15431,8 +15441,7 @@ class MainWindow(tk.Tk):
         t.aki = atomic.aki
         t.gk = atomic.gk
         t.gi = atomic.gi
-        if self.template_window and self.template_window.winfo_exists():
-            self.template_window.refresh()
+        self.notify_template_changed(redraw=False)
         if redraw:
             self.redraw(preserve_view=True)
         self.status(f"Assigned {atomic.specie} {_roman_ion(atomic.ion)} at {atomic.wavelen:.4f} Å")
@@ -15895,16 +15904,22 @@ def template_info_from_menu(self):
 
 def close_template_from_menu(self):
     self.template_lines.clear()
+    self.notify_template_changed(redraw=False)
     self.redraw()
     self.status("Template closed")
 
 def clear_template_data(self):
     self.template_lines.clear()
+    self.notify_template_changed(redraw=False)
+
+def notify_template_changed(self, redraw=False):
     if self.template_window and self.template_window.winfo_exists():
         try:
             self.template_window.refresh()
         except Exception:
             pass
+    if redraw:
+        self.redraw(preserve_view=True)
 
 
 def _nearest_spectrum_point(self, wavelength):
@@ -15989,9 +16004,7 @@ def add_template_peak_at(self, wavelength, intensity=None, refresh=True):
     # update existing row if the same line is already present; otherwise append.
     tol = max(1e-6, abs(getattr(self.options, "search_range", 0.2)) * 0.02)
     line, added = self._merge_template_line(TemplateLine(wavelen=x, inte=float(intensity or 0.0), templint=float(intensity or 0.0)), tolerance=tol)
-    if self.template_window and self.template_window.winfo_exists():
-        try: self.template_window.refresh()
-        except Exception: pass
+    self.notify_template_changed(redraw=False)
     if refresh:
         self.redraw(preserve_view=True)
     self.status(("Marked peak" if added else "Updated marked peak") + f": {x:.4f}")
@@ -16007,9 +16020,7 @@ def delete_template_peak_at(self, wavelength, refresh=True):
         self.status("No marked peak close enough to delete")
         return
     removed = self.template_lines.pop(idx)
-    if self.template_window and self.template_window.winfo_exists():
-        try: self.template_window.refresh()
-        except Exception: pass
+    self.notify_template_changed(redraw=False)
     if refresh:
         self.redraw(preserve_view=True)
     self.status(f"Deleted marked peak: {removed.wavelen:.4f}")
@@ -16109,9 +16120,7 @@ def find_peaks_basic(self):
             added += 1
         else:
             updated += 1
-    if self.template_window and self.template_window.winfo_exists():
-        try: self.template_window.refresh()
-        except Exception: pass
+    self.notify_template_changed(redraw=False)
     self.redraw()
     self.status(f"Find Peaks: {added} nuove righe, {updated} aggiornate; template totale {len(self.template_lines)}")
 
@@ -16305,6 +16314,7 @@ def load_template_file(self, filename):
                 try: rows.append(TemplateLine(wavelen=float(parts[0])))
                 except Exception: pass
     self.template_lines = rows
+    self.notify_template_changed(redraw=False)
     self.redraw()
 
 def save_template_file(self, filename):
@@ -16483,7 +16493,7 @@ _RETRO_METHODS = [
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
-    close_template_from_menu, clear_template_data, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
+    close_template_from_menu, clear_template_data, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     full_y_main_visible_x,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
