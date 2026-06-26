@@ -15190,6 +15190,11 @@ class MainWindow(tk.Tk):
     def clear_element_markers(self):
         self.element_markers=[]; self.redraw()
 
+    def clear_plot_annotations(self):
+        self.element_markers = []
+        self.trace_markers = []
+        self.fit_overlay = None
+
     def _active_spectrum_y_at(self, wavelength):
         """Intensity of the selected active spectrum at the nearest wavelength.
 
@@ -15245,7 +15250,7 @@ class MainWindow(tk.Tk):
                 self.ax.plot(sp.x, sp.y, linewidth=0.8, label=sp.name, **kwargs)
         ymin,ymax=self.ax.get_ylim()
         h=ymax-ymin if ymax>ymin else 1
-        for line in self.template_lines:
+        for line in (self.template_lines if self.spectra else []):
             # LIBS++ convention: unassigned marked peaks are blue; assigned
             # peaks with complete transition data are yellow; assigned peaks
             # without Aki/levels/statistical weights are light blue.
@@ -15720,6 +15725,7 @@ def compare_spectrum(self):
 def clear_all_spectra(self):
     if messagebox.askyesno("Clear", "Clear all spectra?"):
         self.spectra.clear()
+        self.clear_plot_annotations()
         self.redraw()
         if self.active_window and self.active_window.winfo_exists():
             self.active_window.refresh()
