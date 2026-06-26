@@ -15346,6 +15346,7 @@ class MainWindow(tk.Tk):
         self.ax.tick_params(direction="in", length=5, width=1.0)
         self.ax.grid(bool(getattr(self, "view_grid_x", True)), axis="x", linestyle="--", linewidth=0.5, alpha=0.5)
         self.ax.grid(bool(getattr(self, "view_grid_y", True)), axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
+        label_bbox = dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1)
         for sp in self.spectra:
             if sp.visible and sp.x:
                 kwargs = {"color": sp.color} if getattr(sp, "color", None) else {}
@@ -15366,7 +15367,11 @@ class MainWindow(tk.Tk):
             ytop = self._active_spectrum_y_at(line.wavelen)
             self.ax.vlines(line.wavelen, 0.0, ytop, linestyles="solid", linewidth=0.9, colors=color)
             label = f"{line.wavelen:.2f}" if not line.specie else f"{line.specie} {_roman_ion(line.ion)} {line.asswavelen or line.wavelen:.2f}"
-            self.ax.text(line.wavelen, ytop, label, rotation=90, fontsize=7, va=("bottom" if ytop >= 0 else "top"), color=color)
+            self.ax.text(
+                line.wavelen, ytop, label,
+                rotation=0, fontsize=7, va=("bottom" if ytop >= 0 else "top"), ha="center",
+                color="black", bbox=label_bbox, clip_on=True,
+            )
         # Trace Lines overlay: green segments with readable species labels.
         # Like the manual/identified markers, traced lines start at y=0 and
         # reach the intensity of the selected active spectrum at that wavelength.
@@ -15378,10 +15383,10 @@ class MainWindow(tk.Tk):
                 self.ax.vlines(l.wavelen, 0.0, ytop, colors="green", linewidth=2.0)
                 self.ax.text(
                     l.wavelen, ytop, label,
-                    rotation=90, fontsize=10, fontweight="bold",
+                    rotation=0, fontsize=10, fontweight="bold",
                     va=("bottom" if ytop >= 0 else "top"), ha="center",
                     color="black",
-                    bbox=dict(facecolor="yellow", edgecolor="none", alpha=0.75, pad=1.2),
+                    bbox=label_bbox,
                     clip_on=True,
                 )
         if self.element_markers:
@@ -15389,7 +15394,11 @@ class MainWindow(tk.Tk):
             for l in self.element_markers:
                 y=ymin+(l.inte/maxint)*0.8*h
                 self.ax.vlines(l.wavelen,ymin,y,colors="green",linewidth=1.0)
-                self.ax.text(l.wavelen,y,f"{l.specie} {'I' if l.ion==1 else 'II'}",rotation=90,fontsize=7,va="bottom")
+                self.ax.text(
+                    l.wavelen, y, f"{l.specie} {'I' if l.ion==1 else 'II'}",
+                    rotation=0, fontsize=7, va="bottom", ha="center",
+                    color="black", bbox=label_bbox, clip_on=True,
+                )
         if self.fit_overlay:
             fx, fy = self.fit_overlay
             self.ax.plot(fx, fy, linewidth=1.0, label="fit")
