@@ -14669,7 +14669,7 @@ class MainWindow(tk.Tk):
         super().__init__()
         configure_retro_style(self)
         self.withdraw()
-        self.title(APP_TITLE); self.geometry("1180x760")
+        self.title(APP_TITLE); self.geometry("1280x720")
         self.options=AppOptions()
         self.loaded_ini_path = load_pylibs_ini(self.options)
         self.libs_db=LibsDatabase(self.options.libs_db_file)
@@ -14907,8 +14907,11 @@ class MainWindow(tk.Tk):
             self.ax.set_yscale("log" if getattr(self, "view_log_y", False) else "linear", nonpositive="clip")
         except TypeError:
             self.ax.set_yscale("log" if getattr(self, "view_log_y", False) else "linear")
-        self.ax.grid(bool(getattr(self, "view_grid_x", True)), axis="x")
-        self.ax.grid(bool(getattr(self, "view_grid_y", True)), axis="y")
+        for spine in self.ax.spines.values():
+            spine.set_linewidth(1.2)
+        self.ax.tick_params(direction="in", length=5, width=1.0)
+        self.ax.grid(bool(getattr(self, "view_grid_x", True)), axis="x", linestyle="--", linewidth=0.5, alpha=0.5)
+        self.ax.grid(bool(getattr(self, "view_grid_y", True)), axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
         for sp in self.spectra:
             if sp.visible and sp.x:
                 self.ax.plot(sp.x, sp.y, linewidth=0.8, label=sp.name)
