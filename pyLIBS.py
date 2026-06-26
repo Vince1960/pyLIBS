@@ -13881,6 +13881,29 @@ def pseudo_voigt(x, amp, center, wg, wl, baseline, slope, eta):
     return baseline + slope*x + amp * ((1.0 - eta) * gaussian + eta * lorentz)
 
 
+def lorentzian_component(x, amp, center, width):
+    """Lorentzian peak with width interpreted as FWHM."""
+    if np is None:
+        raise RuntimeError("numpy non disponibile")
+    x = np.asarray(x, dtype=float)
+    width = abs(float(width)) or 1e-12
+    return amp / (1.0 + 4.0 * ((x - center) / width) ** 2)
+
+
+def halpha_lorentzian_model(x, *params):
+    """baseline + one or more Lorentzian components.
+
+    Parameter order: baseline, then repeated amp, center, FWHM triples.
+    """
+    if np is None:
+        raise RuntimeError("numpy non disponibile")
+    x = np.asarray(x, dtype=float)
+    y = np.full_like(x, float(params[0]))
+    for i in range(1, len(params), 3):
+        y += lorentzian_component(x, params[i], params[i + 1], params[i + 2])
+    return y
+
+
 class MultiGaussianFitWindow(tk.Toplevel):
     """Functional v6 replacement for the old dummy fit window.
 
@@ -14080,17 +14103,31 @@ class NeHalphaWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Ne from H-alpha - Unit16/SDIMain")
-        self.geometry("540x260")
+        self.geometry("620x360")
         frm = ttk.Frame(self); frm.pack(fill="both", expand=True, padx=10, pady=10)
-        labels = [("Hα wavelength", str(master.options.ha_wl1)), ("Fit half-range", str(master.options.ha_range)), ("Initial wg", "1.0"), ("Initial wl", "1.0"), ("kT", str(master.options.ha_kt))]
+        labels = [
+            ("Number of lines", str(master.options.ha_lines)),
+            ("wl1", str(master.options.ha_wl1)),
+            ("dl1", str(master.options.ha_dl1)),
+            ("Delta", str(master.options.ha_range)),
+            ("wl2", str(master.options.ha_wl2)),
+            ("dl2", str(master.options.ha_dl2)),
+            ("kT", str(master.options.ha_kt)),
+        ]
         self.vars = {}
         for r,(lab, val) in enumerate(labels):
             ttk.Label(frm, text=lab).grid(row=r, column=0, sticky="w", pady=2)
             v = tk.StringVar(value=val); self.vars[lab]=v
             ttk.Entry(frm, textvariable=v, width=16).grid(row=r, column=1, sticky="w")
-        ttk.Button(frm, text="Fit Hα and estimate Ne", command=self.run).grid(row=0, column=2, rowspan=2, padx=15)
-        self.out = tk.Text(frm, height=8, width=60)
-        self.out.grid(row=6, column=0, columnspan=3, pady=8, sticky="nsew")
+        ttk.Button(frm, text="Fit Hα and estimate Ne", command=self.run).grid(row=0, column=2, rowspan=2, padx=15, sticky="n")
+        self.out = tk.Text(frm, height=10, width=72)
+        self.out.grid(row=len(labels), column=0, columnspan=3, pady=8, sticky="nsew")
+        frm.rowconfigure(len(labels), weight=1)
+        frm.columnconfigure(2, weight=1)
+
+    def _initial_amplitude(self, xs, ys, center, baseline):
+        idx = int(np.argmin(np.abs(xs - center)))
+        return max(float(ys[idx] - baseline), float(max(ys) - baseline) * 0.25, 1.0)
 
     def run(self):
         if np is None:
@@ -14105,34 +14142,64 @@ class NeHalphaWindow(tk.Toplevel):
             _showinfo(self, "Ne", "Caricare prima uno spettro.")
             return
         sp = self.master_app.spectra[0]
-        c0 = safe_float(self.vars["Hα wavelength"].get(), 6565.0)
-        rg = safe_float(self.vars["Fit half-range"].get(), 40.0)
-        xs = np.asarray([x for x in sp.x if c0-rg <= x <= c0+rg], dtype=float)
-        ys = np.asarray([sp.y[i] for i,x in enumerate(sp.x) if c0-rg <= x <= c0+rg], dtype=float)
-        if len(xs) < 8:
+        nlines = 2 if safe_int(self.vars["Number of lines"].get(), self.master_app.options.ha_lines) == 2 else 1
+        wl1 = safe_float(self.vars["wl1"].get(), self.master_app.options.ha_wl1)
+        dl1 = abs(safe_float(self.vars["dl1"].get(), self.master_app.options.ha_dl1)) or 1.0
+        wl2 = safe_float(self.vars["wl2"].get(), self.master_app.options.ha_wl2)
+        dl2 = abs(safe_float(self.vars["dl2"].get(), self.master_app.options.ha_dl2)) or dl1
+        delta = abs(safe_float(self.vars["Delta"].get(), self.master_app.options.ha_range)) or 1.0
+        lo, hi = wl1 - delta, wl1 + delta
+        points = [(x, sp.y[i]) for i, x in enumerate(sp.x) if lo <= x <= hi]
+        xs = np.asarray([x for x, _ in points], dtype=float)
+        ys = np.asarray([y for _, y in points], dtype=float)
+        min_points = 7 if nlines == 1 else 10
+        if len(xs) < min_points:
             _showinfo(self, "Ne", "Troppi pochi punti intorno ad Hα.")
             return
-        baseline = float(np.percentile(ys, 5)); amp = float(max(ys)-baseline)
-        p0 = [amp, c0, safe_float(self.vars["Initial wg"].get(), 1.0), safe_float(self.vars["Initial wl"].get(), 1.0), baseline, 0.0, 0.5]
+        baseline = float(np.percentile(ys, 5))
+        p0 = [baseline, self._initial_amplitude(xs, ys, wl1, baseline), wl1, dl1]
+        lower = [float(min(ys) - abs(max(ys) - min(ys))), 0.0, lo, 1e-9]
+        upper = [float(max(ys) + abs(max(ys) - min(ys))), np.inf, hi, max(2.0 * delta, dl1)]
+        if nlines == 2:
+            wl2_start = min(max(wl2, lo), hi)
+            p0.extend([self._initial_amplitude(xs, ys, wl2_start, baseline), wl2_start, dl2])
+            lower.extend([0.0, lo, 1e-9])
+            upper.extend([np.inf, hi, max(2.0 * delta, dl2)])
         try:
-            popt, _ = curve_fit(pseudo_voigt, xs, ys, p0=p0, maxfev=5000)
+            popt, _ = curve_fit(halpha_lorentzian_model, xs, ys, p0=p0, bounds=(lower, upper), maxfev=8000)
         except Exception as e:
             _showerror(self, "Ne", str(e)); return
-        amp, center, wg, wl, baseline, slope, eta = popt
-        wg, wl = abs(wg), abs(wl)
-        wtot = math.sqrt((wl/2.0)**2 + wg**2) + wl/2.0
+        fitted = []
+        for i in range(1, len(popt), 3):
+            fitted.append((float(popt[i]), float(popt[i + 1]), abs(float(popt[i + 2]))))
+        primary_width = fitted[0][2]
         inst = self.master_app.options.instrumental_width
-        if wtot <= 0:
-            corrected_lorentz = wl
+        if primary_width <= 0:
+            corrected_lorentz = primary_width
         else:
-            corrected_lorentz = max(wtot - inst*inst/wtot, 0.0)
+            corrected_lorentz = max(primary_width - inst*inst/primary_width, 0.0)
         ne = 2.84e15 * (corrected_lorentz ** 1.5) if corrected_lorentz > 0 else 0.0
         kt = safe_float(self.vars["kT"].get(), 1.0)
         T = 11600.0 * kt
-        self.master_app.fit_overlay = (xs.tolist(), pseudo_voigt(xs, *popt).tolist())
+        self.master_app.fit_overlay = (xs.tolist(), halpha_lorentzian_model(xs, *popt).tolist())
         self.master_app.redraw()
         self.out.delete("1.0", "end")
-        self.out.insert("end", f"Center: {center:.4f}\nGaussian width wg: {wg:.4f} Å\nLorentzian width wl: {wl:.4f} Å\nCorrected Lorentzian width: {corrected_lorentz:.4f} Å\nT ≈ {T:.0f} K\nNe ≈ {ne:.3e} cm⁻³\n")
+        lines = [
+            f"Fit window: {lo:.4f} - {hi:.4f} Å",
+            f"Model: baseline + {nlines} Lorentzian component{'s' if nlines == 2 else ''}",
+            f"kT: {kt:.6g}  (T ≈ {T:.0f} K)",
+            "",
+        ]
+        for idx, (_, center, width) in enumerate(fitted, start=1):
+            lines.append(f"Line {idx}: center = {center:.4f} Å, Lorentzian FWHM = {width:.4f} Å")
+        lines.extend([
+            "",
+            f"Instrumental width: {inst:.4f} Å",
+            f"Corrected primary Lorentzian width: {corrected_lorentz:.4f} Å",
+            "Ne formula: Ne = 2.84e15 * width^1.5 cm^-3",
+            f"Ne ≈ {ne:.3e} cm^-3",
+        ])
+        self.out.insert("end", "\n".join(lines) + "\n")
         self.master_app.status(f"Ne da Hα ≈ {ne:.3e} cm⁻³")
 
 
@@ -15654,7 +15721,6 @@ def build_retro_menu(self):
     menu.add_cascade(label="Analyse", menu=analysis_menu)
     analysis_menu.add_command(label="Find Peaks", command=self.find_peaks_basic)
     analysis_menu.add_command(label="Trace Lines", command=self.show_trace_lines)
-    analysis_menu.add_command(label="Auto Assign", command=self.show_auto_element_identification)
     analysis_menu.add_separator()
     analysis_menu.add_command(label="Calculate Ne from Ha", command=self.show_ne_halpha)
     analysis_menu.add_command(label="Manual Fit", command=self.show_retro_fit_manager)
