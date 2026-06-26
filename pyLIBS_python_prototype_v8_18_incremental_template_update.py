@@ -34,6 +34,7 @@ from __future__ import annotations
 import csv
 import math
 import sqlite3
+import struct
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -11855,6 +11856,71 @@ class Spectrum:
             raise ValueError("Il file non contiene dati numerici a due colonne.")
         return cls(xs, ys, name or Path(filename).name, filename)
 
+    @classmethod
+    def from_roh(cls, filename: str, convert_nm_to_a: bool = False, limit_low: Optional[float] = None, limit_high: Optional[float] = None, name: Optional[str] = None) -> "Spectrum":
+        data = Path(filename).read_bytes()
+        if len(data) < 4:
+            raise ValueError("File .ROH troppo corto o corrotto.")
+        total = len(data) // 4
+        offset = 0
+
+        def read_float(label: str) -> float:
+            nonlocal offset
+            if offset >= total:
+                raise ValueError(f"File .ROH troppo corto durante la lettura di {label}.")
+            value = struct.unpack_from("<f", data, offset * 4)[0]
+            offset += 1
+            return value
+
+        def skip(count: int, label: str):
+            nonlocal offset
+            if offset + count > total:
+                raise ValueError(f"File .ROH troppo corto durante il salto di {label}.")
+            offset += count
+
+        version = read_float("version")
+        if version < 70:
+            start_w = read_float("start_w")
+            res_w = read_float("res_w")
+            quadr = read_float("quadr")
+            cub = read_float("cub")
+            skip(11, "header")
+            npoints = safe_int(read_float("npoints"), 0)
+            skip(3, "header")
+            start_index, end_index = 0, npoints
+        else:
+            skip(73, "header")
+            start_w = read_float("start_w")
+            res_w = read_float("res_w")
+            quadr = read_float("quadr")
+            cub = read_float("cub")
+            read_float("quart")
+            start_index = safe_int(read_float("startt"), 0)
+            end_index = safe_int(read_float("endd"), 0)
+            skip(19, "header")
+
+        if end_index <= start_index:
+            raise ValueError("File .ROH senza punti spettrali validi.")
+        needed = end_index - start_index
+        if offset + needed > total:
+            raise ValueError("File .ROH troppo corto durante la lettura delle intensità.")
+
+        lo = min(limit_low, limit_high) if limit_low is not None and limit_high is not None else None
+        hi = max(limit_low, limit_high) if limit_low is not None and limit_high is not None else None
+        xs, ys = [], []
+        for nq in range(start_index, end_index):
+            wave = start_w + nq * res_w + quadr * nq * nq + cub * nq * nq * nq
+            inten = read_float("intensity")
+            if convert_nm_to_a and wave < 1500:
+                wave *= 10.0
+            if lo is not None and hi is not None and not (lo <= wave <= hi):
+                continue
+            xs.append(wave)
+            ys.append(inten)
+        if not xs:
+            raise ValueError("File .ROH senza punti nel range di lunghezze d'onda impostato.")
+        return cls(xs, ys, name or Path(filename).name, filename)
+
     def save_ascii(self, filename: str):
         with open(filename, "w", encoding="utf-8") as f:
             for x, y in zip(self.x, self.y):
@@ -11928,6 +11994,17 @@ def merge_spectra_by_wavelength(first: Spectrum, second: Spectrum, name: str = "
 
     merged.sort(key=lambda p: p[0])
     return Spectrum([x for x, _ in merged], [y for _, y in merged], name=name)
+
+
+def load_spectrum_for_open(filename: str, options: AppOptions) -> Spectrum:
+    if Path(filename).suffix.lower() == ".roh":
+        return Spectrum.from_roh(
+            filename,
+            getattr(options, "convert_to_angstrom", False),
+            getattr(options, "limit_low", None),
+            getattr(options, "limit_high", None),
+        )
+    return Spectrum.from_ascii(filename, getattr(options, "convert_to_angstrom", False))
 
 
 @dataclass
@@ -14576,11 +14653,11 @@ class MainWindow(tk.Tk):
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
     def open_spectrum(self):
-        fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.options), filetypes=[("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
+        fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
         if not fn: return
         remember_working_dir(self.options, fn)
         try:
-            sp=Spectrum.from_ascii(fn,self.options.convert_to_angstrom)
+            sp=load_spectrum_for_open(fn,self.options)
             if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
             if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
             self.spectra=[sp]
