@@ -56,12 +56,11 @@ except Exception:
 try:
     import matplotlib
     matplotlib.use("TkAgg")
-    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
+    from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     from matplotlib.figure import Figure
 except Exception:
     Figure = None
     FigureCanvasTkAgg = None
-    NavigationToolbar2Tk = None
 
 
 APP_TITLE = "pyLIBS"
@@ -14748,9 +14747,6 @@ class MainWindow(tk.Tk):
         self.fig=Figure(figsize=(8,5),dpi=100); self.ax=self.fig.add_subplot(111)
         self.canvas=FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        self.nav_toolbar = NavigationToolbar2Tk(self.canvas,self.plot_frame)
-        self.nav_toolbar.set_message = lambda _message: None
-        self.nav_toolbar.update()
         # LIBS++-compatible navigation state: left drag zoom, right drag pan.
         self._nav_press = None
         self._nav_dragged = False
