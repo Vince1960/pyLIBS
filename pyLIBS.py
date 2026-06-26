@@ -15161,6 +15161,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_stop = False
         self._build()
         self.load_from_template()
+        self.prepare_initial_region()
 
     def _build(self):
         top = ttk.Frame(self)
@@ -15285,6 +15286,9 @@ class RetroFitManagerWindow(tk.Toplevel):
                 break
         return group, next_index
 
+    def _group_center(self, group):
+        return (group[0].wavelen + group[-1].wavelen) / 2.0
+
     def _display_manual_group(self, group):
         if not group or not getattr(self.master_app, "ax", None):
             return
@@ -15298,6 +15302,14 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app._update_xscroll()
         self.load_from_template(group)
 
+    def prepare_initial_region(self):
+        self.manual_fit_lines = self._sorted_template_lines()
+        self.manual_fit_index = 0
+        group, _ = self._group_from_index(0)
+        if group:
+            self._display_manual_group(group)
+            self.msg_var.set(f"Ready: {len(group)} line(s), {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}")
+
     def _current_fit_point_count(self):
         if not self.master_app.spectra or not getattr(self.master_app, "ax", None):
             return 0
@@ -15309,9 +15321,53 @@ class RetroFitManagerWindow(tk.Toplevel):
         nparams = 2 + 4 * len(group)
         return max(8, 3 * nparams)
 
-    def _expand_manual_window_once(self):
-        self.master_app.expand_x_50()
-        self.master_app.full_y_main_visible_x()
+    def _data_x_limits(self):
+        if not self.master_app.spectra:
+            return None
+        xs = list(getattr(self.master_app.spectra[0], "x", []) or [])
+        if not xs:
+            return None
+        return min(xs), max(xs)
+
+    def _expand_manual_window_to_points(self, group, min_points, max_retries=8):
+        expanded = False
+        retries = 0
+        point_count = self._current_fit_point_count()
+        data_limits = self._data_x_limits()
+        center = self._group_center(group)
+        while point_count < min_points and data_limits and retries < max_retries:
+            lo, hi = self.master_app.ax.get_xlim()
+            current_width = abs(hi - lo)
+            if current_width <= 0:
+                current_width = max(self._manual_delta_min() * 2.0, 1e-9)
+            deficit_factor = min_points / max(point_count, 1)
+            expansion_factor = max(deficit_factor * 1.10, 1.25)
+            new_width = current_width * expansion_factor
+            data_min, data_max = data_limits
+            full_width = data_max - data_min
+            if full_width <= 0:
+                break
+            new_width = min(new_width, full_width)
+            new_lo = center - new_width / 2.0
+            new_hi = center + new_width / 2.0
+            if new_lo < data_min:
+                new_lo = data_min
+                new_hi = min(data_max, data_min + new_width)
+            if new_hi > data_max:
+                new_hi = data_max
+                new_lo = max(data_min, data_max - new_width)
+            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
+            self.master_app.clear_fit_artists()
+            self.master_app.ax.set_xlim(new_lo, new_hi)
+            self.master_app.full_y_main_visible_x()
+            self.master_app.canvas.draw_idle()
+            self.master_app._update_xscroll()
+            expanded = True
+            retries += 1
+            point_count = self._current_fit_point_count()
+            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
+                break
+        return point_count, expanded, retries
 
     def _fit_manual_group(self, group):
         tmp = None
@@ -15358,15 +15414,15 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.update_idletasks()
             min_points = self._minimum_fit_points(group)
             point_count = self._current_fit_point_count()
-            expanded = False
             if point_count < min_points:
-                self._expand_manual_window_once()
-                expanded = True
+                point_count, expanded, retries = self._expand_manual_window_to_points(group, min_points)
                 self.update_idletasks()
-                point_count = self._current_fit_point_count()
+            else:
+                expanded = False
+                retries = 0
             report = (
-                f"Manual Fit {first:.4f}-{last:.4f}: {len(group)} line(s), "
-                f"Fit points: {point_count}, expanded: {'yes' if expanded else 'no'}"
+                f"Manual Fit: {'expanded window, ' if expanded else ''}"
+                f"fitting {len(group)} line(s) using {point_count} points"
             )
             self.msg_var.set(report)
             self.master_app.status(report)
@@ -15374,7 +15430,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                 self.manual_fit_failed = True
                 message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
                 self.msg_var.set(f"{report}; {message}")
-                _showerror(self, "Manual Fit", f"{message}\nRegion: {first:.4f} - {last:.4f}")
+                _showerror(self, "Manual Fit", f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
                 return
             ok, message = self._fit_manual_group(group)
             if not ok:
