@@ -13904,6 +13904,27 @@ def halpha_lorentzian_model(x, *params):
     return y
 
 
+def libspp_halpha_ne(width_angstrom, kt_ev):
+    """Historical LIBS++ H-alpha Ne iteration from SDIMain.cpp Ne()."""
+    d = float(width_angstrom)
+    kt = float(kt_ev)
+    if d <= 0.0:
+        raise ValueError("Corrected Lorentzian width must be positive.")
+    if kt <= 0.0:
+        raise ValueError("kT must be positive.")
+    temperature = 11600.0 * kt
+    a = math.sqrt(4033.8 - 24.45 * math.pow(math.log(temperature), 2))
+    b = 1.028e9 + 174576.3 * temperature
+    sol = 1.0e17
+    for _ in range(1000):
+        nestart = sol
+        alfa = 1.0 / (a + b / math.sqrt(nestart))
+        sol = 8.02e12 * math.pow(d / alfa, 1.5)
+        if sol != 0.0 and abs(sol - nestart) / sol <= 0.01:
+            return sol, temperature, alfa
+    return sol, temperature, alfa
+
+
 class MultiGaussianFitWindow(tk.Toplevel):
     """Functional v6 replacement for the old dummy fit window.
 
@@ -14199,13 +14220,21 @@ class NeHalphaWindow(tk.Toplevel):
         for i in range(1, len(popt), 3):
             fitted.append((float(popt[i]), float(popt[i + 1]), abs(float(popt[i + 2]))))
         primary_width = fitted[0][2]
-        inst = self.master_app.options.instrumental_width
+        primary_center = fitted[0][1]
+        inst = float(self.master_app.options.instrumental_width)
+        if getattr(self.master_app.options, "echelle", False):
+            inst = inst / 5000.0 * primary_center
         if primary_width <= 0:
             corrected_lorentz = primary_width
         else:
             corrected_lorentz = max(primary_width - inst*inst/primary_width, 0.0)
         kt = safe_float(self.vars["kT"].get(), 1.0)
-        T = 11600.0 * kt
+        try:
+            ne_value, T, alfa = libspp_halpha_ne(corrected_lorentz, kt)
+            ne_error = None
+        except Exception as e:
+            ne_value, T, alfa = None, 11600.0 * kt, None
+            ne_error = str(e)
         self.master_app.fit_overlay = (xs.tolist(), halpha_lorentzian_model(xs, *popt).tolist())
         self.master_app.redraw(preserve_view=True)
         self.out.delete("1.0", "end")
@@ -14221,11 +14250,22 @@ class NeHalphaWindow(tk.Toplevel):
             "",
             f"Instrumental width: {inst:.4f} Å",
             f"Corrected primary Lorentzian width: {corrected_lorentz:.4f} Å",
-            "Ne formula: not verified in the available LIBS++ sources/manual.",
-            "Ne was not calculated. Use the fitted Lorentzian width after verifying the historical formula.",
         ])
+        if ne_error:
+            lines.extend([
+                "Ne calculation failed:",
+                ne_error,
+            ])
+            status = "H-alpha fit complete; Ne calculation failed"
+        else:
+            lines.extend([
+                f"LIBS++ alpha correction: {alfa:.6g}",
+                f"Ne: {ne_value:.6e} cm^-3",
+                f"Ne / 1e17: {ne_value / 1.0e17:.6g}",
+            ])
+            status = f"H-alpha fit complete; Ne={ne_value:.3e} cm^-3"
         self.out.insert("end", "\n".join(lines) + "\n")
-        self.master_app.status("H-alpha fit complete; Ne formula not verified")
+        self.master_app.status(status)
 
 
 class SahaBoltzmannWindow(tk.Toplevel):
