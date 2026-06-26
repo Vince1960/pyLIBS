@@ -13412,8 +13412,7 @@ class SpectrumShiftWindow(tk.Toplevel):
         self.target_var = tk.StringVar(value="")
         ttk.Entry(self, textvariable=self.source_var, width=16).grid(row=0, column=1, padx=4, pady=(10, 4))
         ttk.Entry(self, textvariable=self.target_var, width=16).grid(row=1, column=1, padx=4, pady=4)
-        ttk.Button(self, text="Pick", command=lambda: self.begin_capture("source")).grid(row=0, column=2, padx=(4, 8), pady=(10, 4))
-        ttk.Button(self, text="Pick", command=lambda: self.begin_capture("target")).grid(row=1, column=2, padx=(4, 8), pady=4)
+        ttk.Button(self, text="Pick", command=lambda: self.begin_capture("source")).grid(row=0, column=2, rowspan=2, padx=(4, 8), pady=(10, 4))
 
         self.shift_identifications_var = tk.BooleanVar(value=True)
         self.shift_all_spectra_var = tk.BooleanVar(value=False)
@@ -13432,7 +13431,7 @@ class SpectrumShiftWindow(tk.Toplevel):
         self._raise_dialog()
         self.master_app.status("Shift: click the spectrum to set " + ("Move Point at" if target == "source" else "to"))
 
-    def set_from_plot(self, wavelength):
+    def set_from_plot(self, wavelength, intensity=None):
         if self.capture_target == "source":
             self.source_var.set(f"{wavelength:.6g}")
             self.capture_target = "target"
@@ -13510,6 +13509,79 @@ class SpectrumShiftWindow(tk.Toplevel):
             self.master_app.shift_capture_window = None
         self._set_capture_topmost(False)
         self.destroy()
+
+
+class SpectrumOffsetWindow(SpectrumShiftWindow):
+    """Historical LIBS++ Utilities > Offset intensity dialog."""
+    def __init__(self, master: "MainWindow"):
+        tk.Toplevel.__init__(self, master)
+        self.master_app = master
+        self.title("Offset")
+        self.resizable(False, False)
+        self.transient(master)
+        self.capture_target = None
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        ttk.Label(self, text="Move Point at:").grid(row=0, column=0, sticky="e", padx=8, pady=(10, 4))
+        ttk.Label(self, text="to:").grid(row=1, column=0, sticky="e", padx=8, pady=4)
+        self.source_var = tk.StringVar(value="")
+        self.target_var = tk.StringVar(value="")
+        ttk.Entry(self, textvariable=self.source_var, width=16).grid(row=0, column=1, padx=4, pady=(10, 4))
+        ttk.Entry(self, textvariable=self.target_var, width=16).grid(row=1, column=1, padx=4, pady=4)
+        ttk.Button(self, text="Pick", command=lambda: self.begin_capture("source")).grid(row=0, column=2, rowspan=2, padx=(4, 8), pady=(10, 4))
+
+        self.offset_all_spectra_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Offset all spectra", variable=self.offset_all_spectra_var).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 2))
+
+        buttons = ttk.Frame(self)
+        buttons.grid(row=3, column=0, columnspan=3, sticky="e", padx=8, pady=(10, 8))
+        ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=4)
+        ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left", padx=4)
+
+    def begin_capture(self, target):
+        self.capture_target = target
+        self.master_app.shift_capture_window = self
+        self._set_capture_topmost(True)
+        self._raise_dialog()
+        self.master_app.status("Offset: click the spectrum to set " + ("Move Point at" if target == "source" else "to"))
+
+    def set_from_plot(self, wavelength, intensity=None):
+        value = wavelength if intensity is None else intensity
+        if self.capture_target == "source":
+            self.source_var.set(f"{value:.6g}")
+            self.capture_target = "target"
+            self.master_app.shift_capture_window = self
+            self._set_capture_topmost(True)
+            self._raise_dialog()
+            self.master_app.status("Offset: click the spectrum to set target intensity")
+        elif self.capture_target == "target":
+            self.target_var.set(f"{value:.6g}")
+            self.capture_target = None
+            self.master_app.shift_capture_window = None
+            self._set_capture_topmost(False)
+            self._raise_dialog()
+            self.master_app.status("Offset: source and target intensities selected")
+
+    def ok(self):
+        if not self.master_app.spectra:
+            self.master_app.status("Offset: no spectrum loaded")
+            messagebox.showinfo("Offset", "Load a spectrum before applying an offset.")
+            return
+        source = safe_float(self.source_var.get(), None)
+        target = safe_float(self.target_var.get(), None)
+        if source is None or target is None:
+            messagebox.showerror("Offset", "Enter both source and target intensities.")
+            return
+        offset = target - source
+        if self.offset_all_spectra_var.get():
+            spectra = [sp for sp in self.master_app.spectra if getattr(sp, "visible", True)]
+        else:
+            spectra = [self.master_app.spectra[0]]
+        for sp in spectra:
+            sp.y = [y + offset for y in sp.y]
+        self.master_app.redraw(preserve_view=True)
+        self.master_app.status(f"Offset: applied {offset:.6g} to {len(spectra)} spectrum/spectra")
+        self.cancel()
 
 
 # ---------------------------------------------------------------------------
@@ -15353,7 +15425,7 @@ def build_retro_menu(self):
     util_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Utilities", menu=util_menu)
     util_menu.add_command(label="Shift", command=self.show_spectrum_shift)
-    util_menu.add_command(label="Offset", command=self.show_vertical_shift)
+    util_menu.add_command(label="Offset", command=self.show_spectrum_offset)
     util_menu.add_command(label="Smooth", command=self.smooth_main_spectrum)
     util_menu.add_command(label="nm -> A", command=self.convert_nm_to_angstrom)
     util_menu.add_separator()
@@ -15817,7 +15889,7 @@ def _click(self, event):
     capture_window = getattr(self, "shift_capture_window", None)
     if capture_window is not None and capture_window.winfo_exists() and event.button == 1:
         self._nav_press = None
-        capture_window.set_from_plot(float(event.xdata))
+        capture_window.set_from_plot(float(event.xdata), float(event.ydata))
         return
     key = (event.key or "").lower()
     if "shift" in key and event.button == 1:
@@ -15977,6 +16049,9 @@ def show_vertical_shift(self):
 
 def show_spectrum_shift(self):
     return SpectrumShiftWindow(self)
+
+def show_spectrum_offset(self):
+    return SpectrumOffsetWindow(self)
 
 def show_batch_statistics(self):
     return BatchStatisticsWindow(self)
@@ -16176,7 +16251,7 @@ _RETRO_METHODS = [
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
     close_template_from_menu, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
-    expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_batch_statistics,
+    expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
     show_sac_window, load_template_file, save_template_file,
     _full_x_limits, _update_xscroll, _xscroll_changed, _zoom_out_from_box, _release,
