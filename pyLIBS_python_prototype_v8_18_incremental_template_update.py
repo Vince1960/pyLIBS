@@ -14653,17 +14653,27 @@ class MainWindow(tk.Tk):
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
     def open_spectrum(self):
-        fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
-        if not fn: return
-        remember_working_dir(self.options, fn)
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
+        if not fns: return
+        remember_working_dir(self.options, fns)
+        first_fn=fns[0]
         try:
-            sp=load_spectrum_for_open(fn,self.options)
+            sp=load_spectrum_for_open(first_fn,self.options)
             if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
             if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
             self.spectra=[sp]
         except Exception as e:
             messagebox.showerror("Open",str(e)); return
-        self.redraw(); self.status(f"Spettro caricato: {fn}")
+        for fn in fns[1:]:
+            try:
+                self.add_spectrum(load_spectrum_for_open(fn, self.options))
+            except Exception as e:
+                messagebox.showerror("Compare", f"{fn}: {e}")
+        self.redraw()
+        if len(fns) == 1:
+            self.status(f"Spettro caricato: {first_fn}")
+        else:
+            self.status(f"Spettro caricato: {first_fn}; confronti: {len(fns)-1}")
 
     def append_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
