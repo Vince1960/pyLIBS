@@ -12149,6 +12149,7 @@ class TemplateLine:
     ion: int = 0
     asswavelen: float = 0.0
     inte: float = 0.0
+    ei: float = 0.0
     wg: float = 0.0
     wl: float = 0.0
     ek: float = 0.0
@@ -12886,7 +12887,7 @@ class ResponseWindow(tk.Toplevel):
 
 
 class TemplateManager(tk.Toplevel):
-    columns = ("wavelen", "specie", "ion", "asswavelen", "inte", "ek", "aki", "gk", "gi", "acc", "wg", "wl", "fitwavelen")
+    columns = ("wavelen", "specie", "ion", "asswavelen", "inte", "ei", "ek", "aki", "gk", "gi", "acc", "wg", "wl", "fitwavelen")
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
@@ -12930,6 +12931,7 @@ class TemplateManager(tk.Toplevel):
                     wavelen=safe_float(r.get("wavelen")),
                     specie=r.get("specie",""), ion=safe_int(r.get("ion")),
                     asswavelen=safe_float(r.get("asswavelen")), inte=safe_float(r.get("inte")),
+                    ei=safe_float(r.get("ei") or r.get("Ei")),
                     ek=safe_float(r.get("ek") or r.get("Ek")), aki=safe_float(r.get("aki") or r.get("Aki")),
                     gk=safe_int(r.get("gk")), gi=safe_int(r.get("gi")),
                     acc=safe_int(r.get("acc")), wg=safe_float(r.get("wg")), wl=safe_float(r.get("wl")),
@@ -13044,6 +13046,10 @@ class LineIdentificationWindow(tk.Toplevel):
                 res=self.master_app.libs_db.search_lines(
                     wave, rg, table=self.db_table_var.get(), limit=1000
                 )
+                res=[
+                    self.master_app.libs_db.enrich_line_from_element_table(l, tolerance=max(0.02, rg))
+                    for l in res
+                ]
         except Exception:
             res=[]
         if not res:
@@ -14666,11 +14672,11 @@ class RetroTemplateManager(tk.Toplevel):
     """Template manager reconstructed from Unit6.
 
     Original fields:
-    wavelen, specie, asswavelen, inte, wg, wl, ek, aki, gk, gi, ion,
+    wavelen, specie, asswavelen, inte, ei, wg, wl, ek, aki, gk, gi, ion,
     fitwavelen, templint, Errorinte, acc.
     """
     columns = (
-        "wavelen", "specie", "asswavelen", "inte", "wg", "wl",
+        "wavelen", "specie", "asswavelen", "inte", "ei", "wg", "wl",
         "ek", "aki", "gk", "gi", "ion", "fitwavelen", "templint",
         "error_inte", "acc"
     )
@@ -15465,6 +15471,18 @@ class MainWindow(tk.Tk):
         else: self.trace_window.refresh()
         self.trace_window.lift()
 
+    def copy_atomic_line_to_template_line(self, template_line, atomic):
+        """Copy database transition fields into a template row."""
+        template_line.specie = atomic.specie
+        template_line.ion = atomic.ion
+        template_line.asswavelen = atomic.wavelen
+        template_line.ei = atomic.ei
+        template_line.ek = atomic.ek
+        template_line.acc = atomic.acc
+        template_line.aki = atomic.aki
+        template_line.gk = atomic.gk
+        template_line.gi = atomic.gi
+
     def assign_traced_lines(self):
         """Assign all currently traced database lines to already marked template
         peaks when |marked wavelength - traced wavelength| <= Options.Range.
@@ -15484,14 +15502,7 @@ class MainWindow(tk.Tk):
                 atomic = self.libs_db.enrich_line_from_element_table(atomic, tolerance=max(0.02, rg))
             except Exception:
                 pass
-            t.specie = atomic.specie
-            t.ion = atomic.ion
-            t.asswavelen = atomic.wavelen
-            t.ek = atomic.ek
-            t.acc = atomic.acc
-            t.aki = atomic.aki
-            t.gk = atomic.gk
-            t.gi = atomic.gi
+            self.copy_atomic_line_to_template_line(t, atomic)
             assigned += 1
         self.notify_template_changed(redraw=False)
         self.redraw(preserve_view=True)
@@ -15511,14 +15522,7 @@ class MainWindow(tk.Tk):
         target_wave = getattr(self, "current_identification_wavelength", atomic.wavelen)
         idx = min(range(len(self.template_lines)), key=lambda i: abs(self.template_lines[i].wavelen - target_wave))
         t = self.template_lines[idx]
-        t.specie = atomic.specie
-        t.ion = atomic.ion
-        t.asswavelen = atomic.wavelen
-        t.ek = atomic.ek
-        t.acc = atomic.acc
-        t.aki = atomic.aki
-        t.gk = atomic.gk
-        t.gi = atomic.gi
+        self.copy_atomic_line_to_template_line(t, atomic)
         self.notify_template_changed(redraw=False)
         if redraw:
             self.redraw(preserve_view=True)
@@ -15546,14 +15550,7 @@ class MainWindow(tk.Tk):
             enriched = self.libs_db.enrich_line_from_element_table(atomic, tolerance=tol)
             if not enriched:
                 return False
-            t.specie = enriched.specie or t.specie
-            t.ion = enriched.ion or t.ion
-            t.asswavelen = enriched.wavelen or t.asswavelen
-            t.ek = enriched.ek
-            t.aki = enriched.aki
-            t.gk = enriched.gk
-            t.gi = enriched.gi
-            t.acc = enriched.acc
+            self.copy_atomic_line_to_template_line(t, enriched)
             return True
         except Exception:
             return False
@@ -16073,7 +16070,7 @@ def _merge_template_line(self, new_line, tolerance=None, overwrite_fit=False):
                     setattr(old, attr, val)
             except Exception:
                 setattr(old, attr, val)
-    for attr in ("specie", "ion", "asswavelen", "ek", "aki", "gk", "gi", "acc", "wg", "wl", "fitwavelen", "error_inte"):
+    for attr in ("specie", "ion", "asswavelen", "ei", "ek", "aki", "gk", "gi", "acc", "wg", "wl", "fitwavelen", "error_inte"):
         val = getattr(new_line, attr, None)
         if attr in ("wg", "wl", "fitwavelen", "error_inte") and not overwrite_fit:
             continue
