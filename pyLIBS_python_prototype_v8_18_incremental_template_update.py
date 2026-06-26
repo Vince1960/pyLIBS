@@ -11884,6 +11884,52 @@ class Spectrum:
         return Spectrum(list(self.x), [v * factor for v in self.y], name=name)
 
 
+def _interp_spectrum_value(points: list[tuple[float, float]], wavelength: float) -> float:
+    if wavelength <= points[0][0]:
+        return points[0][1]
+    if wavelength >= points[-1][0]:
+        return points[-1][1]
+    for i in range(1, len(points)):
+        x1, y1 = points[i]
+        if wavelength <= x1:
+            x0, y0 = points[i - 1]
+            if x1 == x0:
+                return (y0 + y1) / 2.0
+            return y0 + (y1 - y0) * (wavelength - x0) / (x1 - x0)
+    return points[-1][1]
+
+
+def merge_spectra_by_wavelength(first: Spectrum, second: Spectrum, name: str = "Merged spectrum") -> Spectrum:
+    """Merge two spectra by wavelength, averaging intensities in the overlap."""
+    p1 = sorted(zip(first.x, first.y), key=lambda p: p[0])
+    p2 = sorted(zip(second.x, second.y), key=lambda p: p[0])
+    if not p1:
+        return Spectrum([x for x, _ in p2], [y for _, y in p2], name=name, filename=second.filename)
+    if not p2:
+        return Spectrum([x for x, _ in p1], [y for _, y in p1], name=name, filename=first.filename)
+
+    lo1, hi1 = p1[0][0], p1[-1][0]
+    lo2, hi2 = p2[0][0], p2[-1][0]
+    overlap_lo = max(lo1, lo2)
+    overlap_hi = min(hi1, hi2)
+
+    merged: list[tuple[float, float]] = []
+    if overlap_lo <= overlap_hi:
+        merged.extend((x, y) for x, y in p1 if x < overlap_lo or x > overlap_hi)
+        merged.extend((x, y) for x, y in p2 if x < overlap_lo or x > overlap_hi)
+        overlap_x = sorted({x for x, _ in p1 if overlap_lo <= x <= overlap_hi} |
+                           {x for x, _ in p2 if overlap_lo <= x <= overlap_hi})
+        for x in overlap_x:
+            y = (_interp_spectrum_value(p1, x) + _interp_spectrum_value(p2, x)) / 2.0
+            merged.append((x, y))
+    else:
+        merged.extend(p1)
+        merged.extend(p2)
+
+    merged.sort(key=lambda p: p[0])
+    return Spectrum([x for x, _ in merged], [y for _, y in merged], name=name)
+
+
 @dataclass
 class ResponseCurve:
     x: list[float] = field(default_factory=list)
@@ -14545,13 +14591,21 @@ class MainWindow(tk.Tk):
     def append_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
         remember_working_dir(self.options, fns)
+        if not fns:
+            return
+        merged = self.spectra[0] if self.spectra else None
         for fn in fns:
             try:
                 sp=Spectrum.from_ascii(fn,self.options.convert_to_angstrom)
                 if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
-                self.spectra.append(sp)
+                if merged is None:
+                    merged = sp
+                else:
+                    merged = merge_spectra_by_wavelength(merged, sp, name=f"{merged.name} + {sp.name}")
             except Exception as e:
                 messagebox.showerror("Append",f"{fn}: {e}")
+        if merged is not None:
+            self.spectra = [merged]
         self.redraw()
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
