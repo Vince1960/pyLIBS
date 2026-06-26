@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 import sqlite3
 import struct
 from collections import defaultdict
@@ -13132,34 +13133,68 @@ class AutoElementIdentificationWindow(tk.Toplevel):
 
 
 class BatchStatisticsWindow(tk.Toplevel):
-    """Unit36/35 parziale: lista file, media, deviazione standard, intensità totale."""
+    """Historical Batch Operations window."""
 
     def __init__(self, master):
         super().__init__(master)
         self.master_app=master
-        self.title("Batch / Statistics - Unit35/36")
-        self.geometry("760x460")
+        self.title("Batch Operations")
+        self.geometry("760x500")
+        menu = tk.Menu(self)
+        file_menu = tk.Menu(menu, tearoff=0)
+        file_menu.add_command(label="Load List", command=self.load_list)
+        file_menu.add_command(label="Save List", command=self.save_list)
+        file_menu.add_separator()
+        file_menu.add_command(label="Close", command=self.destroy)
+        menu.add_cascade(label="File", menu=file_menu)
+        self.config(menu=menu)
+
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top,text="Add files",command=self.add_files).pack(side="left")
-        ttk.Button(top,text="Load .fls",command=self.load_fls).pack(side="left", padx=3)
-        ttk.Button(top,text="Save .fls",command=self.save_fls).pack(side="left", padx=3)
-        ttk.Button(top,text="Clear",command=lambda:self.listbox.delete(0,"end")).pack(side="left", padx=3)
-        ttk.Button(top,text="Average + StdDev",command=self.average_std).pack(side="left", padx=10)
-        ttk.Button(top,text="Total intensity report",command=self.total_intensity).pack(side="left", padx=3)
+        ttk.Button(top,text="Add Files",command=self.add_files).pack(side="left")
+        opts = ttk.LabelFrame(top, text="Add Files Options")
+        opts.pack(side="left", padx=8)
+        self.add_mode = tk.StringVar(value="all")
+        ttk.Radiobutton(opts, text="Load all", variable=self.add_mode, value="all").pack(side="left", padx=3)
+        ttk.Radiobutton(opts, text="Load odd only", variable=self.add_mode, value="odd").pack(side="left", padx=3)
+        ttk.Radiobutton(opts, text="Load even only", variable=self.add_mode, value="even").pack(side="left", padx=3)
+        ttk.Button(top,text="Join",command=self.join_pairs).pack(side="left", padx=3)
+        ttk.Button(top,text="Average",command=self.average_files).pack(side="left", padx=3)
+        self.calculate_sd = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="Calculate SD", variable=self.calculate_sd).pack(side="left", padx=3)
+
+        bottom=ttk.Frame(self); bottom.pack(fill="x", padx=6, pady=3)
+        ttk.Button(bottom,text="Load List",command=self.load_list).pack(side="left", padx=3)
+        ttk.Button(bottom,text="Clear List",command=self.clear_list).pack(side="left", padx=3)
+        ttk.Button(bottom,text="Save List",command=self.save_list).pack(side="left", padx=3)
+        ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
         self.listbox=tk.Listbox(self)
         self.listbox.pack(fill="both", expand=True, padx=6, pady=6)
 
+    def _last_numeric_index(self, filename):
+        nums = re.findall(r"\d+", Path(filename).stem)
+        return int(nums[-1]) if nums else None
+
+    def _include_file(self, filename):
+        mode = self.add_mode.get()
+        if mode == "all":
+            return True
+        idx = self._last_numeric_index(filename)
+        if idx is None:
+            return False
+        return (idx % 2 == 1) if mode == "odd" else (idx % 2 == 0)
+
     def add_files(self):
-        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("Spectra", "*.txt *.dat *.asc *.csv *.trt *.roh"), ("All","*.*")])
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("Spectra", "*.roh *.ROH *.trt *.TRT *.txt *.dat *.asc *.csv"), ("Avantes ROH", "*.roh *.ROH"), ("ASCII", "*.txt *.dat *.asc *.csv"), ("All","*.*")])
         remember_working_dir(self.master_app.options, fns)
         for fn in fns:
-            self.listbox.insert("end", fn)
+            if self._include_file(fn):
+                self.listbox.insert("end", fn)
 
     def paths(self):
         return [self.listbox.get(i) for i in range(self.listbox.size())]
 
-    def load_fls(self):
-        fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("File list", "*.fls"), ("All","*.*")])
+    def load_list(self):
+        fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("File list", "*.lst"), ("Legacy file list", "*.fls"), ("All","*.*")])
         if not fn: return
         remember_working_dir(self.master_app.options, fn)
         self.listbox.delete(0,"end")
@@ -13167,38 +13202,103 @@ class BatchStatisticsWindow(tk.Toplevel):
             if line.strip():
                 self.listbox.insert("end", line.strip())
 
-    def save_fls(self):
-        fn=filedialog.asksaveasfilename(initialdir=remembered_initial_dir(self.master_app.options), defaultextension=".fls", filetypes=[("File list","*.fls")])
+    def save_list(self):
+        fn=filedialog.asksaveasfilename(initialdir=remembered_initial_dir(self.master_app.options), defaultextension=".lst", filetypes=[("File list","*.lst"), ("All","*.*")])
         if not fn: return
-        Path(fn).write_text("\\n".join(self.paths()), encoding="utf-8")
+        remember_working_dir(self.master_app.options, fn)
+        Path(fn).write_text("\n".join(self.paths()) + ("\n" if self.paths() else ""), encoding="utf-8")
 
-    def average_std(self):
-        specs=[]
-        for fn in self.paths():
-            try:
-                specs.append(Spectrum.from_ascii(fn, self.master_app.options.convert_to_angstrom))
-            except Exception as e:
-                messagebox.showerror("Batch", f"{fn}: {e}")
-                return
-        if not specs:
+    def clear_list(self):
+        self.listbox.delete(0,"end")
+
+    def _load_spectrum(self, filename):
+        return load_spectrum_for_open(filename, self.master_app.options)
+
+    def join_pairs(self):
+        files = self.paths()
+        if len(files) < 2:
+            self.master_app.status("Batch Join: select at least two files")
             return
-        n=min(len(s.y) for s in specs)
-        x=specs[0].x[:n]
-        rows=[s.y[:n] for s in specs]
+        saved = []
+        errors = []
+        skipped = files[-1] if len(files) % 2 else None
+        for i in range(0, len(files) - 1, 2):
+            f1, f2 = files[i], files[i + 1]
+            try:
+                sp1 = self._load_spectrum(f1)
+                sp2 = self._load_spectrum(f2)
+                merged = merge_spectra_by_wavelength(sp1, sp2, name=f"{Path(f1).stem} joined")
+                out = str(Path(f1).with_suffix(".jnd"))
+                merged.save_ascii(out)
+                saved.append(out)
+            except Exception as e:
+                errors.append(f"{Path(f1).name} + {Path(f2).name}: {e}")
+        msg = f"Batch Join: saved {len(saved)} .jnd file(s)"
+        if skipped:
+            msg += f"; skipped odd last file {Path(skipped).name}"
+        self.master_app.status(msg)
+        if errors:
+            messagebox.showwarning("Batch Join", "\n".join(errors[:10]))
+
+    def _common_grid_values(self, specs):
+        base = sorted(zip(specs[0].x, specs[0].y), key=lambda p: p[0])
+        grid = [x for x, _ in base]
+        rows = []
+        for sp in specs:
+            pts = sorted(zip(sp.x, sp.y), key=lambda p: p[0])
+            if len(pts) == len(base) and all(abs(a[0] - b[0]) < 1e-9 for a, b in zip(pts, base)):
+                rows.append([y for _, y in pts])
+            else:
+                rows.append([_interp_spectrum_value(pts, x) for x in grid])
+        return grid, rows
+
+    def average_files(self):
+        files = self.paths()
+        specs=[]
+        loaded_files=[]
+        errors=[]
+        for fn in files:
+            try:
+                specs.append(self._load_spectrum(fn))
+                loaded_files.append(fn)
+            except Exception as e:
+                errors.append(f"{Path(fn).name}: {e}")
+        if not specs:
+            if errors:
+                messagebox.showerror("Batch Average", "\n".join(errors[:10]))
+            return
+        x, rows = self._common_grid_values(specs)
         avg=[sum(vals)/len(vals) for vals in zip(*rows)]
+        out_avg = str(Path(loaded_files[0]).with_suffix(".avg"))
+        Spectrum(list(x), avg, name="Batch average").save_ascii(out_avg)
+        outputs = [out_avg]
         if len(rows)>1:
             std=[math.sqrt(sum((v-a)**2 for v in vals)/len(rows)) for vals,a in zip(zip(*rows),avg)]
         else:
-            std=[0.0]*n
-        self.master_app.add_spectrum(Spectrum(list(x), avg, name="Batch average"))
-        self.master_app.add_spectrum(Spectrum(list(x), std, name="Batch stddev"))
-        self.master_app.status(f"Batch average/stddev: {len(specs)} file")
+            std=[0.0]*len(x)
+        if self.calculate_sd.get():
+            out_sd = str(Path(loaded_files[0]).with_suffix(".sd"))
+            Spectrum(list(x), std, name="Batch SD").save_ascii(out_sd)
+            outputs.append(out_sd)
+        self.master_app.status(f"Batch Average: saved {', '.join(Path(o).name for o in outputs)} from {len(specs)} file(s)")
+        if errors:
+            messagebox.showwarning("Batch Average", "\n".join(errors[:10]))
+
+    def load_fls(self):
+        self.load_list()
+
+    def save_fls(self):
+        self.save_list()
+
+    def average_std(self):
+        self.calculate_sd.set(True)
+        self.average_files()
 
     def total_intensity(self):
         rows=[]
         for fn in self.paths():
             try:
-                sp=Spectrum.from_ascii(fn, self.master_app.options.convert_to_angstrom)
+                sp=self._load_spectrum(fn)
                 rows.append((fn, sum(sp.y)))
             except Exception:
                 pass
