@@ -15456,7 +15456,7 @@ class MainWindow(tk.Tk):
                 old_xlim = self.ax.get_xlim(); old_ylim = self.ax.get_ylim()
             except Exception:
                 old_xlim = old_ylim = None
-        self.ax.clear(); self.ax.set_xlabel("Wavelength"); self.ax.set_ylabel("Intensity")
+        self.ax.clear(); self.ax.set_xlabel("Wavelength (Å)"); self.ax.set_ylabel("Intensity (counts)")
         self.ax.set_facecolor(getattr(self, "plot_background", "white"))
         try:
             self.ax.set_xscale("log" if getattr(self, "view_log_x", False) else "linear", nonpositive="clip")
