@@ -34,6 +34,7 @@ from __future__ import annotations
 import csv
 from bisect import bisect_right
 from datetime import datetime
+import html
 import math
 import os
 import re
@@ -14422,6 +14423,21 @@ class NeHalphaWindow(tk.Toplevel):
                 "Ne calculation failed:",
                 ne_error,
             ])
+            self.master_app.last_halpha_result = {
+                "available": False,
+                "center": primary_center,
+                "lorentzian_width": primary_width,
+                "corrected_lorentzian_width": corrected_lorentz,
+                "gaussian_width": None,
+                "intensity": fitted[0][0] if fitted else None,
+                "integral": None,
+                "kt": kt,
+                "temperature_k": T,
+                "ne": None,
+                "alpha": alfa,
+                "formula": "LIBS++ H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
+                "error": ne_error,
+            }
             status = "H-alpha fit complete; Ne calculation failed"
         else:
             lines.extend([
@@ -14430,6 +14446,22 @@ class NeHalphaWindow(tk.Toplevel):
                 f"Ne / 1e17: {ne_value / 1.0e17:.6g}",
             ])
             self.master_app.session_ne = ne_value
+            self.master_app.session_ne_source = "H-alpha"
+            self.master_app.last_halpha_result = {
+                "available": True,
+                "center": primary_center,
+                "lorentzian_width": primary_width,
+                "corrected_lorentzian_width": corrected_lorentz,
+                "gaussian_width": None,
+                "intensity": fitted[0][0] if fitted else None,
+                "integral": None,
+                "kt": kt,
+                "temperature_k": T,
+                "ne": ne_value,
+                "alpha": alfa,
+                "formula": "LIBS++ H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
+                "error": None,
+            }
             status = f"H-alpha fit complete; Ne={ne_value:.3e} cm^-3"
         self.out.insert("end", "\n".join(lines) + "\n")
         self.master_app.status(status)
@@ -14634,8 +14666,12 @@ class SahaBoltzmannWindow(tk.Toplevel):
         if not self.saha_fits:
             return
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
+        selected_element = None
+        representative_mode = "mean temperature"
         if self.mode_var.get() == "Single element temperature":
             element = self.selected_element()
+            selected_element = element
+            representative_mode = "selected element"
             result = self.saha_fits.get(element) if element else None
             if result:
                 representative_kt = result["kt"]
@@ -14666,6 +14702,28 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 )
         if representative_kt and representative_kt > 0.0:
             self.master_app.session_temperature = representative_kt
+            self.master_app.session_temperature_source = (
+                "selected element" if representative_mode == "selected element" else "Saha-Boltzmann mean"
+            )
+        low, high = self._temperature_range()
+        self.master_app.last_saha_boltzmann = {
+            "elements": [
+                {
+                    "element": element,
+                    "temperature": result.get("kt"),
+                    "nlines": result.get("nlines"),
+                    "included": element in self.included_elements,
+                }
+                for element, result in sorted(self.saha_fits.items())
+            ],
+            "temperature_range": (low, high),
+            "mean_temperature": self._mean_temperature(),
+            "representative_temperature": representative_kt,
+            "representative_mode": representative_mode,
+            "selected_element": selected_element,
+            "electron_density": self.current_ne,
+            "skipped_lines": self.skipped_lines,
+        }
         self._draw_plot(self.saha_groups, self.saha_fits, representative_kt)
 
     def _electron_density(self):
@@ -14682,6 +14740,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         if ne is None:
             return None
         self.master_app.session_ne = ne
+        self.master_app.session_ne_source = "user input"
         return ne
 
     def _clear_plot(self):
@@ -15342,6 +15401,8 @@ class CFLibsWindow(tk.Toplevel):
         self.last_kt = safe_float(self.kt_var.get(), 1.0) or 1.0
         self.last_ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
         self.last_response_used = False
+        self.last_temperature_source = "default"
+        self.last_ne_source = "default"
         cols=("element", "ionized / neutral", "numerical concentration", "mass concentration")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -15376,8 +15437,12 @@ class CFLibsWindow(tk.Toplevel):
         self.last_kt = kt
         self.last_ne = ne
         self.last_response_used = _apply_after_response_enabled(self.master_app)
+        self.last_temperature_source = self._temperature_source(kt)
+        self.last_ne_source = self._ne_source(ne)
         self.master_app.session_temperature = kt
         self.master_app.session_ne = ne
+        self.master_app.session_temperature_source = self.last_temperature_source
+        self.master_app.session_ne_source = self.last_ne_source
         for r in rows:
             self.tree.insert("", "end", values=(
                 r["element"],
@@ -15398,42 +15463,361 @@ class CFLibsWindow(tk.Toplevel):
         fn = filedialog.asksaveasfilename(
             title="Save CF-LIBS Report",
             initialdir=remembered_initial_dir(self.master_app.options),
-            defaultextension=".txt",
-            filetypes=[("Text report", "*.txt"), ("CSV", "*.csv"), ("All", "*.*")]
+            defaultextension=".html",
+            filetypes=[("HTML report", "*.html"), ("Text report", "*.txt"), ("All", "*.*")]
         )
         if not fn:
             return
         remember_working_dir(self.master_app.options, fn)
-        response_file = str(getattr(self.master_app.options, "response_file", "") or "")
-        response_used = self.last_response_used
-        lines = [
-            "CF-LIBS Results",
-            f"Date/time: {datetime.now().isoformat(timespec='seconds')}",
-            f"Temperature used (eV): {self.last_kt:.8g}",
-            f"Electron density used (e/cm3): {self.last_ne:.8g}",
-            f"Apply After correction used: {'Yes' if response_used else 'No'}",
-            f"Response file: {response_file if response_used and response_file else 'N/A'}",
-            f"Skipped/incomplete lines: {self.last_skipped}",
-            "",
-            "Element\tIonized / Neutral ratio\tNumerical concentration\tMass concentration",
-        ]
-        for r in rows:
-            lines.append(
-                f"{r['element']}\t{r['ionized_neutral_ratio']:.8g}\t"
-                f"{r['conc']:.8g}\t{r['mass_rel']:.8g}"
-            )
-        lines.extend([
-            "",
-            "Notes:",
-            "Atomic masses are read from LIBS.db table Elementi, field m_atomica.",
-            "Incomplete template lines are skipped before concentration calculation.",
-        ])
+        report_path = Path(fn)
+        image_path = report_path.with_name(f"{report_path.stem}_spectrum.png")
+        image_info = self._export_spectrum_png(image_path)
+        if report_path.suffix.lower() == ".txt":
+            content = self.build_cflibs_report_text(rows, image_info)
+        else:
+            content = self.build_cflibs_report_html(rows, image_info, report_path)
         try:
-            Path(fn).write_text("\n".join(lines) + "\n", encoding="utf-8")
+            report_path.write_text(content, encoding="utf-8")
         except Exception as e:
             _showerror(self, "CF-LIBS", f"Could not save report:\n{e}")
             return
         self.master_app.status(f"CF-LIBS report saved: {fn}")
+
+    def _fmt(self, value):
+        if value is None or value == "":
+            return "N/A"
+        try:
+            number = float(value)
+        except Exception:
+            return str(value)
+        if not math.isfinite(number):
+            return str(value)
+        return f"{number:.8g}"
+
+    def _fmt3(self, value):
+        text = format_template_display_value(value)
+        return text if text != "" else "N/A"
+
+    def _temperature_source(self, kt):
+        source = getattr(self.master_app, "session_temperature_source", None)
+        session_kt = safe_float(getattr(self.master_app, "session_temperature", 0.0), 0.0)
+        if source and session_kt and abs(session_kt - kt) <= max(abs(kt) * 1e-6, 1e-9):
+            return source
+        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
+        rep = safe_float(saha.get("representative_temperature", 0.0), 0.0)
+        if rep and abs(rep - kt) <= max(abs(kt) * 1e-6, 1e-9):
+            mode = saha.get("representative_mode", "")
+            return "selected element" if mode == "selected element" else "Saha-Boltzmann mean"
+        if abs(kt - 1.0) <= 1e-9:
+            return "default"
+        return "manually entered"
+
+    def _ne_source(self, ne):
+        source = getattr(self.master_app, "session_ne_source", None)
+        session_ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
+        if source and session_ne and abs(session_ne - ne) <= max(abs(ne) * 1e-6, 1e-6):
+            return source
+        halpha = getattr(self.master_app, "last_halpha_result", None) or {}
+        h_ne = safe_float(halpha.get("ne", 0.0), 0.0)
+        if h_ne and abs(h_ne - ne) <= max(abs(ne) * 1e-6, 1e-6):
+            return "H-alpha"
+        if abs(ne - 1.0e17) <= 1.0:
+            return "default"
+        return "user input"
+
+    def _export_spectrum_png(self, image_path: Path):
+        try:
+            if not getattr(self.master_app, "fig", None):
+                return {"path": None, "error": "Main spectrum plot is not available."}
+            self.master_app.fig.savefig(str(image_path), dpi=150)
+            return {"path": image_path, "error": None}
+        except Exception as e:
+            return {"path": None, "error": str(e)}
+
+    def _finite_values(self, values):
+        out = []
+        for value in values or []:
+            try:
+                number = float(value)
+            except Exception:
+                continue
+            if math.isfinite(number):
+                out.append(number)
+        return out
+
+    def _spectrum_info(self):
+        spectra = getattr(self.master_app, "spectra", []) or []
+        sp = spectra[0] if spectra else None
+        if not sp:
+            return {
+                "Spectrum file name": "N/A",
+                "Full file path": "N/A",
+                "Spectrum format / extension": "N/A",
+                "Number of spectrum points": "0",
+                "Wavelength range": "N/A",
+                "Intensity range": "N/A",
+            }
+        filename = getattr(sp, "filename", "") or ""
+        path = Path(filename) if filename else None
+        xs = self._finite_values(getattr(sp, "x", []))
+        ys = self._finite_values(getattr(sp, "y", []))
+        return {
+            "Spectrum file name": path.name if path else getattr(sp, "name", "Spectrum"),
+            "Full file path": str(path) if path else "N/A",
+            "Spectrum format / extension": path.suffix if path and path.suffix else "N/A",
+            "Number of spectrum points": str(len(getattr(sp, "x", []) or [])),
+            "Wavelength range": f"{self._fmt(min(xs))} - {self._fmt(max(xs))}" if xs else "N/A",
+            "Intensity range": f"{self._fmt(min(ys))} - {self._fmt(max(ys))}" if ys else "N/A",
+        }
+
+    def _response_info(self):
+        opts = self.master_app.options
+        apply_response = bool(getattr(opts, "apply_response", False))
+        apply_before = bool(getattr(opts, "apply_before", False))
+        apply_after = bool(getattr(opts, "apply_after", False))
+        already_corrected = _fit_values_already_response_corrected(self.master_app)
+        if not apply_response:
+            mode = "None"
+        elif apply_before:
+            mode = "Apply Before"
+        elif apply_after:
+            mode = "Apply After"
+        else:
+            mode = "None"
+        if already_corrected:
+            cf_state = "Already corrected before fitting"
+        elif self.last_response_used:
+            cf_state = "Corrected during CF-LIBS analysis"
+        else:
+            cf_state = "Uncorrected"
+        return {
+            "Response normalization used": "Yes" if already_corrected or self.last_response_used else "No",
+            "Normalization mode": mode,
+            "Response file": str(getattr(opts, "response_file", "") or "N/A"),
+            "Correction convention": "divide by response",
+            "CF-LIBS intensity correction state": cf_state,
+        }
+
+    def _template_rows(self):
+        rows = []
+        for idx, line in enumerate(getattr(self.master_app, "template_lines", []) or [], start=1):
+            rows.append([
+                idx,
+                self._fmt3(getattr(line, "wavelen", "")),
+                f"{getattr(line, 'specie', '')} {_roman_ion(getattr(line, 'ion', 0)) if getattr(line, 'ion', 0) else ''}".strip() or "N/A",
+                self._fmt3(getattr(line, "fitwavelen", "")),
+                self._fmt3(_template_line_intensity(line)),
+                self._fmt3(getattr(line, "wl", "")),
+                self._fmt3(getattr(line, "wg", "")),
+                self._fmt3(getattr(line, "inte", "")),
+                self._fmt3(getattr(line, "aki", "")),
+                self._fmt3(getattr(line, "gk", "")),
+                self._fmt3(getattr(line, "ek", "")),
+                self._fmt3(getattr(line, "ei", "")),
+                self._fmt3(getattr(line, "gi", "")),
+                self._fmt3(getattr(line, "asswavelen", "")),
+                self._fmt3(getattr(line, "templint", "")),
+                self._fmt3(getattr(line, "error_inte", "")),
+                self._fmt3(getattr(line, "acc", "")),
+            ])
+        return rows
+
+    def _saha_rows(self):
+        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
+        return [
+            [
+                item.get("element", "N/A"),
+                self._fmt(item.get("temperature")),
+                self._fmt(item.get("nlines")),
+                "Yes" if item.get("included") else "No",
+            ]
+            for item in saha.get("elements", []) or []
+        ]
+
+    def _plasma_parameter_rows(self):
+        return [
+            ["Temperature used", f"{self._fmt(self.last_kt)} eV"],
+            ["Temperature source", self.last_temperature_source],
+            ["Electron density used", f"{self._fmt(self.last_ne)} e/cm3"],
+            ["Electron density source", self.last_ne_source],
+        ]
+
+    def _result_rows(self, rows):
+        return [
+            [
+                r.get("element", ""),
+                self._fmt(r.get("ionized_neutral_ratio")),
+                self._fmt(r.get("conc")),
+                self._fmt(r.get("mass_rel")),
+            ]
+            for r in rows
+        ]
+
+    def _html_table(self, headers, rows):
+        head = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
+        body = []
+        if rows:
+            for row in rows:
+                body.append("<tr>" + "".join(f"<td>{html.escape(str(c))}</td>" for c in row) + "</tr>")
+        else:
+            body.append(f"<tr><td colspan=\"{len(headers)}\">Not available</td></tr>")
+        return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+
+    def _definition_table(self, mapping):
+        return self._html_table(["Field", "Value"], [[k, v] for k, v in mapping.items()])
+
+    def _halpha_section_html(self):
+        result = getattr(self.master_app, "last_halpha_result", None) or {}
+        if not result or not result.get("available"):
+            detail = result.get("error") if result else ""
+            return "<p>Not available" + (f": {html.escape(str(detail))}" if detail else "") + ".</p>"
+        rows = [
+            ["H-alpha fitted center", self._fmt(result.get("center"))],
+            ["H-alpha Lorentzian/Stark width", self._fmt(result.get("corrected_lorentzian_width"))],
+            ["H-alpha measured Lorentzian width", self._fmt(result.get("lorentzian_width"))],
+            ["H-alpha Gaussian width", self._fmt(result.get("gaussian_width"))],
+            ["H-alpha intensity", self._fmt(result.get("intensity"))],
+            ["H-alpha integral", self._fmt(result.get("integral"))],
+            ["Electron density from H-alpha", f"{self._fmt(result.get('ne'))} e/cm3"],
+            ["Formula/source", result.get("formula", "N/A")],
+        ]
+        return self._html_table(["Field", "Value"], rows)
+
+    def _saha_section_html(self):
+        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
+        low, high = saha.get("temperature_range", ("N/A", "N/A"))
+        rows = [
+            ["Allowed temperature range", f"{self._fmt(low)} - {self._fmt(high)} eV"],
+            ["Mean temperature", f"{self._fmt(saha.get('mean_temperature'))} eV"],
+            ["Selected representative temperature mode", saha.get("representative_mode", "default value")],
+            ["Selected element", saha.get("selected_element") or "N/A"],
+            ["Representative temperature used for CF-LIBS", f"{self._fmt(self.last_kt)} eV"],
+        ]
+        return self._html_table(["Field", "Value"], rows) + self._html_table(
+            ["Element", "Temperature (eV)", "Valid lines", "Included in mean"],
+            self._saha_rows(),
+        )
+
+    def build_cflibs_report_html(self, rows, image_info, report_path: Path):
+        spectrum_info = self._spectrum_info()
+        response_info = self._response_info()
+        image_path = image_info.get("path")
+        image_block = "<p>Spectrum image export failed: " + html.escape(str(image_info.get("error"))) + "</p>"
+        if image_path:
+            try:
+                rel = os.path.relpath(str(image_path), str(report_path.parent))
+            except Exception:
+                rel = str(image_path)
+            image_block = (
+                f"<p>PNG file: {html.escape(str(image_path))}</p>"
+                f"<img src=\"{html.escape(rel)}\" alt=\"Current spectrum plot\">"
+            )
+        template_note = "pyLIBS stores the fitted line integral in the template intensity field used for CF-LIBS."
+        style = """
+body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
+h1 { margin-bottom: 0.2em; }
+h2 { margin-top: 1.5em; border-bottom: 1px solid #bbb; padding-bottom: 0.2em; }
+table { border-collapse: collapse; width: 100%; margin: 0.7em 0 1.2em; font-size: 13px; }
+th, td { border: 1px solid #bbb; padding: 4px 6px; text-align: left; }
+th { background: #efefef; }
+img { max-width: 100%; border: 1px solid #bbb; }
+.muted { color: #555; }
+"""
+        return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CF-LIBS Analysis Report</title>
+<style>{style}</style>
+</head>
+<body>
+<h1>CF-LIBS Analysis Report</h1>
+<p>pyLIBS version: {html.escape(APP_VERSION)}<br>
+Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
+
+<h2>Spectrum information</h2>
+{self._definition_table(spectrum_info)}
+
+<h2>Spectrum image</h2>
+{image_block}
+
+<h2>Instrument-response normalization</h2>
+{self._definition_table(response_info)}
+
+<h2>Template contents</h2>
+<p class="muted">{html.escape(template_note)}</p>
+{self._html_table(
+    ["#", "Wavelength", "Identification / species", "Fitted center", "Fitted intensity",
+     "Lorentzian width", "Gaussian width", "Integral", "Aki", "gki", "Ek", "Ei",
+     "gi", "Assigned wavelength", "Template intensity", "Intensity error", "Accuracy"],
+    self._template_rows(),
+)}
+
+<h2>Hydrogen Stark broadening</h2>
+{self._halpha_section_html()}
+
+<h2>Saha-Boltzmann temperatures</h2>
+{self._saha_section_html()}
+
+<h2>Plasma parameters used for CF-LIBS</h2>
+{self._html_table(["Parameter", "Value"], self._plasma_parameter_rows())}
+
+<h2>CF-LIBS results</h2>
+<p>Skipped/incomplete template lines: {html.escape(str(self.last_skipped))}</p>
+{self._html_table(["Element", "Ionized / Neutral ratio", "Number %", "Mass %"], self._result_rows(rows))}
+<p class="muted">Atomic masses are read from LIBS.db table Elementi, field m_atomica. Incomplete template lines are skipped before concentration calculation.</p>
+</body>
+</html>
+"""
+
+    def build_cflibs_report_text(self, rows, image_info):
+        data = [
+            "CF-LIBS Analysis Report",
+            f"pyLIBS version: {APP_VERSION}",
+            f"Date/time: {datetime.now().isoformat(timespec='seconds')}",
+            "",
+            "Spectrum information",
+        ]
+        for key, value in self._spectrum_info().items():
+            data.append(f"{key}: {value}")
+        data.extend(["", "Spectrum image"])
+        if image_info.get("path"):
+            data.append(f"PNG file: {image_info['path']}")
+        else:
+            data.append(f"PNG export failed: {image_info.get('error')}")
+        data.extend(["", "Instrument-response normalization"])
+        for key, value in self._response_info().items():
+            data.append(f"{key}: {value}")
+        data.extend(["", "Template contents"])
+        data.append("Index\tWavelength\tSpecies\tFitted center\tFitted intensity\tLorentzian width\tGaussian width\tIntegral\tAki\tgki\tEk\tEi\tgi\tAssigned wavelength\tTemplate intensity\tIntensity error\tAccuracy")
+        for row in self._template_rows():
+            data.append("\t".join(str(v) for v in row))
+        data.extend(["", "Hydrogen Stark broadening"])
+        halpha = getattr(self.master_app, "last_halpha_result", None) or {}
+        if halpha and halpha.get("available"):
+            for key in ("center", "corrected_lorentzian_width", "lorentzian_width", "gaussian_width", "intensity", "integral", "ne", "formula"):
+                data.append(f"{key}: {self._fmt(halpha.get(key))}")
+        else:
+            data.append("Not available")
+        data.extend(["", "Saha-Boltzmann temperatures"])
+        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
+        low, high = saha.get("temperature_range", ("N/A", "N/A"))
+        data.append(f"Allowed temperature range: {self._fmt(low)} - {self._fmt(high)} eV")
+        data.append(f"Mean temperature: {self._fmt(saha.get('mean_temperature'))} eV")
+        data.append(f"Selected representative temperature mode: {saha.get('representative_mode', 'default value')}")
+        data.append(f"Representative temperature used for CF-LIBS: {self._fmt(self.last_kt)} eV")
+        data.append("Element\tTemperature (eV)\tValid lines\tIncluded in mean")
+        for row in self._saha_rows():
+            data.append("\t".join(str(v) for v in row))
+        data.extend(["", "Plasma parameters used for CF-LIBS"])
+        for row in self._plasma_parameter_rows():
+            data.append(f"{row[0]}: {row[1]}")
+        data.extend(["", "CF-LIBS results"])
+        data.append(f"Skipped/incomplete template lines: {self.last_skipped}")
+        data.append("Element\tIonized / Neutral ratio\tNumber %\tMass %")
+        for row in self._result_rows(rows):
+            data.append("\t".join(str(v) for v in row))
+        return "\n".join(data) + "\n"
 
     def _draw_boltzmann(self, groups, fits, kt):
         if self.ax is None:
@@ -16412,9 +16796,13 @@ class MainWindow(tk.Tk):
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
         self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
+        self.last_halpha_result: Optional[dict] = None
+        self.last_saha_boltzmann: Optional[dict] = None
         self.standard_refs: dict[str, str] = {}
         self.session_ne: Optional[float] = None
+        self.session_ne_source: Optional[str] = None
         self.session_temperature: Optional[float] = None
+        self.session_temperature_source: Optional[str] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
         self.shift_capture_window=None
