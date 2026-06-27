@@ -14441,18 +14441,40 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.master_app = master
         self.title("Saha-Boltzmann")
         self.geometry("1050x720")
+        self.saha_groups = {}
+        self.saha_fits = {}
+        self.included_elements = set()
+        self.skipped_lines = 0
+        self.current_ne = None
+        self.representative_kt = None
+        self.last_valid_mean_kt = None
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute Plot", command=self.compute).pack(side="left")
+        ttk.Label(top, text="Temperature mode").pack(side="left", padx=(12, 3))
+        self.mode_var = tk.StringVar(value="Mean temperature")
+        self.mode_box = ttk.Combobox(
+            top,
+            textvariable=self.mode_var,
+            values=("Mean temperature", "Single element temperature"),
+            state="readonly",
+            width=27,
+        )
+        self.mode_box.pack(side="left")
+        self.mode_box.bind("<<ComboboxSelected>>", self.on_mode_changed)
         ttk.Label(top, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
         self.initial_kt_var = tk.StringVar(value="1")
         ttk.Entry(top, textvariable=self.initial_kt_var, width=8).pack(side="left")
         self.summary_var = tk.StringVar(value="Ready")
         ttk.Label(top, textvariable=self.summary_var).pack(side="left", padx=12)
-        cols=("element", "lines", "kT eV", "q", "Z I", "Z II")
+        cols=("use", "element", "lines", "kT eV", "q", "Z I", "Z II")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=115, anchor="center")
+        self.tree.column("use", width=95, anchor="center")
         self.tree.pack(fill="x", padx=6, pady=5)
+        self.tree.bind("<Double-1>", self.toggle_selected_element)
+        self.tree.bind("<space>", self.toggle_selected_element)
+        self.tree.bind("<<TreeviewSelect>>", self.on_selection_changed)
         if Figure is None or FigureCanvasTkAgg is None:
             ttk.Label(self, text="matplotlib not available").pack(fill="both", expand=True, padx=10, pady=10)
             self.fig = self.ax = self.canvas = None
@@ -14492,8 +14514,21 @@ class SahaBoltzmannWindow(tk.Toplevel):
             _showinfo(self, "Saha-Boltzmann", f"No valid plot points. Skipped {skipped} incomplete template line(s).")
             self._clear_plot()
             return
-        for element, result in sorted(fits.items()):
-            self.tree.insert("", "end", values=(
+        self.saha_groups = groups
+        self.saha_fits = fits
+        self.skipped_lines = skipped
+        self.current_ne = ne
+        self.included_elements = set(fits.keys())
+        self.representative_kt = self._mean_temperature()
+        self.last_valid_mean_kt = self.representative_kt
+        self.populate_tree()
+        self.refresh_temperature_display()
+
+    def populate_tree(self):
+        self.tree.delete(*self.tree.get_children())
+        for element, result in sorted(self.saha_fits.items()):
+            self.tree.insert("", "end", iid=element, values=(
+                "Yes" if element in self.included_elements else "No",
                 element,
                 result["nlines"],
                 f"{result['kt']:.4g}",
@@ -14501,10 +14536,90 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 f"{result['z1']:.4g}",
                 f"{result['z2']:.4g}",
             ))
-        self._draw_plot(groups, fits)
+
+    def _mean_temperature(self):
+        total = 0.0
+        weight = 0.0
+        for element in self.included_elements:
+            result = self.saha_fits.get(element)
+            if not result:
+                continue
+            nlines = max(1, safe_int(result.get("nlines", 0), 0))
+            kt = safe_float(result.get("kt", 0.0), 0.0)
+            if kt > 0.0:
+                total += kt * nlines
+                weight += nlines
+        return total / weight if weight else None
+
+    def selected_element(self):
+        selected = self.tree.selection()
+        if selected:
+            return selected[0]
+        return next(iter(sorted(self.saha_fits)), None)
+
+    def toggle_selected_element(self, event=None):
+        if self.mode_var.get() != "Mean temperature":
+            self.master_app.status("Saha-Boltzmann: element exclusion is used only in Mean temperature mode.")
+            return "break"
+        element = self.selected_element()
+        if not element:
+            return "break"
+        if element in self.included_elements:
+            self.included_elements.remove(element)
+        else:
+            self.included_elements.add(element)
+        self.populate_tree()
+        self.tree.selection_set(element)
+        mean_kt = self._mean_temperature()
+        if mean_kt is None:
+            self.representative_kt = self.last_valid_mean_kt
+            self.summary_var.set("All elements excluded; mean temperature unchanged")
+            _showwarning(self, "Saha-Boltzmann", "All elements are excluded from the mean temperature.")
+            self.master_app.status("Saha-Boltzmann: all elements excluded; mean temperature unchanged.")
+        else:
+            self.representative_kt = mean_kt
+            self.last_valid_mean_kt = mean_kt
+        self.refresh_temperature_display()
+        return "break"
+
+    def on_mode_changed(self, event=None):
+        self.refresh_temperature_display()
+
+    def on_selection_changed(self, event=None):
+        if self.mode_var.get() == "Single element temperature":
+            self.refresh_temperature_display()
+
+    def refresh_temperature_display(self):
+        if not self.saha_fits:
+            return
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
-        self.summary_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, skipped {skipped}; {response_text}")
-        self.master_app.status(f"Saha-Boltzmann: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, skipped {skipped}")
+        if self.mode_var.get() == "Single element temperature":
+            element = self.selected_element()
+            result = self.saha_fits.get(element) if element else None
+            if result:
+                representative_kt = result["kt"]
+                self.summary_var.set(
+                    f"{element} kT={representative_kt:.4g} eV, Ne={self.current_ne:.3e} e/cm3, skipped {self.skipped_lines}; {response_text}"
+                )
+                self.master_app.status(f"Saha-Boltzmann: {element} kT={representative_kt:.4g} eV")
+            else:
+                representative_kt = None
+                self.summary_var.set("Select an element for single-element temperature")
+        else:
+            representative_kt = self.representative_kt
+            included = len(self.included_elements)
+            total = len(self.saha_fits)
+            if representative_kt is None:
+                self.summary_var.set(f"No included elements; Ne={self.current_ne:.3e} e/cm3, skipped {self.skipped_lines}")
+            else:
+                self.summary_var.set(
+                    f"Mean kT={representative_kt:.4g} eV, Ne={self.current_ne:.3e} e/cm3, "
+                    f"included {included}/{total}, skipped {self.skipped_lines}; {response_text}"
+                )
+                self.master_app.status(
+                    f"Saha-Boltzmann: mean kT={representative_kt:.4g} eV, included {included}/{total}, Ne={self.current_ne:.3e} e/cm3"
+                )
+        self._draw_plot(self.saha_groups, self.saha_fits, representative_kt)
 
     def _electron_density(self):
         ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
@@ -14528,7 +14643,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.ax.clear()
         self.canvas.draw_idle()
 
-    def _draw_plot(self, groups, fits):
+    def _draw_plot(self, groups, fits, representative_kt=None):
         if self.ax is None:
             return
         self.ax.clear()
@@ -14541,7 +14656,9 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 continue
             xs = [p["x"] for p in pts]
             ys = [p["y"] for p in pts]
-            self.ax.scatter(xs, ys, s=24, label=element)
+            included = element in self.included_elements
+            alpha = 1.0 if included or self.mode_var.get() != "Mean temperature" else 0.35
+            self.ax.scatter(xs, ys, s=24, alpha=alpha, label=element)
             result = fits.get(element)
             if result:
                 x0, x1 = min(xs), max(xs)
@@ -14550,7 +14667,12 @@ class SahaBoltzmannWindow(tk.Toplevel):
                     x1 += 0.05
                 y0 = result["slope"] * x0 + result["q"]
                 y1 = result["slope"] * x1 + result["q"]
-                self.ax.plot([x0, x1], [y0, y1], linewidth=1.0)
+                self.ax.plot([x0, x1], [y0, y1], linewidth=1.0, alpha=alpha)
+                if representative_kt and representative_kt > 0.0 and (self.mode_var.get() != "Mean temperature" or included):
+                    mean_slope = -1.0 / representative_kt
+                    my0 = mean_slope * x0 + result["q"]
+                    my1 = mean_slope * x1 + result["q"]
+                    self.ax.plot([x0, x1], [my0, my1], linestyle="--", linewidth=0.9, alpha=0.75)
         self.ax.legend(loc="best", fontsize=8)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
