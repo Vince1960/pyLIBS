@@ -15453,11 +15453,11 @@ class CFLibsOPCWindow(tk.Toplevel):
         ttk.Button(top, text="Compute OPC", command=self.compute).pack(side="left")
         ttk.Button(top, text="Save Calibration...", command=self.save).pack(side="left", padx=4)
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
-        cols = ("Element", "CF-LIBS Number %", "Nominal Number %", "Correction Factor")
+        cols = ("Element", "CF-LIBS Number %", "Nominal Number %")
         self.tree = ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c)
-            self.tree.column(c, width=165, anchor="center")
+            self.tree.column(c, width=200, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=5)
         self.tree.bind("<Double-1>", self.edit_nominal)
         self.protocol("WM_DELETE_WINDOW", self.close)
@@ -15475,12 +15475,10 @@ class CFLibsOPCWindow(tk.Toplevel):
             element = row.get("element", "")
             number_percent = safe_float(row.get("number_percent", 0.0), 0.0)
             nominal = safe_float(getattr(self.master_app, "opc_nominal_percent", {}).get(element, ""), 0.0)
-            factor = self.factors.get(element, 0.0)
             self.tree.insert("", "end", iid=element, values=(
                 element,
                 format_template_display_value(number_percent),
                 format_template_display_value(nominal) if nominal > 0.0 else "",
-                format_template_display_value(factor) if factor > 0.0 else "",
             ))
 
     def edit_nominal(self, _event=None):
@@ -15495,9 +15493,13 @@ class CFLibsOPCWindow(tk.Toplevel):
             f"{element} nominal number %:",
             initialvalue=current if current > 0.0 else safe_float(vals[1], 0.0),
             minvalue=0.0,
+            maxvalue=100.0,
             parent=_prepare_messagebox_parent(self),
         )
         if value is None:
+            return
+        if value < 0.0 or value > 100.0:
+            _showwarning(self, "OPC", "Nominal Number % must be between 0 and 100.")
             return
         nominal = getattr(self.master_app, "opc_nominal_percent", None)
         if nominal is None:
@@ -15513,13 +15515,11 @@ class CFLibsOPCWindow(tk.Toplevel):
             element = vals[0]
             cflibs_percent = safe_float(vals[1], 0.0)
             nominal_percent = safe_float(vals[2], 0.0)
-            if cflibs_percent > 0.0 and nominal_percent > 0.0:
+            if 0.0 < cflibs_percent <= 100.0 and 0.0 < nominal_percent <= 100.0:
                 factors[element] = nominal_percent / cflibs_percent
-            else:
-                factors[element] = 0.0
         self.factors = factors
         self.refresh()
-        self.master_app.status("OPC correction factors computed.")
+        self.master_app.status(f"OPC correction factors computed for {len(factors)} element(s).")
 
     def _source_spectrum_filename(self):
         spectra = getattr(self.master_app, "spectra", []) or []
@@ -15531,18 +15531,47 @@ class CFLibsOPCWindow(tk.Toplevel):
         if not self.factors:
             self.compute()
         rows = []
-        for line in getattr(self.master_app, "template_lines", []) or []:
-            element = str(getattr(line, "specie", "") or "").strip().capitalize()
-            if not element:
+        cflibs_percent = {
+            str(row.get("element", "")).strip().capitalize(): safe_float(row.get("number_percent", 0.0), 0.0)
+            for row in (self.owner.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or [])
+        }
+        groups = getattr(self.owner, "last_groups", {}) or {}
+        fits = getattr(self.owner, "last_fits", {}) or {}
+        for key, points in groups.items():
+            fit = fits.get(key)
+            if not fit:
                 continue
-            factor = safe_float(self.factors.get(element, 0.0), 0.0)
-            if factor <= 0.0:
+            species_name, ion = key
+            element = str(species_name).strip().capitalize()
+            ratio = safe_float(self.factors.get(element, 0.0), 0.0)
+            nominal = safe_float(getattr(self.master_app, "opc_nominal_percent", {}).get(element, 0.0), 0.0)
+            calculated = safe_float(cflibs_percent.get(element, 0.0), 0.0)
+            if ratio <= 0.0 or nominal <= 0.0 or calculated <= 0.0:
                 continue
-            wavelength = abs(getattr(line, "fitwavelen", 0.0)) or getattr(line, "wavelen", 0.0)
-            if not wavelength:
-                continue
-            species = f"{element} {_roman_ion(getattr(line, 'ion', 0)) if getattr(line, 'ion', 0) else ''}".strip()
-            rows.append((float(wavelength), factor, element, species))
+            for point in points:
+                if point.get("inactive"):
+                    continue
+                line = point.get("line")
+                if line is None:
+                    continue
+                raw_intensity = _template_line_intensity(line)
+                ag = abs(safe_float(getattr(line, "aki", 0.0), 0.0) * safe_float(getattr(line, "gk", 0.0), 0.0))
+                sac = safe_float(point.get("sac", 1.0), 1.0) or 1.0
+                x = safe_float(point.get("x", 0.0), 0.0)
+                if raw_intensity <= 0.0 or ag <= 0.0:
+                    continue
+                yp = fit["slope"] * x + fit.get("q_at_t", fit.get("q", 0.0)) + math.log(ratio)
+                try:
+                    response_value = raw_intensity / (sac * ag * math.exp(yp))
+                except (OverflowError, ZeroDivisionError, ValueError):
+                    continue
+                if not math.isfinite(response_value) or response_value <= 0.0:
+                    continue
+                wavelength = abs(getattr(line, "fitwavelen", 0.0)) or getattr(line, "wavelen", 0.0)
+                if not wavelength:
+                    continue
+                species = f"{element} {_roman_ion(ion)}"
+                rows.append((float(wavelength), response_value, element, species))
         rows.sort(key=lambda r: r[0])
         return rows
 
@@ -15567,7 +15596,7 @@ class CFLibsOPCWindow(tk.Toplevel):
             f"# source spectrum: {self._source_spectrum_filename() or 'N/A'}",
             f"# temperature_eV: {self.owner.last_kt:.8g}",
             f"# electron_density_e_cm3: {self.owner.last_ne:.8g}",
-            "# formula: correction_factor = nominal_number_percent / cflibs_number_percent",
+            "# formula: LIBS++ OPC response from fixed-temperature Boltzmann line shifted by log(nominal_number_percent / cflibs_number_percent)",
             "# columns: wavelength correction_factor element species",
         ]
         for wavelength, factor, element, species in calibration_rows:
@@ -15603,7 +15632,8 @@ class CFLibsWindow(tk.Toplevel):
         self.geometry("1100x760")
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
-        ttk.Button(top, text="OPC", command=self.show_opc).pack(side="left", padx=4)
+        self.opc_button = ttk.Button(top, text="OPC", command=self.show_opc, state="disabled")
+        self.opc_button.pack(side="left", padx=4)
         ttk.Button(top, text="Show Report", command=self.show_report).pack(side="left", padx=4)
         ttk.Label(top, text="kT eV").pack(side="left", padx=(12,2))
         default_kt = safe_float(getattr(master, "session_temperature", 0.0), 0.0) or 1.0
@@ -15631,6 +15661,8 @@ class CFLibsWindow(tk.Toplevel):
         self.last_response_used = False
         self.last_temperature_source = "default"
         self.last_ne_source = "default"
+        self.last_groups = {}
+        self.last_fits = {}
         self.report_window = None
         self.report_temp_dir = None
         self.opc_window = None
@@ -15641,6 +15673,23 @@ class CFLibsWindow(tk.Toplevel):
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=5)
         self.after(100, self.compute)
+
+    def enable_opc(self):
+        try:
+            self.opc_button.configure(state="normal")
+        except Exception:
+            pass
+
+    def disable_opc(self):
+        try:
+            self.opc_button.configure(state="disabled")
+        except Exception:
+            pass
+        if self.opc_window is not None and self.opc_window.winfo_exists():
+            try:
+                self.opc_window.close()
+            except Exception:
+                pass
 
     def compute(self):
         self.tree.delete(*self.tree.get_children())
@@ -15659,10 +15708,15 @@ class CFLibsWindow(tk.Toplevel):
         if not fits:
             msg = f"No valid Boltzmann data. Skipped {skipped} incomplete template line(s)."
             self.status_var.set(msg)
+            self.last_groups = groups
+            self.last_fits = {}
+            self.disable_opc()
             _showinfo(self, "CF-LIBS", msg)
             self._draw_boltzmann(groups, fits, kt)
             return
         rows = libspp_saha_cflibs(self.master_app, fits, kt, ne)
+        self.last_groups = groups
+        self.last_fits = fits
         self.master_app.last_cflibs_rows = rows
         self.last_rows = rows
         self.last_skipped = skipped
@@ -15683,6 +15737,7 @@ class CFLibsWindow(tk.Toplevel):
                 self._fmt3(r["mass_percent"]),
             ))
         self._draw_boltzmann(groups, fits, kt)
+        self.enable_opc()
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
         self.status_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, elements={len(rows)}, skipped={skipped}; {response_text}")
         self.master_app.status(f"CF-LIBS: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, {len(rows)} element(s), skipped {skipped}")
@@ -17338,6 +17393,7 @@ class MainWindow(tk.Tk):
     def open_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
         if not fns: return
+        self.invalidate_cflibs_results()
         remember_working_dir(self.options, fns)
         first_fn=fns[0]
         try:
@@ -17364,6 +17420,7 @@ class MainWindow(tk.Tk):
         remember_working_dir(self.options, fns)
         if not fns:
             return
+        self.invalidate_cflibs_results()
         merged = self.spectra[0] if self.spectra else None
         for fn in fns:
             try:
@@ -18181,7 +18238,20 @@ def clear_template_data(self):
     self.template_lines.clear()
     self.notify_template_changed(redraw=False)
 
+def invalidate_cflibs_results(self):
+    self.last_cflibs_rows = []
+    try:
+        for child in self.winfo_children():
+            if isinstance(child, CFLibsWindow) and child.winfo_exists():
+                child.last_rows = []
+                child.last_groups = {}
+                child.last_fits = {}
+                child.disable_opc()
+    except Exception:
+        pass
+
 def notify_template_changed(self, redraw=False):
+    self.invalidate_cflibs_results()
     refreshed = set()
     if self.template_window and self.template_window.winfo_exists():
         try:
@@ -18794,7 +18864,7 @@ _RETRO_METHODS = [
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
-    close_template_from_menu, clear_template_data, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
+    close_template_from_menu, clear_template_data, invalidate_cflibs_results, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     full_y_main_visible_x,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
