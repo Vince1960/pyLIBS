@@ -15,6 +15,7 @@
 - Added the first auto-populated CF-LIBS analysis window with fixed-temperature Boltzmann plots and concentration output.
 - CF-LIBS results table was simplified and can now be saved as a text report.
 - CF-LIBS reports now export a complete HTML/text analysis report with spectrum metadata, a spectrum PNG, response-normalization details, template contents, H-alpha information, Saha-Boltzmann temperatures, plasma parameters, and final concentrations.
+- CF-LIBS concentration display and reports now show normalized Number % and Mass % values instead of raw concentration fractions.
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 - Manual Fit and Automatic Fit no longer show the legacy Expand button.
 - Spectrum open dialogs now use a shared filter list with lowercase/uppercase extensions for TXT, DAT, ROH, TRT, MCH, JND, ASC, and CSV files.

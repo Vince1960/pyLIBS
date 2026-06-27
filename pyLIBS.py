@@ -15403,7 +15403,7 @@ class CFLibsWindow(tk.Toplevel):
         self.last_response_used = False
         self.last_temperature_source = "default"
         self.last_ne_source = "default"
-        cols=("element", "ionized / neutral", "numerical concentration", "mass concentration")
+        cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
@@ -15446,9 +15446,9 @@ class CFLibsWindow(tk.Toplevel):
         for r in rows:
             self.tree.insert("", "end", values=(
                 r["element"],
-                f"{r['ionized_neutral_ratio']:.6g}",
-                f"{r['conc']:.6g}",
-                f"{r['mass_rel']:.6g}",
+                self._fmt3(r["ionized_neutral_ratio"]),
+                self._fmt3(r["number_percent"]),
+                self._fmt3(r["mass_percent"]),
             ))
         self._draw_boltzmann(groups, fits, kt)
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
@@ -15646,9 +15646,9 @@ class CFLibsWindow(tk.Toplevel):
         return [
             [
                 r.get("element", ""),
-                self._fmt(r.get("ionized_neutral_ratio")),
-                self._fmt(r.get("conc")),
-                self._fmt(r.get("mass_rel")),
+                self._fmt3(r.get("ionized_neutral_ratio")),
+                self._fmt3(r.get("number_percent")),
+                self._fmt3(r.get("mass_percent")),
             ]
             for r in rows
         ]
