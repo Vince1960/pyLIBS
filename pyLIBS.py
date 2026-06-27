@@ -14063,9 +14063,8 @@ class MultiGaussianFitWindow(tk.Toplevel):
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
-        explicit_lines = lines is not None
         if lines is None:
-            lines = [t for t in self.master_app.template_lines if lo <= (abs(t.fitwavelen) if t.fitwavelen else t.wavelen) <= hi]
+            lines = [t for t in self.master_app.template_lines if lo <= t.wavelen <= hi]
         else:
             lines = list(lines)
         if not lines:
@@ -14073,12 +14072,6 @@ class MultiGaussianFitWindow(tk.Toplevel):
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
-        if explicit_lines and len(lines) > 10:
-            msg = "Manual Fit group has more than 10 lines; the existing Voigt fit supports up to 10."
-            if show_messages:
-                _showinfo(self, "Fit Voigt", msg)
-            return False, msg, []
-        lines = lines[:10]
         xmin, xmax = float(xs.min()), float(xs.max())
         width = max(xmax - xmin, 1e-9)
         baseline = float(np.percentile(ys, 5))
@@ -14092,7 +14085,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         bounds_hi = [np.inf, np.inf]
         half_window = max(abs(safe_float(self.range_var.get(), width / 20.0)), width * 0.02, abs(dx) * 2.0)
         for t in lines:
-            center0 = abs(t.fitwavelen) if t.fitwavelen else t.wavelen
+            center0 = t.wavelen
             peak_y = _nearest_y(sp.x, sp.y, center0)
             height = max(float(peak_y) - baseline, max(ys)-baseline, 1.0)
             area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
@@ -15372,6 +15365,15 @@ class RetroFitManagerWindow(tk.Toplevel):
         sp = self.master_app.spectra[0]
         return sum(1 for x in sp.x if lo <= x <= hi)
 
+    def _visible_template_lines(self):
+        if not getattr(self.master_app, "ax", None):
+            return []
+        lo, hi = sorted(self.master_app.ax.get_xlim())
+        return sorted(
+            [t for t in self.master_app.template_lines if lo <= getattr(t, "wavelen", 0.0) <= hi],
+            key=lambda t: t.wavelen,
+        )
+
     def _minimum_fit_points(self, group):
         nparams = 2 + 4 * len(group)
         return max(8, 3 * nparams)
@@ -15424,12 +15426,12 @@ class RetroFitManagerWindow(tk.Toplevel):
                 break
         return point_count, expanded, retries
 
-    def _fit_manual_group(self, group):
+    def _fit_manual_group(self, lines):
         tmp = None
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
             tmp.withdraw()
-            ok, message, results = tmp.fit_voigt_lines(lines=group, preserve_view=True, show_messages=False)
+            ok, message, results = tmp.fit_voigt_lines(lines=lines, preserve_view=True, show_messages=False)
         except Exception as e:
             ok, message, results = False, str(e), []
         finally:
@@ -15474,13 +15476,45 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set(f"{report}; {message}")
             _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
             return False
-        ok, message, results = self._fit_manual_group(group)
+        fit_lines = self._visible_template_lines() or list(group)
+        expanded_for_visible = False
+        extra_retries = 0
+        point_count = self._current_fit_point_count()
+        min_points = self._minimum_fit_points(fit_lines)
+        while point_count < min_points and extra_retries < 8:
+            old_count = point_count
+            point_count, expanded, retries_used = self._expand_manual_window_to_points(group, min_points)
+            expanded_for_visible = expanded_for_visible or expanded
+            extra_retries += max(1, retries_used)
+            fit_lines = self._visible_template_lines() or list(group)
+            min_points = self._minimum_fit_points(fit_lines)
+            if point_count >= min_points or point_count == old_count:
+                break
+        if point_count < min_points:
+            message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+            self.manual_fit_failed = True
+            self.msg_var.set(f"{report}; {message}")
+            _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
+            return False
+        if expanded_for_visible:
+            report = (
+                f"{mode_label}: expanded window, "
+                f"fitting {len(fit_lines)} line(s) using {point_count} points"
+            )
+            self.msg_var.set(report)
+            self.master_app.status(report)
+        elif len(fit_lines) != len(group):
+            report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
+            self.msg_var.set(report)
+            self.master_app.status(report)
+        ok, message, results = self._fit_manual_group(fit_lines)
         if not ok:
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit failed: {message}")
             _showerror(self, mode_label, f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
             return False
         self.region_fit_results[self._group_key(group)] = list(results)
+        self.region_fit_results[self._group_key(fit_lines)] = list(results)
         self.populate_results(results)
         self.msg_var.set(f"{report}; fitted")
         self.master_app.status(f"{report}; fitted")
