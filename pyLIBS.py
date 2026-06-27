@@ -13516,6 +13516,28 @@ class BatchStatisticsWindow(tk.Toplevel):
     def _load_spectrum(self, filename):
         return self.master_app.load_spectrum_with_corrections(filename)
 
+    def _load_generated_average_outputs(self, outputs):
+        loaded = []
+        load_errors = []
+        for filename, display_name in outputs:
+            try:
+                sp = self.master_app.load_spectrum_with_corrections(filename)
+                sp.name = display_name
+                self.master_app.add_spectrum(sp)
+                loaded.append(filename)
+            except Exception as e:
+                load_errors.append(f"{filename}: {e}")
+        if load_errors:
+            saved_paths = "\n".join(filename for filename, _ in outputs)
+            _showwarning(
+                self,
+                "Batch Average",
+                "Average output was saved, but one or more generated spectra could not be loaded.\n\n"
+                f"Saved file(s):\n{saved_paths}\n\n"
+                + "\n".join(load_errors[:10])
+            )
+        return loaded, load_errors
+
     def join_pairs(self):
         files = self.paths()
         if len(files) < 2:
@@ -13574,6 +13596,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         out_avg = str(Path(loaded_files[0]).with_suffix(".avg"))
         Spectrum(list(x), avg, name="Batch average").save_ascii(out_avg)
         outputs = [out_avg]
+        generated_outputs = [(out_avg, "Batch Average")]
         if len(rows)>1:
             std=[math.sqrt(sum((v-a)**2 for v in vals)/len(rows)) for vals,a in zip(zip(*rows),avg)]
         else:
@@ -13582,7 +13605,15 @@ class BatchStatisticsWindow(tk.Toplevel):
             out_sd = str(Path(loaded_files[0]).with_suffix(".sd"))
             Spectrum(list(x), std, name="Batch SD").save_ascii(out_sd)
             outputs.append(out_sd)
-        self.master_app.status(f"Batch Average: saved {', '.join(Path(o).name for o in outputs)} from {len(specs)} file(s)")
+            generated_outputs.append((out_sd, "Batch Standard Deviation"))
+        loaded_outputs, load_errors = self._load_generated_average_outputs(generated_outputs)
+        saved_names = ", ".join(Path(o).name for o in outputs)
+        if loaded_outputs and not load_errors:
+            self.master_app.status(f"Batch average saved and loaded into comparison view: {saved_names}")
+        elif loaded_outputs:
+            self.master_app.status(f"Batch Average: saved {saved_names}; some generated spectra could not be loaded")
+        else:
+            self.master_app.status(f"Batch Average: saved {saved_names} from {len(specs)} file(s)")
         if errors:
             _showwarning(self, "Batch Average", "\n".join(errors[:10]))
 
@@ -18116,8 +18147,60 @@ def clear_all_spectra(self):
         self.status("Clear Graph: all spectra cleared.")
 
 def save_with_labels(self):
-    # Compatible fallback: save current spectrum as ASCII; labels export is planned.
-    self.ask_save_spectrum()
+    if not getattr(self, "spectra", None):
+        _showinfo(self, "Save with Labels", "Load a spectrum before exporting.")
+        return
+    sp = self.spectra[0]
+    if not getattr(sp, "x", None) or not getattr(sp, "y", None):
+        _showinfo(self, "Save with Labels", "The main spectrum has no data to export.")
+        return
+    fn = filedialog.asksaveasfilename(
+        title="Save Spectrum with Labels",
+        initialdir=remembered_initial_dir(self.options),
+        defaultextension=".csv",
+        filetypes=[("CSV Files", "*.csv"), ("All Files", "*.*")]
+    )
+    if not fn:
+        return
+    remember_working_dir(self.options, fn)
+    try:
+        labels_by_index = defaultdict(list)
+        xs = list(sp.x)
+        sorted_x = all(xs[i] <= xs[i + 1] for i in range(len(xs) - 1))
+
+        def nearest_index(wavelength):
+            if not xs:
+                return None
+            if sorted_x:
+                pos = bisect_right(xs, wavelength)
+                if pos <= 0:
+                    return 0
+                if pos >= len(xs):
+                    return len(xs) - 1
+                before = pos - 1
+                return before if abs(xs[before] - wavelength) <= abs(xs[pos] - wavelength) else pos
+            return min(range(len(xs)), key=lambda i: abs(xs[i] - wavelength))
+
+        for line in getattr(self, "template_lines", []) or []:
+            specie = str(getattr(line, "specie", "") or "").strip()
+            if not specie:
+                continue
+            ion = safe_int(getattr(line, "ion", 0), 0)
+            label = specie if ion <= 0 else f"{specie} {_roman_ion(ion)}"
+            wavelength = safe_float(getattr(line, "wavelen", 0.0), 0.0)
+            idx = nearest_index(wavelength)
+            if idx is not None and label not in labels_by_index[idx]:
+                labels_by_index[idx].append(label)
+
+        with open(fn, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["wavelength", "intensity", "label"])
+            for idx, (x, y) in enumerate(zip(sp.x, sp.y)):
+                writer.writerow([x, y, "; ".join(labels_by_index.get(idx, []))])
+        self.status(f"Saved spectrum with labels: {fn}")
+        _showinfo(self, "Save with Labels", f"Spectrum exported to:\n{fn}")
+    except Exception as e:
+        _showerror(self, "Save with Labels", str(e))
 
 def print_plot(self):
     fn = filedialog.asksaveasfilename(

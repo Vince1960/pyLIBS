@@ -25,6 +25,8 @@
 - Spectrum open dialogs now use a shared filter list with lowercase/uppercase extensions for TXT, DAT, ROH, TRT, MCH, JND, ASC, and CSV files.
 - Toolbar buttons now use the newly supplied PNG icons for Clear, Active Spectra, templates, H-alpha, and fit actions.
 - Remaining Italian user-visible messages in dialogs and status text were translated to English.
+- File > Save with Labels now exports the main spectrum as CSV with nearest-point template identification labels.
+- Batch Average now loads saved average and optional standard-deviation spectra into the comparison view after saving.
 
 ------------------------------------------------------------
 
