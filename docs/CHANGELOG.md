@@ -2,6 +2,14 @@
 
 ------------------------------------------------------------
 
+## Unreleased
+
+### Changed
+
+- Manual Fit now opens a compact LIBS++-style Residuals plot window after a successful Voigt fit.
+
+------------------------------------------------------------
+
 ## v8.18
 
 ### Added
@@ -29,4 +37,3 @@
 ------------------------------------------------------------
 
 Future releases should be added at the top of this file.
-

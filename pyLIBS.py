@@ -14035,7 +14035,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
         self.fit_voigt_lines()
 
-    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True):
+    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True, show_residuals=False):
         """Fit explicit template lines with the existing visible-window Voigt model."""
         if np is None:
             if show_messages:
@@ -14134,17 +14134,50 @@ class MultiGaussianFitWindow(tk.Toplevel):
                 "gaussian_width": float(t.wg),
                 "integrated_area": float(area),
             })
-        self.master_app.fit_overlay = (xs.tolist(), multivoigt_model(xs, *popt).tolist())
+        fitted_y = multivoigt_model(xs, *popt)
+        self.master_app.fit_overlay = (xs.tolist(), fitted_y.tolist())
         self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
         if preserve_view:
             self.master_app.restore_plot_view(old_xlim, old_ylim)
+        if show_residuals:
+            ResidualsWindow(self.master_app, xs.tolist(), (ys - fitted_y).tolist())
         self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
         return True, f"Fit Voigt: {len(lines)} line(s)", fit_results
 
     def clear_overlay(self):
         self.master_app.fit_overlay = None
         self.master_app.redraw()
+
+
+class ResidualsWindow(tk.Toplevel):
+    """Compact LIBS++-style residual plot for Manual Fit."""
+
+    def __init__(self, master, x_values, residuals):
+        super().__init__(master)
+        self.master_app = master
+        self.title("Residuals")
+        self.geometry("1200x250")
+        self.minsize(500, 160)
+        if Figure is None or FigureCanvasTkAgg is None:
+            ttk.Label(self, text="matplotlib non disponibile").pack(padx=20, pady=20)
+            return
+        self.fig = Figure(figsize=(12, 2.5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._plot(x_values, residuals)
+
+    def _plot(self, x_values, residuals):
+        self.ax.clear()
+        self.ax.set_title("Residuals")
+        self.ax.set_xlabel(f"Wavelength ({self.master_app.current_wavelength_unit_label()})")
+        self.ax.set_ylabel("Residual (counts)")
+        self.ax.plot(x_values, residuals, color="red", linewidth=1.0)
+        self.ax.axhline(0.0, color="black", linewidth=0.8, alpha=0.65)
+        self.ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+        self.fig.tight_layout(pad=1.0)
+        self.canvas.draw_idle()
 
 
 class NeHalphaWindow(tk.Toplevel):
@@ -15431,7 +15464,12 @@ class RetroFitManagerWindow(tk.Toplevel):
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
             tmp.withdraw()
-            ok, message, results = tmp.fit_voigt_lines(lines=lines, preserve_view=True, show_messages=False)
+            ok, message, results = tmp.fit_voigt_lines(
+                lines=lines,
+                preserve_view=True,
+                show_messages=False,
+                show_residuals=not self.automatic,
+            )
         except Exception as e:
             ok, message, results = False, str(e), []
         finally:
