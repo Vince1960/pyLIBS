@@ -17,6 +17,7 @@
 - CF-LIBS reports now export a complete HTML/text analysis report with spectrum metadata, a spectrum PNG, response-normalization details, template contents, H-alpha information, Saha-Boltzmann temperatures, plasma parameters, and final concentrations.
 - CF-LIBS concentration display and reports now show normalized Number % and Mass % values instead of raw concentration fractions.
 - CF-LIBS reports are now generated through a single Report Preview window with Save and Close actions, and no longer include the H-alpha electron-density formula/source field.
+- CF-LIBS Show Report now opens temporary HTML reports in the system default HTML viewer and falls back to source preview if the viewer cannot be launched.
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 - Manual Fit and Automatic Fit no longer show the legacy Expand button.
 - Spectrum open dialogs now use a shared filter list with lowercase/uppercase extensions for TXT, DAT, ROH, TRT, MCH, JND, ASC, and CSV files.

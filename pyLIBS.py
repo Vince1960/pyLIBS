@@ -44,6 +44,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import webbrowser
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -15406,6 +15407,7 @@ class CFLibsWindow(tk.Toplevel):
         self.last_temperature_source = "default"
         self.last_ne_source = "default"
         self.report_window = None
+        self.report_temp_dir = None
         cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -15463,18 +15465,75 @@ class CFLibsWindow(tk.Toplevel):
         if not rows:
             _showinfo(self, "CF-LIBS", "No CF-LIBS results are available to show.")
             return
-        image_path = Path(tempfile.gettempdir()) / f"pylibs_cflibs_report_{id(self)}_spectrum.png"
-        image_info = self._export_spectrum_png(image_path)
-        content = self.build_cflibs_report_html(rows, image_info)
+        try:
+            report_path, content = self.write_temp_cflibs_report(rows)
+            self.open_file_with_default_app(report_path)
+            preview_text = (
+                "Report opened in the default HTML viewer.\n\n"
+                f"Temporary HTML file:\n{report_path}\n\n"
+                "Use Save... to save the generated report content to a permanent location."
+            )
+            fallback = False
+        except Exception as e:
+            _showwarning(self, "CF-LIBS", f"Could not open the default HTML viewer:\n{e}\n\nShowing the report source instead.")
+            report_path = None
+            image_path = self._report_temp_path("cflibs_report_spectrum.png")
+            image_info = self._export_spectrum_png(image_path)
+            content = self.build_cflibs_report_html(rows, image_info)
+            preview_text = None
+            fallback = True
         if self.report_window is not None and self.report_window.winfo_exists():
-            self.report_window.update_report(content, "html", ".html")
+            self.report_window.update_report(content, "html", ".html", preview_text=preview_text)
             self.report_window.lift(self)
             try:
                 self.report_window.focus_force()
             except Exception:
                 self.report_window.focus_set()
             return
-        self.report_window = CFLibsReportPreviewWindow(self, content, "html", ".html")
+        self.report_window = CFLibsReportPreviewWindow(self, content, "html", ".html", preview_text=preview_text)
+        if fallback:
+            self.master_app.status("CF-LIBS report shown as HTML source preview.")
+        else:
+            self.master_app.status(f"CF-LIBS report opened: {report_path}")
+
+    def _ensure_report_temp_dir(self) -> Path:
+        if self.report_temp_dir:
+            path = Path(self.report_temp_dir)
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                return path
+            except Exception:
+                pass
+        path = Path(tempfile.mkdtemp(prefix="pylibs_cflibs_report_"))
+        self.report_temp_dir = str(path)
+        return path
+
+    def _report_temp_path(self, filename: str) -> Path:
+        return self._ensure_report_temp_dir() / filename
+
+    def write_temp_cflibs_report(self, rows):
+        report_path = self._report_temp_path("cflibs_report.html")
+        image_path = self._report_temp_path("cflibs_report_spectrum.png")
+        image_info = self._export_spectrum_png(image_path)
+        content = self.build_cflibs_report_html(rows, image_info, report_path)
+        report_path.write_text(content, encoding="utf-8")
+        return report_path, content
+
+    def open_file_with_default_app(self, path: Path):
+        path = Path(path)
+        if os.name == "nt":
+            os.startfile(str(path))
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(path)])
+            return
+        try:
+            subprocess.Popen(["xdg-open", str(path)])
+            return
+        except Exception:
+            if webbrowser.open(path.resolve().as_uri()):
+                return
+            raise
 
     def on_report_window_close(self):
         self.report_window = None
@@ -15870,7 +15929,7 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
 class CFLibsReportPreviewWindow(tk.Toplevel):
     """Single CF-LIBS report preview window with explicit save action."""
 
-    def __init__(self, owner: CFLibsWindow, content: str, report_format: str, default_extension: str):
+    def __init__(self, owner: CFLibsWindow, content: str, report_format: str, default_extension: str, preview_text: Optional[str] = None):
         super().__init__(owner)
         self.owner = owner
         self.content = content
@@ -15882,7 +15941,8 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
         top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Save...", command=self.save).pack(side="left")
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
-        ttk.Label(top, text="HTML report source preview").pack(side="left", padx=12)
+        self.mode_label = ttk.Label(top, text="")
+        self.mode_label.pack(side="left", padx=12)
 
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
@@ -15896,20 +15956,22 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
         frame.rowconfigure(0, weight=1)
         frame.columnconfigure(0, weight=1)
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.update_report(content, report_format, default_extension)
+        self.update_report(content, report_format, default_extension, preview_text=preview_text)
         self.lift(owner)
         try:
             self.focus_force()
         except Exception:
             self.focus_set()
 
-    def update_report(self, content: str, report_format: str, default_extension: str):
+    def update_report(self, content: str, report_format: str, default_extension: str, preview_text: Optional[str] = None):
         self.content = content
         self.report_format = report_format
         self.default_extension = default_extension
+        display_text = preview_text if preview_text is not None else content
+        self.mode_label.configure(text="Report opened in default HTML viewer" if preview_text is not None else "HTML report source preview")
         self.text.configure(state="normal")
         self.text.delete("1.0", "end")
-        self.text.insert("1.0", content)
+        self.text.insert("1.0", display_text)
         self.text.configure(state="disabled")
         self.text.see("1.0")
 
