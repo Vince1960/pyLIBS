@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import csv
 from bisect import bisect_right
+from datetime import datetime
 import math
 import os
 import re
@@ -15317,6 +15318,7 @@ class CFLibsWindow(tk.Toplevel):
         self.geometry("1100x760")
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
+        ttk.Button(top, text="Save Report...", command=self.save_report).pack(side="left", padx=4)
         ttk.Label(top, text="kT eV").pack(side="left", padx=(12,2))
         default_kt = safe_float(getattr(master, "session_temperature", 0.0), 0.0) or 1.0
         self.kt_var = tk.StringVar(value=f"{default_kt:.6g}")
@@ -15335,11 +15337,12 @@ class CFLibsWindow(tk.Toplevel):
             self.ax = self.fig.add_subplot(111)
             self.canvas = FigureCanvasTkAgg(self.fig, master=self)
             self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=5)
-        cols=(
-            "element", "neutral concentration", "ionized concentration",
-            "ionized / neutral", "total numerical concentration",
-            "mass concentration", "number %", "mass %"
-        )
+        self.last_rows = []
+        self.last_skipped = 0
+        self.last_kt = safe_float(self.kt_var.get(), 1.0) or 1.0
+        self.last_ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
+        self.last_response_used = False
+        cols=("element", "ionized / neutral", "numerical concentration", "mass concentration")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
@@ -15368,23 +15371,69 @@ class CFLibsWindow(tk.Toplevel):
             return
         rows = libspp_saha_cflibs(self.master_app, fits, kt, ne)
         self.master_app.last_cflibs_rows = rows
+        self.last_rows = rows
+        self.last_skipped = skipped
+        self.last_kt = kt
+        self.last_ne = ne
+        self.last_response_used = _apply_after_response_enabled(self.master_app)
         self.master_app.session_temperature = kt
         self.master_app.session_ne = ne
         for r in rows:
             self.tree.insert("", "end", values=(
                 r["element"],
-                f"{r['neutral_conc']:.6g}",
-                f"{r['ionized_conc']:.6g}",
                 f"{r['ionized_neutral_ratio']:.6g}",
                 f"{r['conc']:.6g}",
                 f"{r['mass_rel']:.6g}",
-                f"{r['number_percent']:.4f}",
-                f"{r['mass_percent']:.4f}",
             ))
         self._draw_boltzmann(groups, fits, kt)
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
         self.status_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, elements={len(rows)}, skipped={skipped}; {response_text}")
         self.master_app.status(f"CF-LIBS: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, {len(rows)} element(s), skipped {skipped}")
+
+    def save_report(self):
+        rows = self.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
+        if not rows:
+            _showinfo(self, "CF-LIBS", "No CF-LIBS results are available to save.")
+            return
+        fn = filedialog.asksaveasfilename(
+            title="Save CF-LIBS Report",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            defaultextension=".txt",
+            filetypes=[("Text report", "*.txt"), ("CSV", "*.csv"), ("All", "*.*")]
+        )
+        if not fn:
+            return
+        remember_working_dir(self.master_app.options, fn)
+        response_file = str(getattr(self.master_app.options, "response_file", "") or "")
+        response_used = self.last_response_used
+        lines = [
+            "CF-LIBS Results",
+            f"Date/time: {datetime.now().isoformat(timespec='seconds')}",
+            f"Temperature used (eV): {self.last_kt:.8g}",
+            f"Electron density used (e/cm3): {self.last_ne:.8g}",
+            f"Apply After correction used: {'Yes' if response_used else 'No'}",
+            f"Response file: {response_file if response_used and response_file else 'N/A'}",
+            f"Skipped/incomplete lines: {self.last_skipped}",
+            "",
+            "Element\tIonized / Neutral ratio\tNumerical concentration\tMass concentration",
+        ]
+        for r in rows:
+            lines.append(
+                f"{r['element']}\t{r['ionized_neutral_ratio']:.8g}\t"
+                f"{r['conc']:.8g}\t{r['mass_rel']:.8g}"
+            )
+        lines.extend([
+            "",
+            "Notes:",
+            "Atomic masses are read from LIBS.db table Elementi, field m_atomica.",
+            "Incomplete template lines are skipped before concentration calculation.",
+        ])
+        try:
+            Path(fn).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            _showerror(self, "CF-LIBS", f"Could not save report:\n{e}")
+            return
+        self.master_app.status(f"CF-LIBS report saved: {fn}")
 
     def _draw_boltzmann(self, groups, fits, kt):
         if self.ax is None:
