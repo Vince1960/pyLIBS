@@ -11947,14 +11947,14 @@ class Spectrum:
     def from_roh(cls, filename: str, convert_nm_to_a: bool = False, limit_low: Optional[float] = None, limit_high: Optional[float] = None, name: Optional[str] = None) -> "Spectrum":
         data = Path(filename).read_bytes()
         if len(data) < 4:
-            raise ValueError("File .ROH troppo corto o corrotto.")
+            raise ValueError(".ROH file is too short or corrupted.")
         total = len(data) // 4
         offset = 0
 
         def read_float(label: str) -> float:
             nonlocal offset
             if offset >= total:
-                raise ValueError(f"File .ROH troppo corto durante la lettura di {label}.")
+                raise ValueError(f".ROH file is too short while reading {label}.")
             value = struct.unpack_from("<f", data, offset * 4)[0]
             offset += 1
             return value
@@ -11962,7 +11962,7 @@ class Spectrum:
         def skip(count: int, label: str):
             nonlocal offset
             if offset + count > total:
-                raise ValueError(f"File .ROH troppo corto durante il salto di {label}.")
+                raise ValueError(f".ROH file is too short while skipping {label}.")
             offset += count
 
         version = read_float("version")
@@ -11987,10 +11987,10 @@ class Spectrum:
             skip(19, "header")
 
         if end_index <= start_index:
-            raise ValueError("File .ROH senza punti spettrali validi.")
+            raise ValueError(".ROH file contains no valid spectrum points.")
         needed = end_index - start_index
         if offset + needed > total:
-            raise ValueError("File .ROH troppo corto durante la lettura delle intensità.")
+            raise ValueError(".ROH file is too short while reading intensities.")
 
         lo = min(limit_low, limit_high) if limit_low is not None and limit_high is not None else None
         hi = max(limit_low, limit_high) if limit_low is not None and limit_high is not None else None
@@ -12005,7 +12005,7 @@ class Spectrum:
             xs.append(wave)
             ys.append(inten)
         if not xs:
-            raise ValueError("File .ROH senza punti nel range di lunghezze d'onda impostato.")
+            raise ValueError(".ROH file contains no points in the configured wavelength range.")
         return cls(xs, ys, name or Path(filename).name, filename)
 
     def save_ascii(self, filename: str):
@@ -12739,9 +12739,14 @@ class OptionsWindow(tk.Toplevel):
     def ok(self):
         self.apply_to_options()
         self.master_app.status("Options updated")
-        self.destroy()
+        self.close()
 
     def cancel(self):
+        self.close()
+
+    def close(self):
+        if getattr(self.master_app, "options_window", None) is self:
+            self.master_app.options_window = None
         self.destroy()
 
     def save(self):
@@ -12801,7 +12806,7 @@ class ActiveSpectraWindow(tk.Toplevel):
         idx = self._current_index()
         if idx is None or idx == 0:
             if idx == 0:
-                _showinfo(self, "Active Spectra", "Lo spettro principale resta sempre visibile.")
+                _showinfo(self, "Active Spectra", "The main spectrum always remains visible.")
             return
         self.master_app.spectra[idx].visible = not self.master_app.spectra[idx].visible
         self.refresh()
@@ -12850,7 +12855,7 @@ class ActiveSpectraWindow(tk.Toplevel):
     def combine_selected(self, label, mode):
         specs = self._selected_spectra()
         if len(specs) < 2:
-            _showinfo(self, "Active Spectra", "Selezionare almeno due spettri con click destro.")
+            _showinfo(self, "Active Spectra", "Select at least two spectra with right-click.")
             return
         n = min(len(s.y) for s in specs)
         x = specs[0].x[:n]
@@ -12882,7 +12887,7 @@ class ResponseWindow(tk.Toplevel):
         top.pack(fill="x", padx=5, pady=5)
         ttk.Button(top, text="Load response", command=master.ask_load_response).pack(side="left")
         if Figure is None:
-            ttk.Label(self, text="matplotlib non disponibile").pack(pady=30)
+            ttk.Label(self, text="matplotlib not available").pack(pady=30)
             self.ax = self.canvas = None
             return
         self.fig = Figure(figsize=(7,4), dpi=100)
@@ -13033,7 +13038,7 @@ class LineIdentificationWindow(tk.Toplevel):
         self.atomic_lines=[l for l in lines if l.wavelen]
         self.populate(self.atomic_lines[:1000])
         self.master_app.atomic_lines = self.atomic_lines
-        self.master_app.status(f"DB atomico caricato: {len(self.atomic_lines)} righe")
+        self.master_app.status(f"Atomic DB loaded: {len(self.atomic_lines)} lines")
 
     def load_sqlite_db(self):
         try:
@@ -13041,8 +13046,8 @@ class LineIdentificationWindow(tk.Toplevel):
             self.master_app.libs_db.connect()
             self.atomic_lines = []  # ricerca lazy da SQLite
             self.master_app.atomic_lines = []
-            self.master_app.status(f"LIBS.db attivo: {self.master_app.libs_db.filename}")
-            _showinfo(self, "LIBS.db", "Database SQLite attivo. Le ricerche useranno la tabella selezionata.")
+            self.master_app.status(f"LIBS.db active: {self.master_app.libs_db.filename}")
+            _showinfo(self, "LIBS.db", "SQLite database is active. Searches will use the selected table.")
         except Exception as e:
             _showerror(self, "LIBS.db", str(e))
 
@@ -13113,7 +13118,7 @@ class ElementLocatorWindow(tk.Toplevel):
         lines.sort(key=lambda l: -l.inte)
         self.master_app.element_markers=lines[:maxn]
         self.master_app.redraw()
-        self.master_app.status(f"Element Locator: {len(self.master_app.element_markers)} righe {element}")
+        self.master_app.status(f"Element Locator: {len(self.master_app.element_markers)} lines {element}")
 
     def auto_assign(self):
         if not self.master_app.element_markers:
@@ -13121,7 +13126,7 @@ class ElementLocatorWindow(tk.Toplevel):
         for l in self.master_app.element_markers:
             self.master_app.assign_atomic_line_to_nearest_template(l, redraw=False)
         self.master_app.redraw()
-        self.master_app.status(f"Auto-assign completato: {len(self.master_app.element_markers)} righe")
+        self.master_app.status(f"Auto-assign completed: {len(self.master_app.element_markers)} lines")
 
 
 class TraceLinesWindow(tk.Toplevel):
@@ -13153,7 +13158,7 @@ class TraceLinesWindow(tk.Toplevel):
         ttk.Button(top, text="OK", command=self.trace).grid(row=0, column=9, padx=8)
         ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=10, padx=3)
         ttk.Button(top, text="Clear", command=self.clear).grid(row=0, column=11, padx=3)
-        self.info_var = tk.StringVar(value="Trace usa il range di lunghezze d'onda attualmente visibile.")
+        self.info_var = tk.StringVar(value="Trace uses the currently visible wavelength range.")
         ttk.Label(self, textvariable=self.info_var).pack(anchor="w", padx=8)
         self.tree = ttk.Treeview(self, columns=self.columns, show="headings")
         for c in self.columns:
@@ -13211,13 +13216,13 @@ class TraceLinesWindow(tk.Toplevel):
         self.refresh()
         self.master_app.redraw(preserve_view=True)
         self.master_app.restore_plot_view(view_xlim, view_ylim)
-        self.info_var.set(f"Tracciate {len(lines)} righe {element} ({mode}) nell'intervallo visibile {min(lo,hi):.2f}-{max(lo,hi):.2f} Å; totale righe tracciate: {len(existing)}.")
+        self.info_var.set(f"Traced {len(lines)} {element} lines ({mode}) in the visible interval {min(lo,hi):.2f}-{max(lo,hi):.2f} Å; total traced lines: {len(existing)}.")
         self.master_app.status(self.info_var.get())
 
     def assign(self):
         n = self.master_app.assign_traced_lines()
         self.refresh()
-        self.info_var.set(f"Assign: {n} righe del template assegnate entro Range = {self.master_app.options.search_range} Å.")
+        self.info_var.set(f"Assign: {n} template lines assigned within Range = {self.master_app.options.search_range} Å.")
 
     def clear(self):
         self.master_app.trace_markers = []
@@ -13291,7 +13296,7 @@ class AutoElementIdentificationWindow(tk.Toplevel):
         rg=safe_float(self.range_var.get(), self.master_app.options.search_range)
         candidates=self.template_candidates()
         if not candidates:
-            _showinfo(self, "Auto Element Identification", "Nessuna riga/template nel range.")
+            _showinfo(self, "Auto Element Identification", "No line/template in range.")
             return
         scores: dict[str, float] = {}
         nls=0.0
@@ -13813,7 +13818,7 @@ def multigaussian_model(x, *params):
         then repeated triples: amplitude, center, sigma
     """
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     y = np.full_like(x, float(params[0])) + float(params[1]) * x
     for i in range(2, len(params), 3):
@@ -13832,7 +13837,7 @@ def voigt_profile_unit(x, center, sigma, gamma):
     back to a pseudo-Voigt approximation so the program remains usable.
     """
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     sigma = max(abs(float(sigma)), 1e-12)
     gamma = max(abs(float(gamma)), 1e-12)
@@ -13856,7 +13861,7 @@ def voigt_profile_unit(x, center, sigma, gamma):
 def multivoigt_model(x, *params):
     """baseline + slope*x + sum(area_i * Voigt(center_i, sigma_i, gamma_i))."""
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     y = np.full_like(x, float(params[0])) + float(params[1]) * x
     for i in range(2, len(params), 4):
@@ -13889,7 +13894,7 @@ def pseudo_voigt(x, amp, center, wg, wl, baseline, slope, eta):
     routine, but preserves the LIBS++ parameters: center, Gaussian width, Lorentzian width.
     """
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     wg = abs(wg) or 1e-12
     wl = abs(wl) or 1e-12
@@ -13902,7 +13907,7 @@ def pseudo_voigt(x, amp, center, wg, wl, baseline, slope, eta):
 def lorentzian_component(x, amp, center, width):
     """Lorentzian peak with width interpreted as FWHM."""
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     width = abs(float(width)) or 1e-12
     return amp / (1.0 + 4.0 * ((x - center) / width) ** 2)
@@ -13914,7 +13919,7 @@ def halpha_lorentzian_model(x, *params):
     Parameter order: baseline, then repeated amp, center, FWHM triples.
     """
     if np is None:
-        raise RuntimeError("numpy non disponibile")
+        raise RuntimeError("numpy not available")
     x = np.asarray(x, dtype=float)
     y = np.full_like(x, float(params[0]))
     for i in range(1, len(params), 3):
@@ -13981,20 +13986,20 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
     def fit_region(self):
         if np is None:
-            _showerror(self, "Fit", "numpy non disponibile")
+            _showerror(self, "Fit", "numpy not available")
             return
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            _showerror(self, "Fit", "scipy.optimize non disponibile. Installare scipy.")
+            _showerror(self, "Fit", "scipy.optimize not available. Install scipy.")
             return
         if not self.master_app.spectra:
-            _showinfo(self, "Fit", "Caricare prima uno spettro.")
+            _showinfo(self, "Fit", "Load a spectrum first.")
             return
         sp = self.master_app.spectra[0]
         lines = self.candidate_lines()
         if not lines:
-            _showinfo(self, "Fit", "Nessuna riga template nel range visibile.")
+            _showinfo(self, "Fit", "No template line in the visible range.")
             return
         rg = safe_float(self.range_var.get(), 2.0)
         lo = min(t.wavelen for t in lines) - rg
@@ -14002,7 +14007,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i,x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
         if len(xs) < 6:
-            _showinfo(self, "Fit", "Troppi pochi punti nel range scelto.")
+            _showinfo(self, "Fit", "Too few points in the selected range.")
             return
         baseline = float(np.percentile(ys, 5))
         slope = 0.0
@@ -14035,7 +14040,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             self.tree.insert("", "end", values=(idx+1, f"{cen:.5f}", f"{amp:.5g}", f"{sig:.5g}", f"{t.wg:.5g}", "OK"))
         self.master_app.fit_overlay = (xs.tolist(), multigaussian_model(xs, *popt).tolist())
         self.master_app.redraw()
-        self.master_app.status(f"Fit multi-gaussiano: {len(lines)} righe")
+        self.master_app.status(f"Multi-Gaussian fit: {len(lines)} lines")
 
 
     def _active_spectrum(self):
@@ -14059,18 +14064,18 @@ class MultiGaussianFitWindow(tk.Toplevel):
         self.last_residual_y = []
         if np is None:
             if show_messages:
-                _showerror(self, "Fit Voigt", "numpy non disponibile")
-            return False, "numpy non disponibile", []
+                _showerror(self, "Fit Voigt", "numpy not available")
+            return False, "numpy not available", []
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            msg = "scipy.optimize non disponibile. Installare scipy."
+            msg = "scipy.optimize not available. Install scipy."
             if show_messages:
                 _showerror(self, "Fit Voigt", msg)
             return False, msg, []
         sp = self._active_spectrum()
         if sp is None or not getattr(sp, "x", None):
-            msg = "Caricare prima uno spettro."
+            msg = "Load a spectrum first."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
@@ -14079,7 +14084,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i, x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
         if len(xs) < 8:
-            msg = "Troppi pochi punti nella finestra visibile."
+            msg = "Too few points in the visible window."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
@@ -14088,7 +14093,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         else:
             lines = list(lines)
         if not lines:
-            msg = "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit."
+            msg = "No marked line in the visible window. Use search/manual marking before fitting."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
@@ -14162,7 +14167,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         self.master_app.redraw(preserve_view=True)
         if preserve_view:
             self.master_app.restore_plot_view(old_xlim, old_ylim)
-        self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
+        self.master_app.status(f"Voigt fit: {len(lines)} lines in the visible window")
         return True, f"Fit Voigt: {len(lines)} line(s)", fit_results
 
     def clear_overlay(self):
@@ -14182,7 +14187,7 @@ class ResidualsWindow(tk.Toplevel):
         self.minsize(500, 160)
         self.protocol("WM_DELETE_WINDOW", master.on_residuals_window_close)
         if Figure is None or FigureCanvasTkAgg is None:
-            ttk.Label(self, text="matplotlib non disponibile").pack(padx=20, pady=20)
+            ttk.Label(self, text="matplotlib not available").pack(padx=20, pady=20)
             return
         self.fig = Figure(figsize=(12, 2.5), dpi=100)
         self.ax = self.fig.add_subplot(111)
@@ -14258,15 +14263,15 @@ class NeHalphaWindow(tk.Toplevel):
 
     def run(self):
         if np is None:
-            _showerror(self, "Ne", "numpy non disponibile")
+            _showerror(self, "Ne", "numpy not available")
             return
         try:
             from scipy.optimize import curve_fit
         except Exception:
-            _showerror(self, "Ne", "scipy.optimize non disponibile")
+            _showerror(self, "Ne", "scipy.optimize not available")
             return
         if not self.master_app.spectra:
-            _showinfo(self, "Ne", "Caricare prima uno spettro.")
+            _showinfo(self, "Ne", "Load a spectrum first.")
             return
         sp = self.master_app.spectra[0]
         nlines = 2 if safe_int(self.vars["Number of lines"].get(), self.master_app.options.ha_lines) == 2 else 1
@@ -14291,7 +14296,7 @@ class NeHalphaWindow(tk.Toplevel):
         ys = np.asarray([y for _, y in points], dtype=float)
         min_points = 7 if nlines == 1 else 10
         if len(xs) < min_points:
-            _showinfo(self, "Ne", "Troppi pochi punti intorno ad Hα.")
+            _showinfo(self, "Ne", "Too few points around Hα.")
             return
         baseline = float(np.percentile(ys, 5))
         p0 = [baseline, self._initial_amplitude(xs, ys, wl1, baseline), wl1, dl1]
@@ -14398,7 +14403,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
             except Exception:
                 z = 1.0
             self.tree.insert("", "end", values=(sp, ion, len(pts), f"{kt:.4g}", f"{intercept:.4g}", f"{z:.4g}"))
-        self.master_app.status("Saha-Boltzmann: calcolo completato")
+        self.master_app.status("Saha-Boltzmann: calculation completed")
 
 
 def _roman_ion(ion: int) -> str:
@@ -14687,7 +14692,7 @@ class SACWindow(tk.Toplevel):
 
     def compute(self):
         if not self.master_app.template_lines:
-            _showinfo(self, "SAC", "Serve prima un template con righe assegnate.")
+            _showinfo(self, "SAC", "A template with assigned lines is required first.")
             return
         try:
             self.master_app.libs_db.filename = self.master_app.options.libs_db_file
@@ -14703,12 +14708,12 @@ class SACWindow(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         for r in rows:
             self.tree.insert("", "end", values=(r["index"], r["species"], f"{r['wavelength']:.4f}", f"{r['sac']:.6g}", f"{r['wl']:.6g}", f"{r['wl0']:.6g}", f"{r['knu0']:.4g}"))
-        self.master_app.status(f"SAC: {len(rows)} fattori calcolati e applicati al motore pyLIBS")
+        self.master_app.status(f"SAC: {len(rows)} factors calculated and applied to the pyLIBS engine")
 
     def clear(self):
         self.master_app.sac_factors = {}
         self.tree.delete(*self.tree.get_children())
-        self.master_app.status("SAC azzerato: il motore userà SAC=1")
+        self.master_app.status("SAC reset: the engine will use SAC=1")
 
 
 class StandardCorrectionWindow(tk.Toplevel):
@@ -14773,7 +14778,7 @@ class StandardCorrectionWindow(tk.Toplevel):
         self.refresh()
         if mismatch:
             _showwarning(self, "STD", "WARNING: Standard mismatch for: " + ", ".join(mismatch))
-        self.master_app.status(f"STD caricato: {fn}")
+        self.master_app.status(f"STD loaded: {fn}")
 
     def save_std(self):
         fn = filedialog.asksaveasfilename(initialdir=remembered_initial_dir(self.master_app.options), defaultextension=".STD", filetypes=[("Standard Data", "*.STD"), ("All", "*.*")])
@@ -14786,7 +14791,7 @@ class StandardCorrectionWindow(tk.Toplevel):
             if vals and str(vals[2]).strip():
                 lines.append(f"{vals[0]} {vals[2]}")
         Path(fn).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
-        self.master_app.status(f"STD salvato: {fn}")
+        self.master_app.status(f"STD saved: {fn}")
 
     def apply_correction(self):
         rows = getattr(self.master_app, "last_cflibs_rows", []) or []
@@ -14841,7 +14846,7 @@ class CFLibsWindow(tk.Toplevel):
         fits = libspp_fit_boltzmann(self.master_app, groups)
         kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
         if kt <= 0:
-            _showinfo(self, "CF-LIBS", "Nessun fit Boltzmann valido: servono almeno due righe per specie/ione con Aki, gk, Ek e intensità.")
+            _showinfo(self, "CF-LIBS", "No valid Boltzmann fit: at least two lines per species/ion with Aki, gk, Ek and intensity are required.")
             return
         libspp_recompute_q_at_temperature(fits, kt)
         ne = safe_float(self.ne_var.get(), self.master_app.options.ne_low)
@@ -15632,7 +15637,7 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def run_fit(self):
         if not self.master_app.spectra:
-            _showinfo(self, "Fit", "Caricare prima uno spettro.")
+            _showinfo(self, "Fit", "Load a spectrum first.")
             return
         if not self.manual_fit_lines:
             self.manual_fit_lines = self._sorted_template_lines()
@@ -15750,7 +15755,7 @@ class MainWindow(tk.Tk):
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
         self.wavelength_unit = "angstrom"
-        self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None
+        self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
         self.shift_capture_window=None
         self._build()
         try:
@@ -15766,7 +15771,7 @@ class MainWindow(tk.Tk):
     def _menu(self):
         m=tk.Menu(self)
         f=tk.Menu(m,tearoff=False); f.add_command(label="Open",command=self.open_spectrum); f.add_command(label="Append/import",command=self.append_spectrum); f.add_command(label="Save main",command=self.save_spectrum); f.add_separator(); f.add_command(label="Exit",command=self.on_close); m.add_cascade(label="File",menu=f)
-        e=tk.Menu(m,tearoff=False); e.add_command(label="Options",command=lambda:OptionsWindow(self)); m.add_cascade(label="Edit",menu=e)
+        e=tk.Menu(m,tearoff=False); e.add_command(label="Options",command=self.show_options); m.add_cascade(label="Edit",menu=e)
         u=tk.Menu(m,tearoff=False); u.add_command(label="Instrument response",command=self.show_response_window); u.add_command(label="Apply response now",command=self.apply_response_now); u.add_command(label="Vertical shift",command=lambda:VerticalShiftWindow(self)); u.add_command(label="Smooth main",command=self.smooth_main); u.add_command(label="nm → Å main",command=self.nm_to_a_main); m.add_cascade(label="Utilities",menu=u)
         t=tk.Menu(m,tearoff=False); t.add_command(label="Template Manager",command=self.show_template); t.add_command(label="Line Identification",command=self.show_line_identification); t.add_command(label="Element Locator",command=lambda:ElementLocatorWindow(self)); t.add_command(label="Auto Element Identification",command=lambda:AutoElementIdentificationWindow(self)); m.add_cascade(label="Template",menu=t)
         a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
@@ -15775,13 +15780,13 @@ class MainWindow(tk.Tk):
 
     def _toolbar(self):
         tb=ttk.Frame(self); tb.pack(fill="x", padx=4, pady=3)
-        for label,cmd in [("Open",self.open_spectrum),("Append",self.append_spectrum),("Active Spectra",self.show_active_spectra),("Options",lambda:OptionsWindow(self)),("Response",self.show_response_window),("Template",self.show_template),("Identify",self.show_line_identification),("Trace",self.show_trace_lines),("Element",lambda:ElementLocatorWindow(self)),("Auto ID",lambda:AutoElementIdentificationWindow(self)),("Batch",lambda:BatchStatisticsWindow(self)),("Shift",lambda:VerticalShiftWindow(self)),("Fit",self.show_fit),("Ne Hα",self.show_ne_halpha),("SAC",self.show_sac),("Saha",self.show_saha),("CF-LIBS",self.show_cflibs),("STD",self.show_standard_correction)]:
+        for label,cmd in [("Open",self.open_spectrum),("Append",self.append_spectrum),("Active Spectra",self.show_active_spectra),("Options",self.show_options),("Response",self.show_response_window),("Template",self.show_template),("Identify",self.show_line_identification),("Trace",self.show_trace_lines),("Element",lambda:ElementLocatorWindow(self)),("Auto ID",lambda:AutoElementIdentificationWindow(self)),("Batch",lambda:BatchStatisticsWindow(self)),("Shift",lambda:VerticalShiftWindow(self)),("Fit",self.show_fit),("Ne Hα",self.show_ne_halpha),("SAC",self.show_sac),("Saha",self.show_saha),("CF-LIBS",self.show_cflibs),("STD",self.show_standard_correction)]:
             ttk.Button(tb,text=label,command=cmd).pack(side="left",padx=2)
 
     def _plot(self):
         self.plot_frame=ttk.Frame(self); self.plot_frame.pack(fill="both", expand=True)
         if Figure is None:
-            ttk.Label(self.plot_frame,text="matplotlib non disponibile").pack(pady=30)
+            ttk.Label(self.plot_frame,text="matplotlib not available").pack(pady=30)
             self.ax=self.canvas=None; return
         self.fig=Figure(figsize=(8,5),dpi=100); self.ax=self.fig.add_subplot(111)
         self.canvas=FigureCanvasTkAgg(self.fig, master=self.plot_frame)
@@ -15826,7 +15831,7 @@ class MainWindow(tk.Tk):
         assign_default_spectrum_color(sp, len(self.spectra))
         self.spectra.append(sp)
         self.wavelength_unit = self.infer_wavelength_unit()
-        self.redraw(); self.status(f"Aggiunto spettro: {sp.name}")
+        self.redraw(); self.status(f"Added spectrum: {sp.name}")
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
     def open_spectrum(self):
@@ -15850,9 +15855,9 @@ class MainWindow(tk.Tk):
                 _showerror(self, "Compare", f"{fn}: {e}")
         self.redraw()
         if len(fns) == 1:
-            self.status(f"Spettro caricato: {first_fn}")
+            self.status(f"Spectrum loaded: {first_fn}")
         else:
-            self.status(f"Spettro caricato: {first_fn}; confronti: {len(fns)-1}")
+            self.status(f"Spectrum loaded: {first_fn}; comparisons: {len(fns)-1}")
 
     def append_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
@@ -15895,10 +15900,10 @@ class MainWindow(tk.Tk):
         except Exception as e: _showerror(self, "Response",str(e)); return
         self.options.response_file=fn
         if self.response_window and self.response_window.winfo_exists(): self.response_window.redraw()
-        self.status(f"Risposta caricata: {fn}")
+        self.status(f"Response loaded: {fn}")
 
     def apply_response_now(self):
-        if not self.response.x: _showinfo(self, "Response","Caricare prima la curva."); return
+        if not self.response.x: _showinfo(self, "Response","Load the curve first."); return
         for sp in self.spectra: sp.apply_response(self.response)
         self.redraw()
 
@@ -16889,7 +16894,7 @@ def find_peaks_basic(self):
             updated += 1
     self.notify_template_changed(redraw=False)
     self.redraw()
-    self.status(f"Find Peaks: {added} nuove righe, {updated} aggiornate; template totale {len(self.template_lines)}")
+    self.status(f"Find Peaks: {added} new lines, {updated} updated; template total {len(self.template_lines)}")
 
 def show_manual(self):
     manual = app_base_dir() / "docs" / "LIBS++_Manual.pdf"
@@ -17027,7 +17032,18 @@ def full_scale(self):
     self.ax.relim(); self.ax.autoscale(True); self.canvas.draw_idle(); self._update_xscroll()
 
 def show_options(self):
-    return OptionsWindow(self)
+    try:
+        if self.options_window is not None and self.options_window.winfo_exists():
+            self.options_window.lift()
+            try:
+                self.options_window.focus_force()
+            except Exception:
+                self.options_window.focus_set()
+            return self.options_window
+    except Exception:
+        self.options_window = None
+    self.options_window = OptionsWindow(self)
+    return self.options_window
 
 def show_vertical_shift(self):
     return VerticalShiftWindow(self)
