@@ -15437,6 +15437,158 @@ class StandardCorrectionWindow(tk.Toplevel):
             self.tree.insert("", "end", iid=el, values=(el, f"{mass:.6g}", f"{ref:.6g}" if ref else "", f"{factor:.6g}", f"{corr/total*100:.6g}"))
         self.master_app.status("Standard correction applicata alla tabella corrente")
 
+
+class CFLibsOPCWindow(tk.Toplevel):
+    """One Point Calibration from current CF-LIBS number percentages."""
+
+    def __init__(self, owner: "CFLibsWindow"):
+        super().__init__(owner)
+        self.owner = owner
+        self.master_app = owner.master_app
+        self.title("One Point Calibration")
+        self.geometry("760x500")
+        self.factors: dict[str, float] = {}
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=6, pady=5)
+        ttk.Button(top, text="Compute OPC", command=self.compute).pack(side="left")
+        ttk.Button(top, text="Save Calibration...", command=self.save).pack(side="left", padx=4)
+        ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
+        cols = ("Element", "CF-LIBS Number %", "Nominal Number %", "Correction Factor")
+        self.tree = ttk.Treeview(self, columns=cols, show="headings")
+        for c in cols:
+            self.tree.heading(c, text=c)
+            self.tree.column(c, width=165, anchor="center")
+        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        self.tree.bind("<Double-1>", self.edit_nominal)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.refresh()
+        self.lift(owner)
+        try:
+            self.focus_force()
+        except Exception:
+            self.focus_set()
+
+    def refresh(self):
+        self.tree.delete(*self.tree.get_children())
+        rows = self.owner.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
+        for row in rows:
+            element = row.get("element", "")
+            number_percent = safe_float(row.get("number_percent", 0.0), 0.0)
+            nominal = safe_float(getattr(self.master_app, "opc_nominal_percent", {}).get(element, ""), 0.0)
+            factor = self.factors.get(element, 0.0)
+            self.tree.insert("", "end", iid=element, values=(
+                element,
+                format_template_display_value(number_percent),
+                format_template_display_value(nominal) if nominal > 0.0 else "",
+                format_template_display_value(factor) if factor > 0.0 else "",
+            ))
+
+    def edit_nominal(self, _event=None):
+        item = self.tree.focus()
+        if not item:
+            return
+        vals = list(self.tree.item(item, "values"))
+        element = vals[0]
+        current = safe_float(vals[2], 0.0)
+        value = simpledialog.askfloat(
+            "Nominal Number %",
+            f"{element} nominal number %:",
+            initialvalue=current if current > 0.0 else safe_float(vals[1], 0.0),
+            minvalue=0.0,
+            parent=_prepare_messagebox_parent(self),
+        )
+        if value is None:
+            return
+        nominal = getattr(self.master_app, "opc_nominal_percent", None)
+        if nominal is None:
+            self.master_app.opc_nominal_percent = {}
+            nominal = self.master_app.opc_nominal_percent
+        nominal[element] = value
+        self.refresh()
+
+    def compute(self):
+        factors = {}
+        for iid in self.tree.get_children():
+            vals = list(self.tree.item(iid, "values"))
+            element = vals[0]
+            cflibs_percent = safe_float(vals[1], 0.0)
+            nominal_percent = safe_float(vals[2], 0.0)
+            if cflibs_percent > 0.0 and nominal_percent > 0.0:
+                factors[element] = nominal_percent / cflibs_percent
+            else:
+                factors[element] = 0.0
+        self.factors = factors
+        self.refresh()
+        self.master_app.status("OPC correction factors computed.")
+
+    def _source_spectrum_filename(self):
+        spectra = getattr(self.master_app, "spectra", []) or []
+        if not spectra:
+            return ""
+        return getattr(spectra[0], "filename", "") or getattr(spectra[0], "name", "")
+
+    def _calibration_rows(self):
+        if not self.factors:
+            self.compute()
+        rows = []
+        for line in getattr(self.master_app, "template_lines", []) or []:
+            element = str(getattr(line, "specie", "") or "").strip().capitalize()
+            if not element:
+                continue
+            factor = safe_float(self.factors.get(element, 0.0), 0.0)
+            if factor <= 0.0:
+                continue
+            wavelength = abs(getattr(line, "fitwavelen", 0.0)) or getattr(line, "wavelen", 0.0)
+            if not wavelength:
+                continue
+            species = f"{element} {_roman_ion(getattr(line, 'ion', 0)) if getattr(line, 'ion', 0) else ''}".strip()
+            rows.append((float(wavelength), factor, element, species))
+        rows.sort(key=lambda r: r[0])
+        return rows
+
+    def save(self):
+        calibration_rows = self._calibration_rows()
+        if not calibration_rows:
+            _showinfo(self, "OPC", "No OPC calibration rows are available to save.")
+            return
+        fn = filedialog.asksaveasfilename(
+            parent=_prepare_messagebox_parent(self),
+            title="Save OPC Calibration",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            defaultextension=".opc",
+            filetypes=[("OPC calibration", "*.opc"), ("Text files", "*.txt"), ("All", "*.*")],
+        )
+        if not fn:
+            return
+        remember_working_dir(self.master_app.options, fn)
+        lines = [
+            "# pyLIBS One Point Calibration",
+            f"# date: {datetime.now().isoformat(timespec='seconds')}",
+            f"# source spectrum: {self._source_spectrum_filename() or 'N/A'}",
+            f"# temperature_eV: {self.owner.last_kt:.8g}",
+            f"# electron_density_e_cm3: {self.owner.last_ne:.8g}",
+            "# formula: correction_factor = nominal_number_percent / cflibs_number_percent",
+            "# columns: wavelength correction_factor element species",
+        ]
+        for wavelength, factor, element, species in calibration_rows:
+            lines.append(f"{wavelength:.8g} {factor:.8g} {element} {species}")
+        try:
+            Path(fn).write_text("\n".join(lines) + "\n", encoding="utf-8")
+        except Exception as e:
+            _showerror(self, "OPC", f"Could not save OPC calibration:\n{e}")
+            return
+        self.master_app.status(f"OPC calibration saved: {fn}")
+        _showinfo(self, "OPC", f"OPC calibration saved:\n{fn}")
+
+    def close(self):
+        try:
+            if getattr(self.owner, "opc_window", None) is self:
+                self.owner.opc_window = None
+        except Exception:
+            pass
+        self.destroy()
+
+
 class CFLibsWindow(tk.Toplevel):
     """CF-LIBS v8 original-like engine.
 
@@ -15451,6 +15603,7 @@ class CFLibsWindow(tk.Toplevel):
         self.geometry("1100x760")
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
+        ttk.Button(top, text="OPC", command=self.show_opc).pack(side="left", padx=4)
         ttk.Button(top, text="Show Report", command=self.show_report).pack(side="left", padx=4)
         ttk.Label(top, text="kT eV").pack(side="left", padx=(12,2))
         default_kt = safe_float(getattr(master, "session_temperature", 0.0), 0.0) or 1.0
@@ -15480,6 +15633,7 @@ class CFLibsWindow(tk.Toplevel):
         self.last_ne_source = "default"
         self.report_window = None
         self.report_temp_dir = None
+        self.opc_window = None
         self.plot_points = []
         cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
@@ -15532,6 +15686,21 @@ class CFLibsWindow(tk.Toplevel):
         response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
         self.status_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, elements={len(rows)}, skipped={skipped}; {response_text}")
         self.master_app.status(f"CF-LIBS: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, {len(rows)} element(s), skipped {skipped}")
+
+    def show_opc(self):
+        rows = self.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
+        if not rows:
+            _showinfo(self, "OPC", "No CF-LIBS results are available for OPC.")
+            return
+        if self.opc_window is not None and self.opc_window.winfo_exists():
+            self.opc_window.refresh()
+            self.opc_window.lift(self)
+            try:
+                self.opc_window.focus_force()
+            except Exception:
+                self.opc_window.focus_set()
+            return
+        self.opc_window = CFLibsOPCWindow(self)
 
     def show_report(self):
         rows = self.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
@@ -17052,6 +17221,7 @@ class MainWindow(tk.Tk):
         self.last_halpha_result: Optional[dict] = None
         self.last_saha_boltzmann: Optional[dict] = None
         self.standard_refs: dict[str, str] = {}
+        self.opc_nominal_percent: dict[str, float] = {}
         self.session_ne: Optional[float] = None
         self.session_ne_source: Optional[str] = None
         self.session_temperature: Optional[float] = None
