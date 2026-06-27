@@ -16374,46 +16374,73 @@ def build_retro_toolbar(self):
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
     ]
-    icon_dir = Path(__file__).resolve().parent / "icons"
+    icon_dirs = [
+        Path(__file__).resolve().parent / "icons",
+        Path(__file__).resolve().parent / "Icons",
+    ]
     icon_names = {
         "Open": "open.png",
         "Compare": "compare.png",
         "Append": "append.png",
+        "Clear": "clear.png",
+        "Active Spectra": "fit.png",
         "Save": "save.png",
         "Print": "print.png",
         "Full Y": "full_y.png",
         "Full X": "full_x.png",
         "Full Scale": "full_view.png",
         "Load Template": "load_template.png",
+        "Show Template": "show_template.png",
         "Trace": "trace.png",
-        "Autofit": "fit.png",
-        "Manual Fit": "fit.png",
+        "Ne from H": "H_alpha.png",
+        "Autofit": "fit_auto.png",
+        "Manual Fit": "fit_manual.png",
         "Saha Boltzmann": "calculator.png",
         "CF LIBS": "database.png",
     }
     icon_fallbacks = {
         "Full Y": "zoom_y_out.png",
         "Full X": "zoom_x_out.png",
+        "Autofit": "fit.png",
+        "Manual Fit": "fit.png",
     }
     tooltip_text = {
         "Trace": "Trace Lines",
         "Full Scale": "Full View",
     }
+    def find_icon(filename):
+        if not filename:
+            return None
+        for icon_dir in icon_dirs:
+            icon_path = icon_dir / filename
+            if icon_path.exists():
+                return icon_path
+        filename_lower = filename.lower()
+        for icon_dir in icon_dirs:
+            if not icon_dir.exists():
+                continue
+            for icon_path in sorted(icon_dir.iterdir()):
+                if icon_path.name.lower() == filename_lower:
+                    return icon_path
+        return None
+
     self.toolbar_icons = {}
+    self.toolbar_icon_files = {}
     self.toolbar_tooltips = []
     self.toolbar_missing_icons = []
     for label, cmd in buttons:
         icon_name = icon_names.get(label)
-        icon_path = icon_dir / icon_name if icon_name else None
-        if icon_path and not icon_path.exists():
+        icon_path = find_icon(icon_name)
+        if not icon_path:
             fallback_name = icon_fallbacks.get(label)
-            fallback_path = icon_dir / fallback_name if fallback_name else None
-            if fallback_path and fallback_path.exists():
+            fallback_path = find_icon(fallback_name)
+            if fallback_path:
                 icon_name = fallback_name
                 icon_path = fallback_path
-        if icon_path and icon_path.exists():
+        if icon_path:
             image = tk.PhotoImage(file=str(icon_path))
             self.toolbar_icons[label] = image
+            self.toolbar_icon_files[label] = str(icon_path)
             button = ttk.Button(self.retro_toolbar, image=image, command=cmd)
             button.pack(side="left", padx=1, pady=1)
             self.toolbar_tooltips.append(ToolbarTooltip(button, tooltip_text.get(label, label)))
