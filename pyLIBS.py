@@ -32,6 +32,7 @@ Dipendenze consigliate:
 from __future__ import annotations
 
 import csv
+from bisect import bisect_right
 import math
 import os
 import re
@@ -11918,6 +11919,7 @@ class Spectrum:
     filename: str = ""
     visible: bool = True
     color: Optional[str] = None
+    response_corrected: bool = False
 
     @classmethod
     def from_ascii(cls, filename: str, convert_nm_to_a: bool = False, name: Optional[str] = None) -> "Spectrum":
@@ -12025,10 +12027,23 @@ class Spectrum:
             half = window // 2
             self.y = [sum(self.y[max(0, i-half):min(len(self.y), i+half+1)]) / (min(len(self.y), i+half+1)-max(0, i-half)) for i in range(len(self.y))]
 
-    def apply_response(self, response: "ResponseCurve"):
-        if not response.x:
+    def apply_response(self, response: Optional["ResponseCurve"]):
+        if self.response_corrected or response is None or not response.x:
             return
-        self.y = [yy / response.value_at(xx) if response.value_at(xx) else yy for xx, yy in zip(self.x, self.y)]
+        response_values = response.values_at(self.x)
+        if np is not None:
+            yy = np.asarray(self.y, dtype=float)
+            rv = np.asarray(response_values, dtype=float)
+            corrected = yy.copy()
+            valid = np.isfinite(rv) & (rv != 0.0)
+            corrected[valid] = yy[valid] / rv[valid]
+            self.y = corrected.tolist()
+        else:
+            corrected = []
+            for xx, yy in zip(response_values, self.y):
+                corrected.append(yy / xx if xx and math.isfinite(xx) else yy)
+            self.y = corrected
+        self.response_corrected = True
 
     def shifted(self, offset: float, name: str) -> "Spectrum":
         return Spectrum(list(self.x), [v + offset for v in self.y], name=name)
@@ -12138,26 +12153,72 @@ class ResponseCurve:
     x: list[float] = field(default_factory=list)
     y: list[float] = field(default_factory=list)
     filename: str = ""
+    _x_sorted: list[float] = field(default_factory=list, init=False, repr=False)
+    _y_sorted: list[float] = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self):
+        self._prepare_cache()
 
     @classmethod
     def from_ascii(cls, filename: str, convert_nm_to_a: bool = False):
         sp = Spectrum.from_ascii(filename, convert_nm_to_a)
         return cls(sp.x, sp.y, filename)
 
+    def _prepare_cache(self):
+        cleaned = []
+        for xx, yy in zip(self.x, self.y):
+            try:
+                xx = float(xx)
+                yy = float(yy)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(xx) and math.isfinite(yy):
+                cleaned.append((xx, yy))
+        cleaned.sort(key=lambda p: p[0])
+        if not cleaned:
+            self.x = []
+            self.y = []
+            self._x_sorted = []
+            self._y_sorted = []
+            return
+
+        x_sorted = []
+        y_sorted = []
+        for xx, yy in cleaned:
+            if x_sorted and xx == x_sorted[-1]:
+                y_sorted[-1] = yy
+            else:
+                x_sorted.append(xx)
+                y_sorted.append(yy)
+        self.x = list(x_sorted)
+        self.y = list(y_sorted)
+        self._x_sorted = x_sorted
+        self._y_sorted = y_sorted
+
     def value_at(self, wavelength: float) -> float:
-        if not self.x:
+        if not self._x_sorted:
             return 1.0
-        pairs = sorted(zip(self.x, self.y), key=lambda p: p[0])
-        xs, ys = [p[0] for p in pairs], [p[1] for p in pairs]
+        xs, ys = self._x_sorted, self._y_sorted
         if wavelength <= xs[0]:
             return ys[0]
         if wavelength >= xs[-1]:
             return ys[-1]
-        for i in range(1, len(xs)):
-            if wavelength < xs[i]:
-                x0, x1, y0, y1 = xs[i-1], xs[i], ys[i-1], ys[i]
-                return y1 + (y0 - y1) / (x0 - x1) * (wavelength - x1) if x0 != x1 else y1
-        return 1.0
+        i = bisect_right(xs, wavelength)
+        x0, x1, y0, y1 = xs[i-1], xs[i], ys[i-1], ys[i]
+        return y1 + (y0 - y1) / (x0 - x1) * (wavelength - x1) if x0 != x1 else y1
+
+    def values_at(self, wavelengths: list[float]) -> list[float]:
+        if not self._x_sorted:
+            return [1.0 for _ in wavelengths]
+        if np is not None:
+            return np.interp(
+                np.asarray(wavelengths, dtype=float),
+                np.asarray(self._x_sorted, dtype=float),
+                np.asarray(self._y_sorted, dtype=float),
+                left=self._y_sorted[0],
+                right=self._y_sorted[-1],
+            ).tolist()
+        return [self.value_at(wavelength) for wavelength in wavelengths]
 
 
 @dataclass
@@ -12737,7 +12798,9 @@ class OptionsWindow(tk.Toplevel):
             self.master_app.libs_db.filename = str(dbp)
 
     def ok(self):
+        old_response_file = getattr(self.master_app.options, "response_file", "")
         self.apply_to_options()
+        self.reload_response_if_changed(old_response_file)
         self.master_app.status("Options updated")
         self.close()
 
@@ -12750,9 +12813,16 @@ class OptionsWindow(tk.Toplevel):
         self.destroy()
 
     def save(self):
+        old_response_file = getattr(self.master_app.options, "response_file", "")
         self.apply_to_options()
+        self.reload_response_if_changed(old_response_file)
         path = save_pylibs_ini(self.master_app.options)
         self.master_app.status(f"Options saved: {path}")
+
+    def reload_response_if_changed(self, old_response_file):
+        if self.master_app.options.response_file != old_response_file:
+            silent = not str(self.master_app.options.response_file or "").strip()
+            self.master_app.load_configured_response(silent=silent)
 
 
 class ActiveSpectraWindow(tk.Toplevel):
@@ -12904,7 +12974,7 @@ class ResponseWindow(tk.Toplevel):
         self.ax.set_ylabel("Response")
         self.ax.grid(True)
         r = self.master_app.response
-        if r.x:
+        if r is not None and r.x:
             self.ax.plot(r.x, r.y, linewidth=0.9)
         self.canvas.draw_idle()
 
@@ -13439,7 +13509,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         self.listbox.delete(0,"end")
 
     def _load_spectrum(self, filename):
-        return load_spectrum_for_open(filename, self.master_app.options)
+        return self.master_app.load_spectrum_with_corrections(filename)
 
     def join_pairs(self):
         files = self.paths()
@@ -15737,7 +15807,8 @@ class MainWindow(tk.Tk):
         self.loaded_ini_path = load_pylibs_ini(self.options)
         self.libs_db=LibsDatabase(self.options.libs_db_file)
         self.spectra: list[Spectrum]=[]
-        self.response=ResponseCurve()
+        self.response = None
+        self.load_configured_response(silent=True)
         self.template_lines: list[TemplateLine]=[]
         self.atomic_lines: list[AtomicLine]=[]
         self.element_markers: list[AtomicLine]=[]
@@ -15834,14 +15905,42 @@ class MainWindow(tk.Tk):
         self.redraw(); self.status(f"Added spectrum: {sp.name}")
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
+    def load_configured_response(self, silent=False):
+        response_file = str(getattr(self.options, "response_file", "") or "").strip()
+        if not response_file:
+            self.response = None
+            return False
+        path = Path(response_file)
+        if not path.exists():
+            self.response = None
+            if not silent:
+                _showwarning(self, "Response", f"Response file not found:\n{response_file}")
+            return False
+        try:
+            self.response = ResponseCurve.from_ascii(str(path), self.options.convert_to_angstrom)
+            response_window = getattr(self, "response_window", None)
+            if response_window and response_window.winfo_exists():
+                self.response_window.redraw()
+            return True
+        except Exception as e:
+            self.response = None
+            if not silent:
+                _showwarning(self, "Response", f"Could not load response file:\n{response_file}\n\n{e}")
+            return False
+
+    def load_spectrum_with_corrections(self, filename):
+        sp = load_spectrum_for_open(filename, self.options)
+        if self.options.apply_response and self.options.apply_before and self.response is not None:
+            sp.apply_response(self.response)
+        return sp
+
     def open_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
         if not fns: return
         remember_working_dir(self.options, fns)
         first_fn=fns[0]
         try:
-            sp=load_spectrum_for_open(first_fn,self.options)
-            if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
+            sp=self.load_spectrum_with_corrections(first_fn)
             if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
             assign_default_spectrum_color(sp, 0)
             self.spectra=[sp]
@@ -15850,7 +15949,7 @@ class MainWindow(tk.Tk):
             _showerror(self, "Open",str(e)); return
         for fn in fns[1:]:
             try:
-                self.add_spectrum(load_spectrum_for_open(fn, self.options))
+                self.add_spectrum(self.load_spectrum_with_corrections(fn))
             except Exception as e:
                 _showerror(self, "Compare", f"{fn}: {e}")
         self.redraw()
@@ -15867,8 +15966,7 @@ class MainWindow(tk.Tk):
         merged = self.spectra[0] if self.spectra else None
         for fn in fns:
             try:
-                sp=load_spectrum_for_open(fn,self.options)
-                if self.options.apply_response and self.options.apply_before: sp.apply_response(self.response)
+                sp=self.load_spectrum_with_corrections(fn)
                 if merged is None:
                     merged = sp
                 else:
@@ -15896,14 +15994,14 @@ class MainWindow(tk.Tk):
             self.load_response_file(fn)
 
     def load_response_file(self, fn):
-        try: self.response=ResponseCurve.from_ascii(fn,self.options.convert_to_angstrom)
-        except Exception as e: _showerror(self, "Response",str(e)); return
         self.options.response_file=fn
+        if not self.load_configured_response(silent=False):
+            return
         if self.response_window and self.response_window.winfo_exists(): self.response_window.redraw()
         self.status(f"Response loaded: {fn}")
 
     def apply_response_now(self):
-        if not self.response.x: _showinfo(self, "Response","Load the curve first."); return
+        if self.response is None or not self.response.x: _showinfo(self, "Response","Load the curve first."); return
         for sp in self.spectra: sp.apply_response(self.response)
         self.redraw()
 
@@ -16535,7 +16633,7 @@ def compare_spectrum(self):
     remember_working_dir(self.options, files)
     for fn in files:
         try:
-            self.add_spectrum(load_spectrum_for_open(fn, self.options))
+            self.add_spectrum(self.load_spectrum_with_corrections(fn))
         except Exception as e:
             _showerror(self, "Compare", f"{fn}: {e}")
     self.redraw()
