@@ -14448,6 +14448,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.current_ne = None
         self.representative_kt = None
         self.last_valid_mean_kt = None
+        self.auto_excluded_elements = set()
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute Plot", command=self.compute).pack(side="left")
         ttk.Label(top, text="Temperature mode").pack(side="left", padx=(12, 3))
@@ -14518,11 +14519,33 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.saha_fits = fits
         self.skipped_lines = skipped
         self.current_ne = ne
-        self.included_elements = set(fits.keys())
+        self.included_elements = self._default_included_elements(fits)
+        self.auto_excluded_elements = set(fits.keys()) - set(self.included_elements)
         self.representative_kt = self._mean_temperature()
         self.last_valid_mean_kt = self.representative_kt
+        if self.representative_kt is None:
+            self.summary_var.set("No elements inside the configured temperature range")
+            _showwarning(self, "Saha-Boltzmann", "No element temperatures are inside the configured Options temperature range.")
         self.populate_tree()
         self.refresh_temperature_display()
+
+    def _temperature_range(self):
+        low = safe_float(getattr(self.master_app.options, "kt_low", 0.0), 0.0)
+        high = safe_float(getattr(self.master_app.options, "kt_high", 0.0), 0.0)
+        if high and low > high:
+            low, high = high, low
+        return low, high
+
+    def _temperature_in_range(self, kt):
+        low, high = self._temperature_range()
+        if low and kt <= low:
+            return False
+        if high and kt >= high:
+            return False
+        return kt > 0.0
+
+    def _default_included_elements(self, fits):
+        return {element for element, result in fits.items() if self._temperature_in_range(safe_float(result.get("kt", 0.0), 0.0))}
 
     def populate_tree(self):
         self.tree.delete(*self.tree.get_children())
@@ -14550,6 +14573,11 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 total += kt * nlines
                 weight += nlines
         return total / weight if weight else None
+
+    def _fixed_temperature_refits(self, representative_kt):
+        if not representative_kt or representative_kt <= 0.0:
+            return {}
+        return libspp_refit_saha_fixed_temperature(self.saha_groups, representative_kt)
 
     def selected_element(self):
         selected = self.tree.selection()
@@ -14606,15 +14634,19 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 representative_kt = None
                 self.summary_var.set("Select an element for single-element temperature")
         else:
-            representative_kt = self.representative_kt
+            representative_kt = self.representative_kt or self.last_valid_mean_kt
             included = len(self.included_elements)
             total = len(self.saha_fits)
+            low, high = self._temperature_range()
             if representative_kt is None:
-                self.summary_var.set(f"No included elements; Ne={self.current_ne:.3e} e/cm3, skipped {self.skipped_lines}")
+                self.summary_var.set(
+                    f"No included elements in kT range {low:g} - {high:g} eV; "
+                    f"Ne={self.current_ne:.3e} e/cm3, skipped {self.skipped_lines}"
+                )
             else:
                 self.summary_var.set(
                     f"Mean kT={representative_kt:.4g} eV, Ne={self.current_ne:.3e} e/cm3, "
-                    f"included {included}/{total}, skipped {self.skipped_lines}; {response_text}"
+                    f"included {included}/{total}, range {low:g}-{high:g} eV, skipped {self.skipped_lines}; {response_text}"
                 )
                 self.master_app.status(
                     f"Saha-Boltzmann: mean kT={representative_kt:.4g} eV, included {included}/{total}, Ne={self.current_ne:.3e} e/cm3"
@@ -14646,6 +14678,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
     def _draw_plot(self, groups, fits, representative_kt=None):
         if self.ax is None:
             return
+        fixed_refits = self._fixed_temperature_refits(representative_kt)
         self.ax.clear()
         self.ax.set_title("Saha-Boltzmann")
         self.ax.set_xlabel("Upper energy / Saha-Boltzmann coordinate (eV)")
@@ -14665,14 +14698,11 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 if x0 == x1:
                     x0 -= 0.05
                     x1 += 0.05
-                y0 = result["slope"] * x0 + result["q"]
-                y1 = result["slope"] * x1 + result["q"]
-                self.ax.plot([x0, x1], [y0, y1], linewidth=1.0, alpha=alpha)
-                if representative_kt and representative_kt > 0.0 and (self.mode_var.get() != "Mean temperature" or included):
-                    mean_slope = -1.0 / representative_kt
-                    my0 = mean_slope * x0 + result["q"]
-                    my1 = mean_slope * x1 + result["q"]
-                    self.ax.plot([x0, x1], [my0, my1], linestyle="--", linewidth=0.9, alpha=0.75)
+                fixed = fixed_refits.get(element)
+                if fixed:
+                    y0 = fixed["slope"] * x0 + fixed["q_fixed"]
+                    y1 = fixed["slope"] * x1 + fixed["q_fixed"]
+                    self.ax.plot([x0, x1], [y0, y1], linewidth=1.0, alpha=alpha)
         self.ax.legend(loc="best", fontsize=8)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
@@ -14835,6 +14865,26 @@ def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
         results[element] = {
             "species": element, "nlines": len(pts), "kt": kt, "q": intercept,
             "slope": slope, "z1": z1, "z2": z2, "points": pts
+        }
+    return results
+
+
+def libspp_refit_saha_fixed_temperature(groups: dict[str, list[dict]], kt: float):
+    if kt <= 0.0:
+        return {}
+    slope = -1.0 / kt
+    results = {}
+    for element, pts in groups.items():
+        if not pts:
+            continue
+        intercept = sum(p["y"] - slope * p["x"] for p in pts) / len(pts)
+        results[element] = {
+            "species": element,
+            "nlines": len(pts),
+            "kt": kt,
+            "slope": slope,
+            "q_fixed": intercept,
+            "points": pts,
         }
     return results
 
