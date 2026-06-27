@@ -32,6 +32,7 @@ Dipendenze consigliate:
 from __future__ import annotations
 
 import csv
+import base64
 from bisect import bisect_right
 from datetime import datetime
 import html
@@ -42,6 +43,7 @@ import sqlite3
 import struct
 import subprocess
 import sys
+import tempfile
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -15377,7 +15379,7 @@ class CFLibsWindow(tk.Toplevel):
         self.geometry("1100x760")
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
-        ttk.Button(top, text="Save Report...", command=self.save_report).pack(side="left", padx=4)
+        ttk.Button(top, text="Show Report", command=self.show_report).pack(side="left", padx=4)
         ttk.Label(top, text="kT eV").pack(side="left", padx=(12,2))
         default_kt = safe_float(getattr(master, "session_temperature", 0.0), 0.0) or 1.0
         self.kt_var = tk.StringVar(value=f"{default_kt:.6g}")
@@ -15403,6 +15405,7 @@ class CFLibsWindow(tk.Toplevel):
         self.last_response_used = False
         self.last_temperature_source = "default"
         self.last_ne_source = "default"
+        self.report_window = None
         cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -15455,33 +15458,39 @@ class CFLibsWindow(tk.Toplevel):
         self.status_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, elements={len(rows)}, skipped={skipped}; {response_text}")
         self.master_app.status(f"CF-LIBS: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, {len(rows)} element(s), skipped {skipped}")
 
-    def save_report(self):
+    def show_report(self):
         rows = self.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
         if not rows:
-            _showinfo(self, "CF-LIBS", "No CF-LIBS results are available to save.")
+            _showinfo(self, "CF-LIBS", "No CF-LIBS results are available to show.")
             return
-        fn = filedialog.asksaveasfilename(
-            title="Save CF-LIBS Report",
-            initialdir=remembered_initial_dir(self.master_app.options),
-            defaultextension=".html",
-            filetypes=[("HTML report", "*.html"), ("Text report", "*.txt"), ("All", "*.*")]
-        )
-        if not fn:
-            return
-        remember_working_dir(self.master_app.options, fn)
-        report_path = Path(fn)
-        image_path = report_path.with_name(f"{report_path.stem}_spectrum.png")
+        image_path = Path(tempfile.gettempdir()) / f"pylibs_cflibs_report_{id(self)}_spectrum.png"
         image_info = self._export_spectrum_png(image_path)
-        if report_path.suffix.lower() == ".txt":
-            content = self.build_cflibs_report_text(rows, image_info)
-        else:
-            content = self.build_cflibs_report_html(rows, image_info, report_path)
+        content = self.build_cflibs_report_html(rows, image_info)
+        if self.report_window is not None and self.report_window.winfo_exists():
+            self.report_window.update_report(content, "html", ".html")
+            self.report_window.lift(self)
+            try:
+                self.report_window.focus_force()
+            except Exception:
+                self.report_window.focus_set()
+            return
+        self.report_window = CFLibsReportPreviewWindow(self, content, "html", ".html")
+
+    def on_report_window_close(self):
+        self.report_window = None
+
+    def save_report(self):
+        self.show_report()
+
+    def write_report_content(self, filename: str, content: str):
         try:
-            report_path.write_text(content, encoding="utf-8")
+            Path(filename).write_text(content, encoding="utf-8")
         except Exception as e:
             _showerror(self, "CF-LIBS", f"Could not save report:\n{e}")
             return
-        self.master_app.status(f"CF-LIBS report saved: {fn}")
+        remember_working_dir(self.master_app.options, filename)
+        self.master_app.status(f"CF-LIBS report saved: {filename}")
+        _showinfo(self, "CF-LIBS", f"Report saved:\n{filename}")
 
     def _fmt(self, value):
         if value is None or value == "":
@@ -15530,9 +15539,15 @@ class CFLibsWindow(tk.Toplevel):
             if not getattr(self.master_app, "fig", None):
                 return {"path": None, "error": "Main spectrum plot is not available."}
             self.master_app.fig.savefig(str(image_path), dpi=150)
-            return {"path": image_path, "error": None}
+            data_uri = None
+            try:
+                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                data_uri = f"data:image/png;base64,{encoded}"
+            except Exception:
+                data_uri = None
+            return {"path": image_path, "data_uri": data_uri, "error": None}
         except Exception as e:
-            return {"path": None, "error": str(e)}
+            return {"path": None, "data_uri": None, "error": str(e)}
 
     def _finite_values(self, values):
         out = []
@@ -15679,7 +15694,6 @@ class CFLibsWindow(tk.Toplevel):
             ["H-alpha intensity", self._fmt(result.get("intensity"))],
             ["H-alpha integral", self._fmt(result.get("integral"))],
             ["Electron density from H-alpha", f"{self._fmt(result.get('ne'))} e/cm3"],
-            ["Formula/source", result.get("formula", "N/A")],
         ]
         return self._html_table(["Field", "Value"], rows)
 
@@ -15698,20 +15712,19 @@ class CFLibsWindow(tk.Toplevel):
             self._saha_rows(),
         )
 
-    def build_cflibs_report_html(self, rows, image_info, report_path: Path):
+    def build_cflibs_report_html(self, rows, image_info, report_path: Optional[Path] = None):
         spectrum_info = self._spectrum_info()
         response_info = self._response_info()
         image_path = image_info.get("path")
         image_block = "<p>Spectrum image export failed: " + html.escape(str(image_info.get("error"))) + "</p>"
         if image_path:
-            try:
-                rel = os.path.relpath(str(image_path), str(report_path.parent))
-            except Exception:
-                rel = str(image_path)
-            image_block = (
-                f"<p>PNG file: {html.escape(str(image_path))}</p>"
-                f"<img src=\"{html.escape(rel)}\" alt=\"Current spectrum plot\">"
-            )
+            src = image_info.get("data_uri") or str(image_path)
+            if report_path and not image_info.get("data_uri"):
+                try:
+                    src = os.path.relpath(str(image_path), str(report_path.parent))
+                except Exception:
+                    src = str(image_path)
+            image_block = f"<p>PNG file: {html.escape(str(image_path))}</p><img src=\"{html.escape(src)}\" alt=\"Current spectrum plot\">"
         template_note = "pyLIBS stores the fitted line integral in the template intensity field used for CF-LIBS."
         style = """
 body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
@@ -15795,7 +15808,7 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
         data.extend(["", "Hydrogen Stark broadening"])
         halpha = getattr(self.master_app, "last_halpha_result", None) or {}
         if halpha and halpha.get("available"):
-            for key in ("center", "corrected_lorentzian_width", "lorentzian_width", "gaussian_width", "intensity", "integral", "ne", "formula"):
+            for key in ("center", "corrected_lorentzian_width", "lorentzian_width", "gaussian_width", "intensity", "integral", "ne"):
                 data.append(f"{key}: {self._fmt(halpha.get(key))}")
         else:
             data.append("Not available")
@@ -15852,6 +15865,75 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
         self.ax.legend(loc="best", fontsize=8)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
+
+
+class CFLibsReportPreviewWindow(tk.Toplevel):
+    """Single CF-LIBS report preview window with explicit save action."""
+
+    def __init__(self, owner: CFLibsWindow, content: str, report_format: str, default_extension: str):
+        super().__init__(owner)
+        self.owner = owner
+        self.content = content
+        self.report_format = report_format
+        self.default_extension = default_extension
+        self.title("CF-LIBS Report Preview")
+        self.geometry("950x720")
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=6, pady=5)
+        ttk.Button(top, text="Save...", command=self.save).pack(side="left")
+        ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
+        ttk.Label(top, text="HTML report source preview").pack(side="left", padx=12)
+
+        frame = ttk.Frame(self)
+        frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        self.text = tk.Text(frame, wrap="none", font=("TkFixedFont", 10))
+        yscroll = ttk.Scrollbar(frame, orient="vertical", command=self.text.yview)
+        xscroll = ttk.Scrollbar(frame, orient="horizontal", command=self.text.xview)
+        self.text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        self.text.grid(row=0, column=0, sticky="nsew")
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.update_report(content, report_format, default_extension)
+        self.lift(owner)
+        try:
+            self.focus_force()
+        except Exception:
+            self.focus_set()
+
+    def update_report(self, content: str, report_format: str, default_extension: str):
+        self.content = content
+        self.report_format = report_format
+        self.default_extension = default_extension
+        self.text.configure(state="normal")
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", content)
+        self.text.configure(state="disabled")
+        self.text.see("1.0")
+
+    def save(self):
+        filetypes = [("HTML report", "*.html"), ("Text report", "*.txt"), ("All", "*.*")]
+        if self.report_format == "text":
+            filetypes = [("Text report", "*.txt"), ("HTML report", "*.html"), ("All", "*.*")]
+        fn = filedialog.asksaveasfilename(
+            parent=_prepare_messagebox_parent(self),
+            title="Save CF-LIBS Report",
+            initialdir=remembered_initial_dir(self.owner.master_app.options),
+            defaultextension=self.default_extension,
+            filetypes=filetypes,
+        )
+        if not fn:
+            return
+        self.owner.write_report_content(fn, self.content)
+
+    def close(self):
+        try:
+            self.owner.on_report_window_close()
+        except Exception:
+            pass
+        self.destroy()
 
 
 def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
