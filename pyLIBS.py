@@ -15602,11 +15602,12 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     Up to 10 template lines are edited, each with wavelength, wg, wl and fixed/free flags.
     """
-    def __init__(self, master: "MainWindow", automatic=False):
+    def __init__(self, master: "MainWindow", automatic=False, single=False):
         super().__init__(master)
         self.master_app = master
         self.automatic = bool(automatic)
-        self.title("Automatic Fit" if self.automatic else "Manual Fit")
+        self.single = bool(single)
+        self.title("Automatic Fit" if self.automatic else "Single Fit" if self.single else "Manual Fit")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "760x520"))
         self.configure(bg=RETRO_BG)
         self.line_vars = []
@@ -15620,19 +15621,23 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.residuals_window = None
         self._build()
         self.load_from_template()
-        self.prepare_initial_region()
+        if self.single:
+            self.prepare_single_region()
+        else:
+            self.prepare_initial_region()
         if self.automatic:
             self.after(100, self.run_fit)
 
     def _build(self):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=4, pady=3)
-        ttk.Button(top, text=("Auto Fit" if self.automatic else "Fit"), command=self.run_fit).pack(side="left", padx=2)
+        ttk.Button(top, text=("Auto Fit" if self.automatic else "Single Fit" if self.single else "Fit"), command=self.run_fit).pack(side="left", padx=2)
         ttk.Button(top, text="Stop", command=self.stop_fit).pack(side="left", padx=2)
         ttk.Button(top, text="Close", command=self.destroy).pack(side="left", padx=2)
-        if not self.automatic:
+        if not self.automatic and not self.single:
             ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
             ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
+        if not self.automatic:
             ttk.Button(top, text="Show Residuals", command=self.show_residuals).pack(side="left", padx=8)
         self.msg_var = tk.StringVar(value="")
         ttk.Entry(self, textvariable=self.msg_var).pack(fill="x", padx=5, pady=2)
@@ -15805,6 +15810,17 @@ class RetroFitManagerWindow(tk.Toplevel):
         if group:
             self._show_group_region(group)
 
+    def prepare_single_region(self):
+        self.manual_fit_lines = self._visible_template_lines()
+        self.manual_fit_index = 0
+        self.load_from_template(self.manual_fit_lines)
+        if self.manual_fit_lines:
+            lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+            self.msg_var.set(f"Single Fit: {len(self.manual_fit_lines)} visible line(s) in {lo:.4f} - {hi:.4f}")
+        else:
+            self.msg_var.set("Single Fit: no template lines are visible in the current window")
+            self.after(100, lambda: _showinfo(self, "Single Fit", "No template lines are visible in the current spectrum window."))
+
     def _current_group(self):
         if not self.manual_fit_lines:
             self.manual_fit_lines = self._sorted_template_lines()
@@ -15910,7 +15926,7 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def show_residuals(self):
         if not self.residual_x or not self.residual_y:
-            self.msg_var.set("No residuals available. Run Manual Fit first.")
+            self.msg_var.set(f"No residuals available. Run {'Single Fit' if self.single else 'Manual Fit'} first.")
             return
         if self._residuals_window_exists():
             self.update_residuals_plot(lift_window=True)
@@ -16026,6 +16042,9 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not self.master_app.spectra:
             _showinfo(self, "Fit", "Load a spectrum first.")
             return
+        if self.single:
+            self.run_single_fit()
+            return
         if not self.manual_fit_lines:
             self.manual_fit_lines = self._sorted_template_lines()
         self.manual_fit_failed = False
@@ -16043,6 +16062,36 @@ class RetroFitManagerWindow(tk.Toplevel):
             return
         if self._fit_group_once(group, "Manual Fit"):
             self.progress["value"] = min(100, int(100 * self.manual_fit_index / max(1, len(self.manual_fit_lines))))
+
+    def run_single_fit(self):
+        fit_lines = self._visible_template_lines()
+        self.manual_fit_lines = fit_lines
+        self.load_from_template(fit_lines)
+        if not fit_lines:
+            self.msg_var.set("Single Fit: no template lines are visible in the current window")
+            _showinfo(self, "Single Fit", "No template lines are visible in the current spectrum window.")
+            return
+        point_count = self._current_fit_point_count()
+        min_points = self._minimum_fit_points(fit_lines)
+        lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+        report = f"Single Fit: fitting {len(fit_lines)} visible line(s) using {point_count} points"
+        self.msg_var.set(report)
+        self.master_app.status(report)
+        if point_count < min_points:
+            message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+            self.msg_var.set(f"{report}; {message}")
+            _showerror(self, "Single Fit", f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+            return
+        ok, message, results = self._fit_manual_group(fit_lines)
+        if not ok:
+            self.msg_var.set(f"{report}; Fit failed: {message}")
+            _showerror(self, "Single Fit", f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
+            return
+        self.region_fit_results[self._group_key(fit_lines)] = list(results)
+        self.populate_results(results)
+        self.progress["value"] = 100
+        self.msg_var.set(f"{report}; fitted")
+        self.master_app.status(f"{report}; fitted")
 
     def _run_automatic_fit(self):
         total = len(self.manual_fit_lines)
@@ -16163,7 +16212,7 @@ class MainWindow(tk.Tk):
         e=tk.Menu(m,tearoff=False); e.add_command(label="Options",command=self.show_options); m.add_cascade(label="Edit",menu=e)
         u=tk.Menu(m,tearoff=False); u.add_command(label="Instrument response",command=self.show_response_window); u.add_command(label="Apply response now",command=self.apply_response_now); u.add_command(label="Vertical shift",command=lambda:VerticalShiftWindow(self)); u.add_command(label="Smooth main",command=self.smooth_main); u.add_command(label="nm → Å main",command=self.nm_to_a_main); m.add_cascade(label="Utilities",menu=u)
         t=tk.Menu(m,tearoff=False); t.add_command(label="Template Manager",command=self.show_template); t.add_command(label="Line Identification",command=self.show_line_identification); t.add_command(label="Element Locator",command=lambda:ElementLocatorWindow(self)); t.add_command(label="Auto Element Identification",command=lambda:AutoElementIdentificationWindow(self)); m.add_cascade(label="Template",menu=t)
-        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
+        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Single Fit",command=self.show_single_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
         h=tk.Menu(m,tearoff=False); h.add_command(label="Manual...",command=self.show_manual); h.add_separator(); h.add_command(label="About pyLIBS...",command=self.show_about); m.add_cascade(label="Help",menu=h)
         self.config(menu=m)
 
@@ -16725,6 +16774,7 @@ def build_retro_menu(self):
     analysis_menu.add_separator()
     analysis_menu.add_command(label="Calculate Ne from Ha", command=self.show_ne_halpha)
     analysis_menu.add_command(label="Manual Fit", command=self.show_retro_fit_manager)
+    analysis_menu.add_command(label="Single Fit", command=self.show_single_fit_manager)
     analysis_menu.add_command(label="Auto Fit", command=self.show_auto_fit_manager)
     analysis_menu.add_command(label="Saha Boltzmann plot", command=self.show_saha_boltzmann)
     analysis_menu.add_command(label="CF LIBS", command=self.show_cf_libs)
@@ -16792,6 +16842,7 @@ def build_retro_toolbar(self):
         ("Ne from H", self.show_ne_halpha),
         ("Autofit", self.show_auto_fit_manager),
         ("Manual Fit", self.show_retro_fit_manager),
+        ("Single Fit", self.show_single_fit_manager),
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
     ]
@@ -16816,6 +16867,7 @@ def build_retro_toolbar(self):
         "Ne from H": "H_alpha.png",
         "Autofit": "fit_auto.png",
         "Manual Fit": "fit_manual.png",
+        "Single Fit": "fit-single.png",
         "Saha Boltzmann": "calculator.png",
         "CF LIBS": "database.png",
     }
@@ -16824,6 +16876,7 @@ def build_retro_toolbar(self):
         "Full X": "zoom_x_out.png",
         "Autofit": "fit.png",
         "Manual Fit": "fit.png",
+        "Single Fit": "fit_single.png",
     }
     tooltip_text = {
         "Trace": "Trace Lines",
@@ -16899,6 +16952,9 @@ def show_active_spectra(self):
 
 def show_retro_fit_manager(self):
     return RetroFitManagerWindow(self, automatic=False)
+
+def show_single_fit_manager(self):
+    return RetroFitManagerWindow(self, automatic=False, single=True)
 
 def show_auto_fit_manager(self):
     return RetroFitManagerWindow(self, automatic=True)
@@ -17697,7 +17753,7 @@ def show_goto_dialog(self):
 
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
-    show_template_manager, show_active_spectra, show_retro_fit_manager, show_auto_fit_manager,
+    show_template_manager, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
     toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
