@@ -6,7 +6,7 @@
 
 ### Changed
 
-- Manual Fit now opens a compact LIBS++-style Residuals plot window after a successful Voigt fit.
+- Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 
 ------------------------------------------------------------
 

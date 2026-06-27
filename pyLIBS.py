@@ -14035,8 +14035,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
         self.fit_voigt_lines()
 
-    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True, show_residuals=False):
+    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True):
         """Fit explicit template lines with the existing visible-window Voigt model."""
+        self.last_residual_x = []
+        self.last_residual_y = []
         if np is None:
             if show_messages:
                 _showerror(self, "Fit Voigt", "numpy non disponibile")
@@ -14136,12 +14138,12 @@ class MultiGaussianFitWindow(tk.Toplevel):
             })
         fitted_y = multivoigt_model(xs, *popt)
         self.master_app.fit_overlay = (xs.tolist(), fitted_y.tolist())
+        self.last_residual_x = xs.tolist()
+        self.last_residual_y = (ys - fitted_y).tolist()
         self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
         if preserve_view:
             self.master_app.restore_plot_view(old_xlim, old_ylim)
-        if show_residuals:
-            ResidualsWindow(self.master_app, xs.tolist(), (ys - fitted_y).tolist())
         self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
         return True, f"Fit Voigt: {len(lines)} line(s)", fit_results
 
@@ -14155,10 +14157,12 @@ class ResidualsWindow(tk.Toplevel):
 
     def __init__(self, master, x_values, residuals):
         super().__init__(master)
-        self.master_app = master
+        self.fit_window = master
+        self.master_app = master.master_app
         self.title("Residuals")
         self.geometry("1200x250")
         self.minsize(500, 160)
+        self.protocol("WM_DELETE_WINDOW", master.on_residuals_window_close)
         if Figure is None or FigureCanvasTkAgg is None:
             ttk.Label(self, text="matplotlib non disponibile").pack(padx=20, pady=20)
             return
@@ -14166,6 +14170,9 @@ class ResidualsWindow(tk.Toplevel):
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        self._plot(x_values, residuals)
+
+    def update_plot(self, x_values, residuals):
         self._plot(x_values, residuals)
 
     def _plot(self, x_values, residuals):
@@ -15198,6 +15205,9 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_failed = False
         self.manual_fit_stop = False
         self.region_fit_results = {}
+        self.residual_x = []
+        self.residual_y = []
+        self.residuals_window = None
         self._build()
         self.load_from_template()
         self.prepare_initial_region()
@@ -15213,6 +15223,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not self.automatic:
             ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
             ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
+            ttk.Button(top, text="Show Residuals", command=self.show_residuals).pack(side="left", padx=8)
         ttk.Button(top, text="Expand", command=self.toggle_expand).pack(side="right", padx=2)
 
         self.msg_var = tk.StringVar(value="")
@@ -15468,8 +15479,11 @@ class RetroFitManagerWindow(tk.Toplevel):
                 lines=lines,
                 preserve_view=True,
                 show_messages=False,
-                show_residuals=not self.automatic,
             )
+            if ok and not self.automatic:
+                self.residual_x = list(getattr(tmp, "last_residual_x", []) or [])
+                self.residual_y = list(getattr(tmp, "last_residual_y", []) or [])
+                self.update_residuals_plot(lift_window=False)
         except Exception as e:
             ok, message, results = False, str(e), []
         finally:
@@ -15479,6 +15493,47 @@ class RetroFitManagerWindow(tk.Toplevel):
             except Exception:
                 pass
         return ok, message, results
+
+    def _residuals_window_exists(self):
+        try:
+            return self.residuals_window is not None and self.residuals_window.winfo_exists()
+        except Exception:
+            return False
+
+    def show_residuals(self):
+        if not self.residual_x or not self.residual_y:
+            self.msg_var.set("No residuals available. Run Manual Fit first.")
+            return
+        if self._residuals_window_exists():
+            self.update_residuals_plot(lift_window=True)
+            return
+        self.residuals_window = ResidualsWindow(self, self.residual_x, self.residual_y)
+        self.residuals_window.transient(self)
+        self.residuals_window.lift(self)
+        try:
+            self.residuals_window.focus_set()
+        except Exception:
+            pass
+
+    def update_residuals_plot(self, lift_window=False):
+        if not self._residuals_window_exists():
+            self.residuals_window = None
+            return
+        self.residuals_window.update_plot(self.residual_x, self.residual_y)
+        if lift_window:
+            self.residuals_window.lift(self)
+            try:
+                self.residuals_window.focus_set()
+            except Exception:
+                pass
+
+    def on_residuals_window_close(self):
+        if self._residuals_window_exists():
+            try:
+                self.residuals_window.destroy()
+            except Exception:
+                pass
+        self.residuals_window = None
 
     def _prepare_group_for_fit(self, group, mode_label):
         first = group[0].wavelen
