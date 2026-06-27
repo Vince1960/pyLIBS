@@ -14428,6 +14428,7 @@ class NeHalphaWindow(tk.Toplevel):
                 f"Ne: {ne_value:.6e} cm^-3",
                 f"Ne / 1e17: {ne_value / 1.0e17:.6g}",
             ])
+            self.master_app.session_ne = ne_value
             status = f"H-alpha fit complete; Ne={ne_value:.3e} cm^-3"
         self.out.insert("end", "\n".join(lines) + "\n")
         self.master_app.status(status)
@@ -14438,60 +14439,164 @@ class SahaBoltzmannWindow(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
-        self.title("Saha-Boltzmann - Unit27")
-        self.geometry("880x520")
+        self.title("Saha-Boltzmann")
+        self.geometry("1050x720")
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top, text="Compute plots", command=self.compute).pack(side="left")
-        cols=("species", "ion", "lines", "kT", "q", "Z(T)")
+        ttk.Button(top, text="Compute Plot", command=self.compute).pack(side="left")
+        ttk.Label(top, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
+        self.initial_kt_var = tk.StringVar(value="1")
+        ttk.Entry(top, textvariable=self.initial_kt_var, width=8).pack(side="left")
+        self.summary_var = tk.StringVar(value="Ready")
+        ttk.Label(top, textvariable=self.summary_var).pack(side="left", padx=12)
+        cols=("element", "lines", "kT eV", "q", "Z I", "Z II")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
-            self.tree.heading(c, text=c); self.tree.column(c, width=110, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+            self.tree.heading(c, text=c); self.tree.column(c, width=115, anchor="center")
+        self.tree.pack(fill="x", padx=6, pady=5)
+        if Figure is None or FigureCanvasTkAgg is None:
+            ttk.Label(self, text="matplotlib not available").pack(fill="both", expand=True, padx=10, pady=10)
+            self.fig = self.ax = self.canvas = None
+        else:
+            self.fig = Figure(figsize=(9, 4.8), dpi=100)
+            self.ax = self.fig.add_subplot(111)
+            self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+            self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
 
     def compute(self):
         self.tree.delete(*self.tree.get_children())
-        groups: dict[tuple[str,int], list[tuple[float,float]]] = {}
-        for t in self.master_app.template_lines:
-            if not t.specie or not t.ion or not t.aki or not t.gk:
+        ne = self._electron_density()
+        if ne is None:
+            return
+        kt = safe_float(self.initial_kt_var.get(), 1.0)
+        if kt <= 0.0:
+            kt = 1.0
+        skipped = 0
+        groups = {}
+        fits = {}
+        for _ in range(25):
+            groups, skipped = libspp_saha_boltzmann_groups(self.master_app, ne, kt, getattr(self.master_app, "sac_factors", {}))
+            fits = libspp_fit_saha_boltzmann(self.master_app, groups)
+            new_kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
+            if new_kt <= 0.0:
+                new_kt = libspp_weighted_temperature(fits, 0.0, float("inf"))
+            if new_kt <= 0.0:
+                break
+            if abs(new_kt - kt) / new_kt <= 0.01:
+                kt = new_kt
+                groups, skipped = libspp_saha_boltzmann_groups(self.master_app, ne, kt, getattr(self.master_app, "sac_factors", {}))
+                fits = libspp_fit_saha_boltzmann(self.master_app, groups)
+                break
+            kt = new_kt
+        if not fits:
+            self.summary_var.set(f"No valid Saha-Boltzmann fit; skipped {skipped} template line(s)")
+            _showinfo(self, "Saha-Boltzmann", f"No valid plot points. Skipped {skipped} incomplete template line(s).")
+            self._clear_plot()
+            return
+        for element, result in sorted(fits.items()):
+            self.tree.insert("", "end", values=(
+                element,
+                result["nlines"],
+                f"{result['kt']:.4g}",
+                f"{result['q']:.4g}",
+                f"{result['z1']:.4g}",
+                f"{result['z2']:.4g}",
+            ))
+        self._draw_plot(groups, fits)
+        response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
+        self.summary_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, skipped {skipped}; {response_text}")
+        self.master_app.status(f"Saha-Boltzmann: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, skipped {skipped}")
+
+    def _electron_density(self):
+        ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
+        if ne > 0.0:
+            return ne
+        ne = simpledialog.askfloat(
+            "Electron Density",
+            "Electron density Ne (e/cm3):",
+            initialvalue=1.0e17,
+            minvalue=0.0,
+            parent=_prepare_messagebox_parent(self),
+        )
+        if ne is None:
+            return None
+        self.master_app.session_ne = ne
+        return ne
+
+    def _clear_plot(self):
+        if self.ax is None:
+            return
+        self.ax.clear()
+        self.canvas.draw_idle()
+
+    def _draw_plot(self, groups, fits):
+        if self.ax is None:
+            return
+        self.ax.clear()
+        self.ax.set_title("Saha-Boltzmann")
+        self.ax.set_xlabel("Upper energy / Saha-Boltzmann coordinate (eV)")
+        self.ax.set_ylabel("ln(I / |Aki gk|)")
+        self.ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+        for element, pts in sorted(groups.items()):
+            if not pts:
                 continue
-            intensity = t.inte if t.inte > 0 else t.templint
-            if intensity <= 0 or t.aki in (0, -1):
-                continue
-            ek_ev = t.ek * 1.23985e-4  # cm^-1 -> eV, as in SDIMain
-            y = math.log(max(intensity,1e-30)/abs(t.aki*t.gk))
-            groups.setdefault((t.specie, int(t.ion)), []).append((ek_ev, y))
-        for (sp, ion), pts in sorted(groups.items()):
-            if len(pts) < 2:
-                continue
-            fit = linear_fit([p[0] for p in pts], [p[1] for p in pts])
-            if not fit:
-                continue
-            slope, intercept = fit
-            kt = -1.0/slope if slope != 0 else 0.0
-            try:
-                z = self.master_app.libs_db.partition_function(sp, ion, max(kt*11600.0, 1.0))
-            except Exception:
-                z = 1.0
-            self.tree.insert("", "end", values=(sp, ion, len(pts), f"{kt:.4g}", f"{intercept:.4g}", f"{z:.4g}"))
-        self.master_app.status("Saha-Boltzmann: calculation completed")
+            xs = [p["x"] for p in pts]
+            ys = [p["y"] for p in pts]
+            self.ax.scatter(xs, ys, s=24, label=element)
+            result = fits.get(element)
+            if result:
+                x0, x1 = min(xs), max(xs)
+                if x0 == x1:
+                    x0 -= 0.05
+                    x1 += 0.05
+                y0 = result["slope"] * x0 + result["q"]
+                y1 = result["slope"] * x1 + result["q"]
+                self.ax.plot([x0, x1], [y0, y1], linewidth=1.0)
+        self.ax.legend(loc="best", fontsize=8)
+        self.fig.tight_layout(pad=1.0)
+        self.canvas.draw_idle()
 
 
 def _roman_ion(ion: int) -> str:
     return "I" if int(ion) == 1 else "II" if int(ion) == 2 else str(ion)
 
 
+def _fit_values_already_response_corrected(app: "MainWindow") -> bool:
+    return any(getattr(sp, "response_corrected", False) for sp in getattr(app, "spectra", []))
+
+
+def _apply_after_response_enabled(app: "MainWindow") -> bool:
+    try:
+        return (
+            bool(getattr(app.options, "apply_response", False))
+            and bool(getattr(app.options, "apply_after", False))
+            and getattr(app, "response", None) is not None
+            and bool(getattr(app.response, "x", []))
+            and not _fit_values_already_response_corrected(app)
+        )
+    except Exception:
+        return False
+
+
+def _template_line_center(line: TemplateLine) -> float:
+    return abs(line.fitwavelen) if getattr(line, "fitwavelen", 0.0) else (line.asswavelen or line.wavelen)
+
+
+def _template_line_intensity(line: TemplateLine) -> float:
+    return line.inte if getattr(line, "inte", 0.0) > 0.0 else getattr(line, "templint", 0.0)
+
+
 def _response_factor(app: "MainWindow", wavelength: float) -> float:
     """Original showboltz()/calcola(): divide line intensity by instrumental efficiency."""
     try:
-        if app.options.apply_response and app.response and app.response.x:
+        if _apply_after_response_enabled(app):
             val = app.response.value_at(wavelength)
-            return val if val not in (0, None) else 1.0
+            return val if val not in (0, None) and math.isfinite(val) else 1.0
     except Exception:
         pass
     return 1.0
 
 
-def libspp_boltzmann_groups(app: "MainWindow", sac_factors: Optional[dict[int, float]] = None):
+def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[dict[int, float]] = None):
     """Build LIBS++-style Boltzmann groups from current template lines.
 
     Reconstructed from Unit6/showboltz(), Unit9 and SDIMain/calcola():
@@ -14504,12 +14609,13 @@ def libspp_boltzmann_groups(app: "MainWindow", sac_factors: Optional[dict[int, f
     sac_factors = sac_factors or {}
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
-        if not t.specie or not t.ion or not t.aki or t.aki == -1 or not t.gk:
+        if not t.specie or not t.ion or not t.aki or t.aki == -1 or not t.gk or not t.ek:
             continue
-        inte = t.inte if t.inte > 0 else t.templint
+        inte = _template_line_intensity(t)
         if inte <= 0:
             continue
-        eff = _response_factor(app, t.wavelen)
+        center = _template_line_center(t)
+        eff = _response_factor(app, center)
         sac = sac_factors.get(idx, 1.0) or 1.0
         icorr = inte / (eff * sac)
         if icorr <= 0:
@@ -14519,7 +14625,96 @@ def libspp_boltzmann_groups(app: "MainWindow", sac_factors: Optional[dict[int, f
         groups[(t.specie.strip().capitalize(), int(t.ion))].append({
             "x": ek_ev, "y": y, "line": t, "icorr": icorr, "eff": eff, "sac": sac
         })
+    skipped = len(app.template_lines) - sum(len(pts) for pts in groups.values())
+    return groups, skipped
+
+
+def libspp_boltzmann_groups(app: "MainWindow", sac_factors: Optional[dict[int, float]] = None):
+    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_factors)
     return groups
+
+
+def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_factors: Optional[dict[int, float]] = None):
+    """Build Unit27 Saha-Boltzmann plot points grouped by element.
+
+    Unit6/Unit27 uses neutral lines as ordinary Boltzmann points and shifts
+    singly-ionized points by Eion and the Saha electron-density term:
+        x(I)  = Ek
+        y(I)  = ln(I / |Aki*gk|)
+        x(II) = Eion + Ek
+        y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
+    """
+    sac_factors = sac_factors or {}
+    groups: dict[str, list[dict]] = defaultdict(list)
+    skipped = 0
+    metadata_cache: dict[str, dict] = {}
+    for idx, t in enumerate(app.template_lines, start=1):
+        specie = str(getattr(t, "specie", "") or "").strip().capitalize()
+        ion = safe_int(getattr(t, "ion", 0), 0)
+        if not specie or ion not in (1, 2) or not t.aki or t.aki == -1 or not t.gk or not t.ek:
+            skipped += 1
+            continue
+        inte = _template_line_intensity(t)
+        if inte <= 0.0:
+            skipped += 1
+            continue
+        center = _template_line_center(t)
+        eff = _response_factor(app, center)
+        sac = sac_factors.get(idx, 1.0) or 1.0
+        icorr = inte / (eff * sac)
+        if icorr <= 0.0:
+            skipped += 1
+            continue
+        ek_ev = t.ek * 1.23985e-4
+        y = math.log(icorr / abs(t.aki * t.gk))
+        x = ek_ev
+        if ion == 2:
+            if ne <= 0.0 or kt <= 0.0:
+                skipped += 1
+                continue
+            if specie not in metadata_cache:
+                try:
+                    metadata_cache[specie] = app.libs_db.element_metadata(specie)
+                except Exception:
+                    metadata_cache[specie] = {}
+            eion = safe_float(metadata_cache[specie].get("en_ion"), 0.0) * 1.23985e-4
+            if eion <= 0.0:
+                skipped += 1
+                continue
+            x = eion + ek_ev
+            y -= math.log(6.04e21 / ne * math.pow(kt, 1.5))
+        groups[specie].append({
+            "x": x, "y": y, "line": t, "ion": ion, "icorr": icorr,
+            "eff": eff, "sac": sac, "center": center
+        })
+    return groups, skipped
+
+
+def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
+    results = {}
+    for element, pts in groups.items():
+        if len(pts) < 2:
+            continue
+        fit = linear_fit([p["x"] for p in pts], [p["y"] for p in pts])
+        if not fit:
+            continue
+        slope, intercept = fit
+        kt = -1.0 / slope if slope != 0.0 else 0.0
+        if kt <= 0.0:
+            continue
+        try:
+            z1 = app.libs_db.partition_function(element, 1, kt * 11604.45)
+        except Exception:
+            z1 = 1.0
+        try:
+            z2 = app.libs_db.partition_function(element, 2, kt * 11604.45)
+        except Exception:
+            z2 = 1.0
+        results[element] = {
+            "species": element, "nlines": len(pts), "kt": kt, "q": intercept,
+            "slope": slope, "z1": z1, "z2": z2, "points": pts
+        }
+    return results
 
 
 def libspp_fit_boltzmann(app: "MainWindow", groups):
@@ -15825,6 +16020,7 @@ class MainWindow(tk.Tk):
         self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
+        self.session_ne: Optional[float] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
         self.shift_capture_window=None
