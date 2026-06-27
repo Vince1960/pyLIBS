@@ -14484,6 +14484,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
             self.ax = self.fig.add_subplot(111)
             self.canvas = FigureCanvasTkAgg(self.fig, master=self)
             self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+        self.after(100, self.compute)
 
     def compute(self):
         self.tree.delete(*self.tree.get_children())
@@ -14662,6 +14663,8 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 self.master_app.status(
                     f"Saha-Boltzmann: mean kT={representative_kt:.4g} eV, included {included}/{total}, Ne={self.current_ne:.3e} e/cm3"
                 )
+        if representative_kt and representative_kt > 0.0:
+            self.master_app.session_temperature = representative_kt
         self._draw_plot(self.saha_groups, self.saha_fits, representative_kt)
 
     def _electron_density(self):
@@ -14712,6 +14715,9 @@ class SahaBoltzmannWindow(tk.Toplevel):
                     y0 = fixed["slope"] * x0 + fixed["q_fixed"]
                     y1 = fixed["slope"] * x1 + fixed["q_fixed"]
                     self.ax.plot([x0, x1], [y0, y1], linewidth=1.0, alpha=alpha)
+        if plot_xlim:
+            self.ax.set_xlim(*plot_xlim)
+        self.ax.margins(x=0.05, y=0.05)
         if plot_xlim:
             self.ax.set_xlim(*plot_xlim)
         self.ax.legend(loc="best", fontsize=8)
@@ -14925,6 +14931,34 @@ def libspp_fit_boltzmann(app: "MainWindow", groups):
     return results
 
 
+def libspp_fit_boltzmann_fixed_temperature(app: "MainWindow", groups, kt: float):
+    """Fit Boltzmann intercepts at fixed kT for CF-LIBS concentration work."""
+    results = {}
+    if kt <= 0.0:
+        return results
+    for key, pts in groups.items():
+        if not pts:
+            continue
+        specie, ion = key
+        intercept = sum(p["y"] + p["x"] / kt for p in pts) / len(pts)
+        try:
+            z = app.libs_db.partition_function(specie, ion, kt * 11604.45)
+        except Exception:
+            z = 1.0
+        results[key] = {
+            "species": specie,
+            "ion": ion,
+            "nlines": len(pts),
+            "kt": kt,
+            "q": intercept,
+            "q_at_t": intercept,
+            "z": z,
+            "points": pts,
+            "slope": -1.0 / kt,
+        }
+    return results
+
+
 def libspp_weighted_temperature(fits: dict, kt_low: float, kt_high: float) -> float:
     """Original calcola(): weighted mean kT by number of lines, excluding out-of-range fits."""
     num = 0.0
@@ -14985,8 +15019,19 @@ def libspp_saha_cflibs(app: "MainWindow", fits: dict, kt: float, ne: Optional[fl
         elif n2 > 0 and n1 <= 0 and saha_factor > 0:
             n1 = n2 / saha_factor
         conc = n1 + n2
-        ratio = n1 / conc if conc > 0 else 0.0
-        rows.append({"element": sp, "conc": conc, "mass_rel": mass * conc, "atomic_mass": mass, "neutral_ratio": ratio, "ne": ne})
+        neutral_ratio = n1 / conc if conc > 0 else 0.0
+        ion_neutral_ratio = n2 / n1 if n1 > 0 else float("inf") if n2 > 0 else 0.0
+        rows.append({
+            "element": sp,
+            "neutral_conc": n1,
+            "ionized_conc": n2,
+            "conc": conc,
+            "mass_rel": mass * conc,
+            "atomic_mass": mass,
+            "neutral_ratio": neutral_ratio,
+            "ionized_neutral_ratio": ion_neutral_ratio,
+            "ne": ne,
+        })
     total_n = sum(r["conc"] for r in rows) or 1.0
     total_m = sum(r["mass_rel"] for r in rows) or 1.0
     for r in rows:
@@ -15268,20 +15313,38 @@ class CFLibsWindow(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
-        self.title("CF-LIBS - pyLIBS v8")
-        self.geometry("900x540")
+        self.title("CF-LIBS")
+        self.geometry("1100x760")
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top, text="Compute CF-LIBS v8", command=self.compute).pack(side="left")
+        ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
+        ttk.Label(top, text="kT eV").pack(side="left", padx=(12,2))
+        default_kt = safe_float(getattr(master, "session_temperature", 0.0), 0.0) or 1.0
+        self.kt_var = tk.StringVar(value=f"{default_kt:.6g}")
+        ttk.Entry(top, textvariable=self.kt_var, width=9).pack(side="left")
         ttk.Label(top, text="Ne cm⁻³").pack(side="left", padx=(12,2))
-        self.ne_var = tk.StringVar(value=f"{master.options.ne_low:.3g}")
+        default_ne = safe_float(getattr(master, "session_ne", 0.0), 0.0) or 1.0e17
+        self.ne_var = tk.StringVar(value=f"{default_ne:.6g}")
         ttk.Entry(top, textvariable=self.ne_var, width=12).pack(side="left")
-        self.kt_label = ttk.Label(top, text="kT: --")
-        self.kt_label.pack(side="left", padx=12)
-        cols=("element", "number %", "mass %", "neutral I/(I+II)", "atomic mass", "relative population")
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(top, textvariable=self.status_var).pack(side="left", padx=12)
+        if Figure is None or FigureCanvasTkAgg is None:
+            ttk.Label(self, text="matplotlib not available").pack(fill="both", expand=True, padx=10, pady=10)
+            self.fig = self.ax = self.canvas = None
+        else:
+            self.fig = Figure(figsize=(9.5, 4.2), dpi=100)
+            self.ax = self.fig.add_subplot(111)
+            self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+            self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=5)
+        cols=(
+            "element", "neutral concentration", "ionized concentration",
+            "ionized / neutral", "total numerical concentration",
+            "mass concentration", "number %", "mass %"
+        )
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        self.after(100, self.compute)
 
     def compute(self):
         self.tree.delete(*self.tree.get_children())
@@ -15290,23 +15353,72 @@ class CFLibsWindow(tk.Toplevel):
             self.master_app.libs_db.connect()
         except Exception as e:
             _showerror(self, "LIBS.db", str(e)); return
-        groups = libspp_boltzmann_groups(self.master_app, getattr(self.master_app, "sac_factors", {}))
-        fits = libspp_fit_boltzmann(self.master_app, groups)
-        kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
+        kt = safe_float(self.kt_var.get(), 1.0) or 1.0
         if kt <= 0:
-            _showinfo(self, "CF-LIBS", "No valid Boltzmann fit: at least two lines per species/ion with Aki, gk, Ek and intensity are required.")
+            kt = 1.0
+            self.kt_var.set("1")
+        ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
+        groups, skipped = libspp_boltzmann_groups_with_skips(self.master_app, getattr(self.master_app, "sac_factors", {}))
+        fits = libspp_fit_boltzmann_fixed_temperature(self.master_app, groups, kt)
+        if not fits:
+            msg = f"No valid Boltzmann data. Skipped {skipped} incomplete template line(s)."
+            self.status_var.set(msg)
+            _showinfo(self, "CF-LIBS", msg)
+            self._draw_boltzmann(groups, fits, kt)
             return
-        libspp_recompute_q_at_temperature(fits, kt)
-        ne = safe_float(self.ne_var.get(), self.master_app.options.ne_low)
         rows = libspp_saha_cflibs(self.master_app, fits, kt, ne)
         self.master_app.last_cflibs_rows = rows
-        self.kt_label.configure(text=f"kT: {kt:.4g} eV")
+        self.master_app.session_temperature = kt
+        self.master_app.session_ne = ne
         for r in rows:
             self.tree.insert("", "end", values=(
-                r["element"], f"{r['number_percent']:.4f}", f"{r['mass_percent']:.4f}",
-                f"{r['neutral_ratio']:.4f}", f"{r['atomic_mass']:.5g}", f"{r['conc']:.5g}"
+                r["element"],
+                f"{r['neutral_conc']:.6g}",
+                f"{r['ionized_conc']:.6g}",
+                f"{r['ionized_neutral_ratio']:.6g}",
+                f"{r['conc']:.6g}",
+                f"{r['mass_rel']:.6g}",
+                f"{r['number_percent']:.4f}",
+                f"{r['mass_percent']:.4f}",
             ))
-        self.master_app.status(f"CF-LIBS v8: kT={kt:.4g} eV, {len(rows)} elementi")
+        self._draw_boltzmann(groups, fits, kt)
+        response_text = "Apply After response correction used" if _apply_after_response_enabled(self.master_app) else "no Apply After response correction"
+        self.status_var.set(f"kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, elements={len(rows)}, skipped={skipped}; {response_text}")
+        self.master_app.status(f"CF-LIBS: kT={kt:.4g} eV, Ne={ne:.3e} e/cm3, {len(rows)} element(s), skipped {skipped}")
+
+    def _draw_boltzmann(self, groups, fits, kt):
+        if self.ax is None:
+            return
+        self.ax.clear()
+        self.ax.set_title("CF-LIBS Boltzmann plots")
+        self.ax.set_xlabel("Upper energy Ek (eV)")
+        self.ax.set_ylabel("ln(I / |Aki gk|)")
+        self.ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
+        all_x = [p["x"] for pts in groups.values() for p in pts]
+        if all_x:
+            xmin, xmax = min(all_x), max(all_x)
+            pad = max((xmax - xmin) * 0.05, 0.05)
+            xmin, xmax = xmin - pad, xmax + pad
+        else:
+            xmin, xmax = 0.0, 1.0
+        for key, pts in sorted(groups.items()):
+            if not pts:
+                continue
+            specie, ion = key
+            label = f"{specie} {_roman_ion(ion)}"
+            xs = [p["x"] for p in pts]
+            ys = [p["y"] for p in pts]
+            self.ax.scatter(xs, ys, s=24, label=label)
+            fit = fits.get(key)
+            if fit:
+                y0 = fit["slope"] * xmin + fit["q_at_t"]
+                y1 = fit["slope"] * xmax + fit["q_at_t"]
+                self.ax.plot([xmin, xmax], [y0, y1], linewidth=1.0)
+        self.ax.set_xlim(xmin, xmax)
+        self.ax.margins(y=0.05)
+        self.ax.legend(loc="best", fontsize=8)
+        self.fig.tight_layout(pad=1.0)
+        self.canvas.draw_idle()
 
 
 def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
@@ -16253,6 +16365,7 @@ class MainWindow(tk.Tk):
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
         self.session_ne: Optional[float] = None
+        self.session_temperature: Optional[float] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
         self.shift_capture_window=None

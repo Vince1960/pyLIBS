@@ -10,7 +10,9 @@
 - Saha-Boltzmann mean temperature can exclude/include individual elements without changing their fitted temperatures.
 - Saha-Boltzmann now auto-excludes out-of-range element temperatures and redraws fixed-temperature intercept-only fit lines.
 - Saha-Boltzmann fixed-temperature fit lines now span the full usable plot x-range.
+- Saha-Boltzmann now computes automatically on window open and applies plot margins.
 - Added a Single Fit command and toolbar button for fitting only the currently visible template lines.
+- Added the first auto-populated CF-LIBS analysis window with fixed-temperature Boltzmann plots and concentration output.
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 - Manual Fit and Automatic Fit no longer show the legacy Expand button.
 - Spectrum open dialogs now use a shared filter list with lowercase/uppercase extensions for TXT, DAT, ROH, TRT, MCH, JND, ASC, and CSV files.
