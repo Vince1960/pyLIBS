@@ -17826,91 +17826,209 @@ class MainWindow(tk.Tk):
 # pyLIBS v8.10 Retro menus and windows
 # -----------------------------------------------------------------------
 
+def _menu_icon_dirs():
+    base_dir = Path(__file__).resolve().parent
+    return [base_dir / "icons", base_dir / "Icons"]
+
+def _find_menu_icon(filename):
+    if not filename:
+        return None
+    for icon_dir in _menu_icon_dirs():
+        icon_path = icon_dir / filename
+        if icon_path.exists():
+            return icon_path
+    filename_lower = filename.lower()
+    for icon_dir in _menu_icon_dirs():
+        if not icon_dir.exists():
+            continue
+        for icon_path in sorted(icon_dir.iterdir()):
+            if icon_path.name.lower() == filename_lower:
+                return icon_path
+    return None
+
+def get_menu_icon(self, filename, size=16):
+    """Load a menu-only icon copy without altering toolbar images."""
+    if not hasattr(self, "menu_icons"):
+        self.menu_icons = {}
+    if not hasattr(self, "menu_icon_files"):
+        self.menu_icon_files = {}
+    if not hasattr(self, "menu_missing_icons"):
+        self.menu_missing_icons = []
+    key = (filename, size)
+    if key in self.menu_icons:
+        return self.menu_icons[key]
+    icon_path = _find_menu_icon(filename)
+    if not icon_path:
+        if filename not in self.menu_missing_icons:
+            self.menu_missing_icons.append(filename)
+        return None
+    try:
+        image = tk.PhotoImage(file=str(icon_path))
+        width = max(1, image.width())
+        height = max(1, image.height())
+        if width != size or height != size:
+            # Existing icons are 24 px.  zoom(2).subsample(3) gives a clean
+            # 16 px menu copy while leaving the toolbar image untouched.
+            if width == 24 and height == 24 and size == 16:
+                image = image.zoom(2, 2).subsample(3, 3)
+            elif width > size or height > size:
+                factor = max(1, int(math.ceil(max(width / size, height / size))))
+                image = image.subsample(factor, factor)
+        self.menu_icons[key] = image
+        self.menu_icon_files[filename] = str(icon_path)
+        return image
+    except Exception:
+        if filename not in self.menu_missing_icons:
+            self.menu_missing_icons.append(filename)
+        return None
+
+def _menu_shortcut_handler(self, command):
+    def handler(event=None):
+        try:
+            focus = self.focus_get()
+            if focus is not None:
+                widget_class = focus.winfo_class()
+                if widget_class in {"Entry", "TEntry", "Text", "Spinbox", "TSpinbox", "Combobox", "TCombobox"}:
+                    return None
+        except Exception:
+            pass
+        command()
+        return "break"
+    return handler
+
+def _bind_menu_shortcuts(self, shortcut_items):
+    for item in shortcut_items:
+        sequence = item.get("event")
+        command = item.get("command")
+        if not sequence or command is None:
+            continue
+        try:
+            self.bind(sequence, _menu_shortcut_handler(self, command))
+        except Exception:
+            pass
+
+def _add_menu_command(self, menu, shortcut_items, label, command, accelerator="", event="", icon=""):
+    image = get_menu_icon(self, icon) if icon else None
+    kwargs = {"label": label, "command": command}
+    if accelerator:
+        kwargs["accelerator"] = accelerator
+    if image is not None:
+        kwargs["image"] = image
+        kwargs["compound"] = "left"
+    menu.add_command(**kwargs)
+    if accelerator and event:
+        shortcut_items.append({"label": label, "accelerator": accelerator, "event": event, "command": command})
+
+def _add_menu_checkbutton(self, menu, shortcut_items, label, command, variable=None, accelerator="", event="", icon=""):
+    image = get_menu_icon(self, icon) if icon else None
+    kwargs = {"label": label, "command": command}
+    if variable is not None:
+        kwargs["variable"] = variable
+    if accelerator:
+        kwargs["accelerator"] = accelerator
+    if image is not None:
+        kwargs["image"] = image
+        kwargs["compound"] = "left"
+    menu.add_checkbutton(**kwargs)
+    if accelerator and event:
+        shortcut_items.append({"label": label, "accelerator": accelerator, "event": event, "command": command})
+
 def build_retro_menu(self):
     """Build the original-like LIBS++ menu tree."""
     menu = tk.Menu(self)
     self.config(menu=menu)
+    shortcut_items = []
+    self.menu_icons = {}
+    self.menu_icon_files = {}
+    self.menu_missing_icons = []
 
     file_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="File", menu=file_menu)
-    file_menu.add_command(label="Open...", accelerator="Ctrl+O", command=self.ask_open_spectrum)
-    file_menu.add_command(label="Compare...", command=self.compare_spectrum)
-    file_menu.add_command(label="Append...", command=self.ask_import_multiple)
-    file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.ask_save_spectrum)
-    file_menu.add_command(label="Save with Labels", command=self.save_with_labels)
+    _add_menu_command(self, file_menu, shortcut_items, "Open...", self.ask_open_spectrum, "Ctrl+O", "<Control-o>", "open.png")
+    _add_menu_command(self, file_menu, shortcut_items, "Compare...", self.compare_spectrum, "Ctrl+M", "<Control-m>", "compare.png")
+    _add_menu_command(self, file_menu, shortcut_items, "Append...", self.ask_import_multiple, "Ctrl+A", "<Control-a>", "append.png")
+    _add_menu_command(self, file_menu, shortcut_items, "Save", self.ask_save_spectrum, "Ctrl+S", "<Control-s>", "save.png")
+    _add_menu_command(self, file_menu, shortcut_items, "Save with Labels", self.save_with_labels, "Ctrl+L", "<Control-l>", "save.png")
     file_menu.add_separator()
-    file_menu.add_command(label="Print", command=self.print_plot)
+    _add_menu_command(self, file_menu, shortcut_items, "Print", self.print_plot, "Ctrl+P", "<Control-p>", "print.png")
     file_menu.add_separator()
-    file_menu.add_command(label="Exit", command=self.on_close)
+    _add_menu_command(self, file_menu, shortcut_items, "Exit", self.on_close, "Ctrl+X", "<Control-x>", "")
 
     edit_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Edit", menu=edit_menu)
-    edit_menu.add_command(label="Copy", command=self.copy_plot)
+    _add_menu_command(self, edit_menu, shortcut_items, "Copy", self.copy_plot, "Ctrl+C", "<Control-c>", "")
     edit_menu.add_separator()
-    edit_menu.add_command(label="Swap Spectra", command=self.swap_spectra)
-    edit_menu.add_command(label="Show Active Spectra", command=self.show_active_spectra)
-    edit_menu.add_command(label="Clear Graph", command=self.clear_all_spectra)
+    _add_menu_command(self, edit_menu, shortcut_items, "Swap Spectra", self.swap_spectra, "Ctrl+W", "<Control-w>", "compare.png")
+    _add_menu_command(self, edit_menu, shortcut_items, "Show Active Spectra", self.show_active_spectra, "Ctrl+Shift+A", "<Control-Shift-A>", "Active_spectra.png")
+    _add_menu_command(self, edit_menu, shortcut_items, "Clear Graph", self.clear_all_spectra, "Ctrl+Del", "<Control-Delete>", "clear.png")
     edit_menu.add_separator()
-    edit_menu.add_command(label="Options", command=self.show_options)
+    _add_menu_command(self, edit_menu, shortcut_items, "Options", self.show_options, "Ctrl+Alt+O", "<Control-Alt-o>", "options.png")
 
     view_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="View", menu=view_menu)
-    view_menu.add_command(label="Change Background", command=self.change_background)
+    _add_menu_command(self, view_menu, shortcut_items, "Change Background", self.change_background, "Ctrl+B", "<Control-b>", "background.png")
     view_menu.add_separator()
     self.view_grid_x_var = tk.BooleanVar(value=getattr(self, "view_grid_x", True))
     self.view_grid_y_var = tk.BooleanVar(value=getattr(self, "view_grid_y", True))
     self.view_log_x_var = tk.BooleanVar(value=getattr(self, "view_log_x", False))
     self.view_log_y_var = tk.BooleanVar(value=getattr(self, "view_log_y", False))
-    view_menu.add_checkbutton(label="GridX", variable=self.view_grid_x_var, command=lambda: self.toggle_grid(axis="x"))
-    view_menu.add_checkbutton(label="GridY", variable=self.view_grid_y_var, command=lambda: self.toggle_grid(axis="y"))
-    view_menu.add_checkbutton(label="LogX", variable=self.view_log_x_var, command=lambda: self.toggle_log(axis="x"))
-    view_menu.add_checkbutton(label="LogY", variable=self.view_log_y_var, command=lambda: self.toggle_log(axis="y"))
-    view_menu.add_checkbutton(label="Show Labels", command=self.toggle_labels)
+    _add_menu_checkbutton(self, view_menu, shortcut_items, "GridX", lambda: self.toggle_grid(axis="x"), self.view_grid_x_var, "Ctrl+Alt+X", "<Control-Alt-x>", "grid.png")
+    _add_menu_checkbutton(self, view_menu, shortcut_items, "GridY", lambda: self.toggle_grid(axis="y"), self.view_grid_y_var, "Ctrl+Alt+Y", "<Control-Alt-y>", "grid_xy.png")
+    _add_menu_checkbutton(self, view_menu, shortcut_items, "LogX", lambda: self.toggle_log(axis="x"), self.view_log_x_var, "Ctrl+Alt+G", "<Control-Alt-g>", "log_x.png")
+    _add_menu_checkbutton(self, view_menu, shortcut_items, "LogY", lambda: self.toggle_log(axis="y"), self.view_log_y_var, "Ctrl+Alt+L", "<Control-Alt-l>", "log_y.png")
+    _add_menu_checkbutton(self, view_menu, shortcut_items, "Show Labels", self.toggle_labels, None, "Ctrl+Shift+W", "<Control-Shift-W>", "")
     view_menu.add_separator()
-    view_menu.add_command(label="Auto X", command=self.full_x)
-    view_menu.add_command(label="Auto Y", command=self.full_y)
-    view_menu.add_command(label="Expand X 50%", command=self.expand_x_50)
-    view_menu.add_command(label="Full Y Scale", command=self.full_y)
-    view_menu.add_command(label="Show All", command=self.full_scale)
+    _add_menu_command(self, view_menu, shortcut_items, "Auto X", self.full_x, "", "", "zoom_x_out.png")
+    _add_menu_command(self, view_menu, shortcut_items, "Auto Y", self.full_y, "", "", "zoom_y_out.png")
+    _add_menu_command(self, view_menu, shortcut_items, "Expand X 50%", self.expand_x_50, "F2", "<F2>", "zoom_x_in.png")
+    _add_menu_command(self, view_menu, shortcut_items, "Full Y Scale", self.full_y, "F3", "<F3>", "zoom_y_out.png")
+    _add_menu_command(self, view_menu, shortcut_items, "Show All", self.full_scale, "F4", "<F4>", "full_view.png")
 
     util_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Utilities", menu=util_menu)
-    util_menu.add_command(label="Shift", command=self.show_spectrum_shift)
-    util_menu.add_command(label="Offset", command=self.show_spectrum_offset)
-    util_menu.add_command(label="Smooth", command=self.smooth_main_spectrum)
-    util_menu.add_command(label="nm -> A", command=self.convert_nm_to_angstrom)
+    _add_menu_command(self, util_menu, shortcut_items, "Shift", self.show_spectrum_shift, "Ctrl+F1", "<Control-F1>", "")
+    _add_menu_command(self, util_menu, shortcut_items, "Offset", self.show_spectrum_offset, "Ctrl+F2", "<Control-F2>", "")
+    _add_menu_command(self, util_menu, shortcut_items, "Smooth", self.smooth_main_spectrum, "Ctrl+F3", "<Control-F3>", "")
+    _add_menu_command(self, util_menu, shortcut_items, "nm -> A", self.convert_nm_to_angstrom, "Ctrl+F4", "<Control-F4>", "")
     util_menu.add_separator()
-    util_menu.add_command(label="Batch Ops.", command=self.show_batch_statistics)
+    _add_menu_command(self, util_menu, shortcut_items, "Batch Ops.", self.show_batch_statistics, "", "", "")
     util_menu.add_separator()
-    util_menu.add_command(label="Load Template", command=self.load_template_from_menu)
-    util_menu.add_command(label="Show Template", command=self.show_template_manager)
-    util_menu.add_command(label="Info Template", command=self.template_info_from_menu)
-    util_menu.add_command(label="Close Template", command=self.close_template_from_menu)
+    _add_menu_command(self, util_menu, shortcut_items, "Load Template", self.load_template_from_menu, "Ctrl+F5", "<Control-F5>", "load_template.png")
+    _add_menu_command(self, util_menu, shortcut_items, "Show Template", self.show_template_manager, "Ctrl+F6", "<Control-F6>", "show_Template.png")
+    _add_menu_command(self, util_menu, shortcut_items, "Info Template", self.template_info_from_menu, "Ctrl+F7", "<Control-F7>", "")
+    _add_menu_command(self, util_menu, shortcut_items, "Close Template", self.close_template_from_menu)
     util_menu.add_separator()
-    util_menu.add_command(label="Statistics", command=self.show_statistics)
+    _add_menu_command(self, util_menu, shortcut_items, "Statistics", self.show_statistics, "Shift+Ctrl+F4", "<Control-Shift-F4>", "calculator.png")
     util_menu.add_separator()
-    util_menu.add_command(label="GoTo...", command=self.show_goto_dialog)
+    _add_menu_command(self, util_menu, shortcut_items, "GoTo...", self.show_goto_dialog, "Ctrl+F9", "<Control-F9>", "goto.png")
 
     analysis_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Analyse", menu=analysis_menu)
-    analysis_menu.add_command(label="Find Peaks", command=self.find_peaks_basic)
-    analysis_menu.add_command(label="Trace Lines", command=self.show_trace_lines)
+    _add_menu_command(self, analysis_menu, shortcut_items, "Find Peaks", self.find_peaks_basic, "", "", "find_peaks.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Trace Lines", self.show_trace_lines, "", "", "trace.png")
     analysis_menu.add_separator()
-    analysis_menu.add_command(label="Calculate Ne from Ha", command=self.show_ne_halpha)
-    analysis_menu.add_command(label="Manual Fit", command=self.show_retro_fit_manager)
-    analysis_menu.add_command(label="Single Fit", command=self.show_single_fit_manager)
-    analysis_menu.add_command(label="Auto Fit", command=self.show_auto_fit_manager)
-    analysis_menu.add_command(label="Saha Boltzmann plot", command=self.show_saha_boltzmann)
-    analysis_menu.add_command(label="CF LIBS", command=self.show_cf_libs)
+    _add_menu_command(self, analysis_menu, shortcut_items, "Calculate Ne from Ha", self.show_ne_halpha, "", "", "H_alpha.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Manual Fit", self.show_retro_fit_manager, "", "", "fit_manual.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Single Fit", self.show_single_fit_manager, "", "", "fit_single.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Auto Fit", self.show_auto_fit_manager, "", "", "fit_auto.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Saha Boltzmann plot", self.show_saha_boltzmann, "", "", "calculator.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "CF LIBS", self.show_cf_libs, "", "", "database.png")
     analysis_menu.add_separator()
-    analysis_menu.add_command(label="SAC", command=self.show_sac_window)
-    analysis_menu.add_command(label="Standard Correction", command=self.show_standard_correction)
+    _add_menu_command(self, analysis_menu, shortcut_items, "SAC", self.show_sac_window, "", "", "calibration.png")
+    _add_menu_command(self, analysis_menu, shortcut_items, "Standard Correction", self.show_standard_correction, "", "", "database.png")
 
     help_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Help", menu=help_menu)
-    help_menu.add_command(label="Manual...", command=self.show_manual)
+    _add_menu_command(self, help_menu, shortcut_items, "Manual...", self.show_manual, "", "", "help.png")
     help_menu.add_separator()
-    help_menu.add_command(label="About pyLIBS...", command=self.show_about)
+    _add_menu_command(self, help_menu, shortcut_items, "About pyLIBS...", self.show_about, "Ctrl+T", "<Control-t>", "about.png")
+    self.menu_shortcuts = shortcut_items
+    self.menu_shortcut_conflicts = [
+        "Ctrl+A: kept File > Append; Edit > Show Active Spectra uses Ctrl+Shift+A.",
+        "Ctrl+O: kept File > Open; Edit > Options uses Ctrl+Alt+O.",
+        "Ctrl+W: kept Edit > Swap Spectra; View > Show Labels uses Ctrl+Shift+W.",
+    ]
+    _bind_menu_shortcuts(self, shortcut_items)
 
 class ToolbarTooltip:
     """Small tooltip helper for toolbar image buttons."""

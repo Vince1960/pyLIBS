@@ -27,6 +27,7 @@
 - Remaining Italian user-visible messages in dialogs and status text were translated to English.
 - File > Save with Labels now exports the main spectrum as CSV with nearest-point template identification labels.
 - Batch Average now loads saved average and optional standard-deviation spectra into the comparison view after saving.
+- Drop-down menus now show and activate LIBS++-style keyboard accelerators and small menu icons where matching pyLIBS icons are available.
 
 ------------------------------------------------------------
 
