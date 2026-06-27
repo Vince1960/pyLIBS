@@ -9,6 +9,7 @@
 - Saha-Boltzmann now builds and plots fitted template-line points with session electron-density input, Unit27 temperature iteration, and safe Apply After response correction.
 - Saha-Boltzmann mean temperature can exclude/include individual elements without changing their fitted temperatures.
 - Saha-Boltzmann now auto-excludes out-of-range element temperatures and redraws fixed-temperature intercept-only fit lines.
+- Saha-Boltzmann fixed-temperature fit lines now span the full usable plot x-range.
 - Added a Single Fit command and toolbar button for fitting only the currently visible template lines.
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 - Manual Fit and Automatic Fit no longer show the legacy Expand button.

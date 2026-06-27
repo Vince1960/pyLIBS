@@ -14579,6 +14579,17 @@ class SahaBoltzmannWindow(tk.Toplevel):
             return {}
         return libspp_refit_saha_fixed_temperature(self.saha_groups, representative_kt)
 
+    def _plot_x_limits(self, groups):
+        xs = [p["x"] for pts in groups.values() for p in pts]
+        if not xs:
+            return None
+        x0, x1 = min(xs), max(xs)
+        if x0 == x1:
+            pad = max(abs(x0) * 0.05, 0.05)
+        else:
+            pad = abs(x1 - x0) * 0.05
+        return x0 - pad, x1 + pad
+
     def selected_element(self):
         selected = self.tree.selection()
         if selected:
@@ -14679,6 +14690,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         if self.ax is None:
             return
         fixed_refits = self._fixed_temperature_refits(representative_kt)
+        plot_xlim = self._plot_x_limits(groups)
         self.ax.clear()
         self.ax.set_title("Saha-Boltzmann")
         self.ax.set_xlabel("Upper energy / Saha-Boltzmann coordinate (eV)")
@@ -14694,15 +14706,14 @@ class SahaBoltzmannWindow(tk.Toplevel):
             self.ax.scatter(xs, ys, s=24, alpha=alpha, label=element)
             result = fits.get(element)
             if result:
-                x0, x1 = min(xs), max(xs)
-                if x0 == x1:
-                    x0 -= 0.05
-                    x1 += 0.05
                 fixed = fixed_refits.get(element)
-                if fixed:
+                if fixed and plot_xlim:
+                    x0, x1 = plot_xlim
                     y0 = fixed["slope"] * x0 + fixed["q_fixed"]
                     y1 = fixed["slope"] * x1 + fixed["q_fixed"]
                     self.ax.plot([x0, x1], [y0, y1], linewidth=1.0, alpha=alpha)
+        if plot_xlim:
+            self.ax.set_xlim(*plot_xlim)
         self.ax.legend(loc="best", fontsize=8)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
