@@ -7,6 +7,8 @@
 ### Changed
 
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
+- Manual Fit and Automatic Fit no longer show the legacy Expand button.
+- Spectrum open dialogs now use a shared filter list with lowercase/uppercase extensions for TXT, DAT, ROH, TRT, MCH, JND, ASC, and CSV files.
 
 ------------------------------------------------------------
 

@@ -12115,6 +12115,24 @@ def load_spectrum_for_open(filename: str, options: AppOptions) -> Spectrum:
     return Spectrum.from_ascii(filename, getattr(options, "convert_to_angstrom", False))
 
 
+SPECTRUM_FILETYPES = [
+    (
+        "All Supported Spectrum Files",
+        "*.txt *.TXT *.dat *.DAT *.roh *.ROH *.trt *.TRT *.mch *.MCH *.jnd *.JND *.asc *.ASC *.csv *.CSV",
+    ),
+    ("ASCII Files (*.txt *.TXT)", "*.txt *.TXT"),
+    ("Data Files (*.dat *.DAT)", "*.dat *.DAT"),
+    ("ROH Files (*.roh *.ROH)", "*.roh *.ROH"),
+    ("Avantes ROH (*.roh *.ROH)", "*.roh *.ROH"),
+    ("TRT Files (*.trt *.TRT)", "*.trt *.TRT"),
+    ("Mechelle Files (*.mch *.MCH)", "*.mch *.MCH"),
+    ("Joined Files (*.jnd *.JND)", "*.jnd *.JND"),
+    ("ASC Files (*.asc *.ASC)", "*.asc *.ASC"),
+    ("CSV Files (*.csv *.CSV)", "*.csv *.CSV"),
+    ("All", "*.*"),
+]
+
+
 @dataclass
 class ResponseCurve:
     x: list[float] = field(default_factory=list)
@@ -13388,7 +13406,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         return (idx % 2 == 1) if mode == "odd" else (idx % 2 == 0)
 
     def add_files(self):
-        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("Spectra", "*.roh *.ROH *.trt *.TRT *.txt *.dat *.asc *.csv"), ("Avantes ROH", "*.roh *.ROH"), ("ASCII", "*.txt *.dat *.asc *.csv"), ("All","*.*")])
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.master_app.options), filetypes=SPECTRUM_FILETYPES)
         remember_working_dir(self.master_app.options, fns)
         for fn in fns:
             if self._include_file(fn):
@@ -15224,8 +15242,6 @@ class RetroFitManagerWindow(tk.Toplevel):
             ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
             ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
             ttk.Button(top, text="Show Residuals", command=self.show_residuals).pack(side="left", padx=8)
-        ttk.Button(top, text="Expand", command=self.toggle_expand).pack(side="right", padx=2)
-
         self.msg_var = tk.StringVar(value="")
         ttk.Entry(self, textvariable=self.msg_var).pack(fill="x", padx=5, pady=2)
 
@@ -15814,7 +15830,7 @@ class MainWindow(tk.Tk):
         if self.active_window and self.active_window.winfo_exists(): self.active_window.refresh()
 
     def open_spectrum(self):
-        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
         if not fns: return
         remember_working_dir(self.options, fns)
         first_fn=fns[0]
@@ -15839,7 +15855,7 @@ class MainWindow(tk.Tk):
             self.status(f"Spettro caricato: {first_fn}; confronti: {len(fns)-1}")
 
     def append_spectrum(self):
-        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=[("Spectra","*.roh *.ROH *.txt *.dat *.asc *.csv"),("Avantes ROH","*.roh *.ROH"),("ASCII","*.txt *.dat *.asc *.csv"),("All","*.*")])
+        fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
         remember_working_dir(self.options, fns)
         if not fns:
             return
@@ -16482,7 +16498,7 @@ def compare_spectrum(self):
     files = filedialog.askopenfilenames(
         title="Compare Spectra",
         initialdir=remembered_initial_dir(self.options),
-        filetypes=[("Spectra", "*.roh *.ROH *.txt *.dat *.asc *.csv"), ("Avantes ROH", "*.roh *.ROH"), ("ASCII", "*.txt *.dat *.asc *.csv"), ("All", "*.*")]
+        filetypes=SPECTRUM_FILETYPES
     )
     remember_working_dir(self.options, files)
     for fn in files:
