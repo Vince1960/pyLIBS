@@ -14040,20 +14040,20 @@ class MultiGaussianFitWindow(tk.Toplevel):
         if np is None:
             if show_messages:
                 _showerror(self, "Fit Voigt", "numpy non disponibile")
-            return False, "numpy non disponibile"
+            return False, "numpy non disponibile", []
         try:
             from scipy.optimize import curve_fit
         except Exception:
             msg = "scipy.optimize non disponibile. Installare scipy."
             if show_messages:
                 _showerror(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         sp = self._active_spectrum()
         if sp is None or not getattr(sp, "x", None):
             msg = "Caricare prima uno spettro."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         xlim, ylim = self.master_app.current_plot_view()
         lo, hi = sorted(xlim)
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
@@ -14062,7 +14062,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             msg = "Troppi pochi punti nella finestra visibile."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         explicit_lines = lines is not None
         if lines is None:
             lines = [t for t in self.master_app.template_lines if lo <= (abs(t.fitwavelen) if t.fitwavelen else t.wavelen) <= hi]
@@ -14072,12 +14072,12 @@ class MultiGaussianFitWindow(tk.Toplevel):
             msg = "Nessuna riga marcata nella finestra visibile. Usa la ricerca/manual marking prima del fit."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         if explicit_lines and len(lines) > 10:
             msg = "Manual Fit group has more than 10 lines; the existing Voigt fit supports up to 10."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         lines = lines[:10]
         xmin, xmax = float(xs.min()), float(xs.max())
         width = max(xmax - xmin, 1e-9)
@@ -14112,7 +14112,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             msg = str(e)
             if show_messages:
                 _showerror(self, "Fit Voigt", msg)
-            return False, msg
+            return False, msg, []
         self.tree.delete(*self.tree.get_children())
         fit_results = []
         for idx, t in enumerate(lines):
@@ -14143,12 +14143,11 @@ class MultiGaussianFitWindow(tk.Toplevel):
             })
         self.master_app.fit_overlay = (xs.tolist(), multivoigt_model(xs, *popt).tolist())
         self.master_app.notify_template_changed(redraw=False)
-        self.master_app.update_fit_results(fit_results)
         self.master_app.redraw(preserve_view=True)
         if preserve_view:
             self.master_app.restore_plot_view(old_xlim, old_ylim)
         self.master_app.status(f"Fit Voigt: {len(lines)} righe nella finestra visibile")
-        return True, f"Fit Voigt: {len(lines)} line(s)"
+        return True, f"Fit Voigt: {len(lines)} line(s)", fit_results
 
     def clear_overlay(self):
         self.master_app.fit_overlay = None
@@ -15155,53 +15154,6 @@ class RetroActiveSpectraWindow(tk.Toplevel):
         self.master_app.redraw()
 
 
-class FitResultsWindow(tk.Toplevel):
-    columns = (
-        ("template_wavelength", "Template Wavelength", 130),
-        ("fit_center", "Fit Center Wavelength", 150),
-        ("peak_intensity", "Peak Intensity", 110),
-        ("lorentzian_width", "Lorentzian Width", 120),
-        ("gaussian_width", "Gaussian Width", 120),
-        ("integrated_area", "Integrated Area", 120),
-    )
-
-    def __init__(self, master: "MainWindow"):
-        super().__init__(master)
-        self.master_app = master
-        self.title("Fit Results")
-        self.geometry("820x360")
-        self.protocol("WM_DELETE_WINDOW", self.close)
-        frame = ttk.Frame(self)
-        frame.pack(fill="both", expand=True, padx=6, pady=6)
-        names = [name for name, _label, _width in self.columns]
-        self.tree = ttk.Treeview(frame, columns=names, show="headings")
-        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.tree.yview)
-        self.tree.configure(yscrollcommand=vsb.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
-        for name, label, width in self.columns:
-            self.tree.heading(name, text=label)
-            self.tree.column(name, width=width, anchor="center")
-        self.refresh()
-
-    def refresh(self):
-        widths = {name: self.tree.column(name, "width") for name, _label, _width in self.columns}
-        self.tree.delete(*self.tree.get_children())
-        rows = getattr(self.master_app, "fit_results_rows", {})
-        for key, row in rows.items():
-            values = [format_template_display_value(row.get(name, "")) for name, _label, _width in self.columns]
-            self.tree.insert("", "end", iid=str(key), values=values)
-        for name, _label, _width in self.columns:
-            self.tree.column(name, width=widths.get(name, self.tree.column(name, "width")), anchor="center")
-
-    def close(self):
-        if getattr(self.master_app, "fit_results_window", None) is self:
-            self.master_app.fit_results_window = None
-        self.destroy()
-
-
 class RetroFitManagerWindow(tk.Toplevel):
     """Manual/Auto Fit editor reconstructed from Unit14.
 
@@ -15219,6 +15171,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_index = 0
         self.manual_fit_failed = False
         self.manual_fit_stop = False
+        self.region_fit_results = {}
         self._build()
         self.load_from_template()
         self.prepare_initial_region()
@@ -15271,9 +15224,21 @@ class RetroFitManagerWindow(tk.Toplevel):
             c3.grid(row=r+1, column=6)
             self.line_vars.append((lam, wg, wl, flam, fwg, fwl, e1, e2, e3))
 
-        self.results = ttk.Treeview(self, columns=("Parameter", "Value", "Error"), show="headings", height=7)
-        for c, w in [("Parameter", 90), ("Value", 210), ("Error", 210)]:
-            self.results.heading(c, text=c)
+        self.results = ttk.Treeview(
+            self,
+            columns=("line", "center", "intensity", "lorentzian", "gaussian", "integral"),
+            show="headings",
+            height=7,
+        )
+        for c, label, w in [
+            ("line", "Line", 70),
+            ("center", "Fit Center Wavelength", 145),
+            ("intensity", "Fit Intensity", 110),
+            ("lorentzian", "Fit Lorentzian Width", 135),
+            ("gaussian", "Fit Gaussian Width", 130),
+            ("integral", "Fit Integral", 110),
+        ]:
+            self.results.heading(c, text=label)
             self.results.column(c, width=w, anchor="center")
         self.results.pack(fill="both", expand=True, padx=5, pady=4)
 
@@ -15352,6 +15317,9 @@ class RetroFitManagerWindow(tk.Toplevel):
     def _group_center(self, group):
         return (group[0].wavelen + group[-1].wavelen) / 2.0
 
+    def _group_key(self, group):
+        return tuple(id(t) for t in group)
+
     def _display_manual_group(self, group):
         if not group or not getattr(self.master_app, "ax", None):
             return
@@ -15382,6 +15350,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             status += ", expanded"
         self.msg_var.set(status)
         self.master_app.status(status)
+        self.populate_results(self.region_fit_results.get(self._group_key(group), []))
         return point_count, expanded
 
     def prepare_initial_region(self):
@@ -15460,16 +15429,16 @@ class RetroFitManagerWindow(tk.Toplevel):
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
             tmp.withdraw()
-            ok, message = tmp.fit_voigt_lines(lines=group, preserve_view=True, show_messages=False)
+            ok, message, results = tmp.fit_voigt_lines(lines=group, preserve_view=True, show_messages=False)
         except Exception as e:
-            ok, message = False, str(e)
+            ok, message, results = False, str(e), []
         finally:
             try:
                 if tmp is not None:
                     tmp.destroy()
             except Exception:
                 pass
-        return ok, message
+        return ok, message, results
 
     def _prepare_group_for_fit(self, group, mode_label):
         first = group[0].wavelen
@@ -15505,13 +15474,14 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set(f"{report}; {message}")
             _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
             return False
-        ok, message = self._fit_manual_group(group)
+        ok, message, results = self._fit_manual_group(group)
         if not ok:
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit failed: {message}")
             _showerror(self, mode_label, f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
             return False
-        self.populate_results(group)
+        self.region_fit_results[self._group_key(group)] = list(results)
+        self.populate_results(results)
         self.msg_var.set(f"{report}; fitted")
         self.master_app.status(f"{report}; fitted")
         self.update_idletasks()
@@ -15556,15 +15526,19 @@ class RetroFitManagerWindow(tk.Toplevel):
             return
         self.progress["value"] = 100
         self.msg_var.set("Automatic Fit completed")
-        self.populate_results()
         _showinfo(self, "Automatic Fit", "Automatic Fit completed")
 
-    def populate_results(self, lines=None):
+    def populate_results(self, rows=None):
         self.results.delete(*self.results.get_children())
-        lines = list(lines if lines is not None else self.master_app.template_lines[:10])
-        for i, t in enumerate(lines[:10], start=1):
-            self.results.insert("", "end", values=(f"Line {i} λ", f"{t.fitwavelen:.6g}", ""))
-            self.results.insert("", "end", values=(f"Line {i} I", f"{t.inte:.6g}", f"{t.error_inte:.3g}" if t.error_inte else ""))
+        for i, row in enumerate(list(rows or []), start=1):
+            self.results.insert("", "end", values=(
+                f"Line {i}",
+                format_template_display_value(row.get("fit_center", "")),
+                format_template_display_value(row.get("peak_intensity", "")),
+                format_template_display_value(row.get("lorentzian_width", "")),
+                format_template_display_value(row.get("gaussian_width", "")),
+                format_template_display_value(row.get("integrated_area", "")),
+            ))
 
     def stop_fit(self):
         self.manual_fit_stop = True
@@ -15629,8 +15603,6 @@ class MainWindow(tk.Tk):
         self.view_log_y = bool(getattr(self.options, "view_log_y", False))
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
-        self.fit_results_rows = {}
-        self.fit_results_window = None
         self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.standard_refs: dict[str, str] = {}
@@ -15860,19 +15832,6 @@ class MainWindow(tk.Tk):
             except Exception:
                 pass
         return removed
-
-    def update_fit_results(self, rows):
-        if not hasattr(self, "fit_results_rows"):
-            self.fit_results_rows = {}
-        for row in rows or []:
-            key = str(row.get("key", len(self.fit_results_rows)))
-            self.fit_results_rows[key] = dict(row)
-        win = getattr(self, "fit_results_window", None)
-        if win is None or not win.winfo_exists():
-            self.fit_results_window = FitResultsWindow(self)
-        else:
-            win.refresh()
-        self.fit_results_window.lift()
 
     def _active_spectrum_y_at(self, wavelength):
         """Intensity of the selected active spectrum at the nearest wavelength.
