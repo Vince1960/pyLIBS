@@ -14520,6 +14520,8 @@ class SahaBoltzmannWindow(tk.Toplevel):
             self.ax = self.fig.add_subplot(111)
             self.canvas = FigureCanvasTkAgg(self.fig, master=self)
             self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=6)
+            self.canvas.mpl_connect("button_press_event", self.on_plot_click)
+        self.plot_points = []
         self.after(100, self.compute)
 
     def compute(self):
@@ -14550,7 +14552,15 @@ class SahaBoltzmannWindow(tk.Toplevel):
         if not fits:
             self.summary_var.set(f"No valid Saha-Boltzmann fit; skipped {skipped} template line(s)")
             _showinfo(self, "Saha-Boltzmann", f"No valid plot points. Skipped {skipped} incomplete template line(s).")
-            self._clear_plot()
+            self.saha_groups = groups
+            self.saha_fits = {}
+            self.skipped_lines = skipped
+            self.current_ne = ne
+            self.included_elements = set()
+            self.auto_excluded_elements = set()
+            self.representative_kt = None
+            self.populate_tree()
+            self._draw_plot(groups, {}, None)
             return
         self.saha_groups = groups
         self.saha_fits = fits
@@ -14749,6 +14759,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
     def _clear_plot(self):
         if self.ax is None:
             return
+        self.plot_points = []
         self.ax.clear()
         self.canvas.draw_idle()
 
@@ -14757,19 +14768,27 @@ class SahaBoltzmannWindow(tk.Toplevel):
             return
         fixed_refits = self._fixed_temperature_refits(representative_kt)
         plot_xlim = self._plot_x_limits(groups)
+        self.plot_points = []
         self.ax.clear()
         self.ax.set_title("Saha-Boltzmann")
         self.ax.set_xlabel("Upper energy / Saha-Boltzmann coordinate (eV)")
         self.ax.set_ylabel("ln(I / |Aki gk|)")
         self.ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
-        for element, pts in sorted(groups.items()):
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
+        for group_idx, (element, pts) in enumerate(sorted(groups.items())):
             if not pts:
                 continue
-            xs = [p["x"] for p in pts]
-            ys = [p["y"] for p in pts]
             included = element in self.included_elements
             alpha = 1.0 if included or self.mode_var.get() != "Mean temperature" else 0.35
-            self.ax.scatter(xs, ys, s=24, alpha=alpha, label=element)
+            color = colors[group_idx % len(colors)] if colors else "#1f77b4"
+            label_used = False
+            for p in pts:
+                inactive = bool(p.get("inactive"))
+                point_color = "0.6" if inactive else color
+                label = element if not label_used else "_nolegend_"
+                self.ax.scatter([p["x"]], [p["y"]], s=24, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
+                label_used = True
+                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
             result = fits.get(element)
             if result:
                 fixed = fixed_refits.get(element)
@@ -14787,9 +14806,55 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
 
+    def on_plot_click(self, event):
+        if event.inaxes is not self.ax or not _matplotlib_event_has_shift(event) or event.button not in (1, 3):
+            return
+        point = self._nearest_plot_point(event)
+        if not point or point.get("line") is None:
+            return
+        activate = event.button == 3
+        _set_template_line_active(point["line"], activate)
+        self.master_app.notify_template_changed(redraw=True)
+        self.master_app.status("Point reactivated" if activate else "Point excluded from Saha-Boltzmann fit")
+        self.compute()
+
+    def _nearest_plot_point(self, event, max_pixels=12.0):
+        if not self.plot_points or event.x is None or event.y is None:
+            return None
+        best = None
+        best_dist = None
+        for point in self.plot_points:
+            try:
+                px, py = self.ax.transData.transform((point["x"], point["y"]))
+            except Exception:
+                continue
+            dist = math.hypot(px - event.x, py - event.y)
+            if best_dist is None or dist < best_dist:
+                best = point
+                best_dist = dist
+        return best if best is not None and best_dist is not None and best_dist <= max_pixels else None
+
 
 def _roman_ion(ion: int) -> str:
     return "I" if int(ion) == 1 else "II" if int(ion) == 2 else str(ion)
+
+
+def _matplotlib_event_has_shift(event) -> bool:
+    key = str(getattr(event, "key", "") or "").lower()
+    if "shift" in key:
+        return True
+    gui_event = getattr(event, "guiEvent", None)
+    try:
+        return bool(gui_event.state & 0x0001)
+    except Exception:
+        return False
+
+
+def _set_template_line_active(line: TemplateLine, active: bool):
+    aki = safe_float(getattr(line, "aki", 0.0), 0.0)
+    if aki == 0.0:
+        return
+    line.aki = abs(aki) if active else -abs(aki)
 
 
 def _fit_values_already_response_corrected(app: "MainWindow") -> bool:
@@ -14841,7 +14906,7 @@ def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[
     sac_factors = sac_factors or {}
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
-        if not t.specie or not t.ion or not t.aki or t.aki == -1 or not t.gk or not t.ek:
+        if not t.specie or not t.ion or not t.aki or not t.gk or not t.ek:
             continue
         inte = _template_line_intensity(t)
         if inte <= 0:
@@ -14855,9 +14920,10 @@ def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[
         ek_ev = t.ek * 1.23985e-4
         y = math.log(icorr / abs(t.aki * t.gk))
         groups[(t.specie.strip().capitalize(), int(t.ion))].append({
-            "x": ek_ev, "y": y, "line": t, "icorr": icorr, "eff": eff, "sac": sac
+            "x": ek_ev, "y": y, "line": t, "icorr": icorr, "eff": eff, "sac": sac,
+            "inactive": t.aki < 0.0,
         })
-    skipped = len(app.template_lines) - sum(len(pts) for pts in groups.values())
+    skipped = len(app.template_lines) - sum(1 for pts in groups.values() for p in pts if not p.get("inactive"))
     return groups, skipped
 
 
@@ -14883,7 +14949,7 @@ def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_fa
     for idx, t in enumerate(app.template_lines, start=1):
         specie = str(getattr(t, "specie", "") or "").strip().capitalize()
         ion = safe_int(getattr(t, "ion", 0), 0)
-        if not specie or ion not in (1, 2) or not t.aki or t.aki == -1 or not t.gk or not t.ek:
+        if not specie or ion not in (1, 2) or not t.aki or not t.gk or not t.ek:
             skipped += 1
             continue
         inte = _template_line_intensity(t)
@@ -14917,17 +14983,19 @@ def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_fa
             y -= math.log(6.04e21 / ne * math.pow(kt, 1.5))
         groups[specie].append({
             "x": x, "y": y, "line": t, "ion": ion, "icorr": icorr,
-            "eff": eff, "sac": sac, "center": center
+            "eff": eff, "sac": sac, "center": center, "inactive": t.aki < 0.0,
         })
+    skipped += sum(1 for pts in groups.values() for p in pts if p.get("inactive"))
     return groups, skipped
 
 
 def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
     results = {}
     for element, pts in groups.items():
-        if len(pts) < 2:
+        active_pts = [p for p in pts if not p.get("inactive")]
+        if len(active_pts) < 2:
             continue
-        fit = linear_fit([p["x"] for p in pts], [p["y"] for p in pts])
+        fit = linear_fit([p["x"] for p in active_pts], [p["y"] for p in active_pts])
         if not fit:
             continue
         slope, intercept = fit
@@ -14943,8 +15011,8 @@ def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
         except Exception:
             z2 = 1.0
         results[element] = {
-            "species": element, "nlines": len(pts), "kt": kt, "q": intercept,
-            "slope": slope, "z1": z1, "z2": z2, "points": pts
+            "species": element, "nlines": len(active_pts), "kt": kt, "q": intercept,
+            "slope": slope, "z1": z1, "z2": z2, "points": active_pts
         }
     return results
 
@@ -14955,16 +15023,17 @@ def libspp_refit_saha_fixed_temperature(groups: dict[str, list[dict]], kt: float
     slope = -1.0 / kt
     results = {}
     for element, pts in groups.items():
-        if not pts:
+        active_pts = [p for p in pts if not p.get("inactive")]
+        if not active_pts:
             continue
-        intercept = sum(p["y"] - slope * p["x"] for p in pts) / len(pts)
+        intercept = sum(p["y"] - slope * p["x"] for p in active_pts) / len(active_pts)
         results[element] = {
             "species": element,
-            "nlines": len(pts),
+            "nlines": len(active_pts),
             "kt": kt,
             "slope": slope,
             "q_fixed": intercept,
-            "points": pts,
+            "points": active_pts,
         }
     return results
 
@@ -14973,10 +15042,11 @@ def libspp_fit_boltzmann(app: "MainWindow", groups):
     """Fit Boltzmann lines and compute kT, q and Z(T), as in calcbo()/calcola()."""
     results = {}
     for key, pts in groups.items():
-        if len(pts) < 2:
+        active_pts = [p for p in pts if not p.get("inactive")]
+        if len(active_pts) < 2:
             continue
-        x = [p["x"] for p in pts]
-        y = [p["y"] for p in pts]
+        x = [p["x"] for p in active_pts]
+        y = [p["y"] for p in active_pts]
         fit = linear_fit(x, y)
         if not fit:
             continue
@@ -14990,7 +15060,7 @@ def libspp_fit_boltzmann(app: "MainWindow", groups):
         except Exception:
             z = 1.0
         # q is the intercept of ln(I/Ag) = q - Ek/kT in LIBS++ notation.
-        results[key] = {"species": specie, "ion": ion, "nlines": len(pts), "kt": kt, "q": intercept, "z": z, "points": pts}
+        results[key] = {"species": specie, "ion": ion, "nlines": len(active_pts), "kt": kt, "q": intercept, "z": z, "points": active_pts}
     return results
 
 
@@ -15000,10 +15070,11 @@ def libspp_fit_boltzmann_fixed_temperature(app: "MainWindow", groups, kt: float)
     if kt <= 0.0:
         return results
     for key, pts in groups.items():
-        if not pts:
+        active_pts = [p for p in pts if not p.get("inactive")]
+        if not active_pts:
             continue
         specie, ion = key
-        intercept = sum(p["y"] + p["x"] / kt for p in pts) / len(pts)
+        intercept = sum(p["y"] + p["x"] / kt for p in active_pts) / len(active_pts)
         try:
             z = app.libs_db.partition_function(specie, ion, kt * 11604.45)
         except Exception:
@@ -15011,12 +15082,12 @@ def libspp_fit_boltzmann_fixed_temperature(app: "MainWindow", groups, kt: float)
         results[key] = {
             "species": specie,
             "ion": ion,
-            "nlines": len(pts),
+            "nlines": len(active_pts),
             "kt": kt,
             "q": intercept,
             "q_at_t": intercept,
             "z": z,
-            "points": pts,
+            "points": active_pts,
             "slope": -1.0 / kt,
         }
     return results
@@ -15399,6 +15470,7 @@ class CFLibsWindow(tk.Toplevel):
             self.ax = self.fig.add_subplot(111)
             self.canvas = FigureCanvasTkAgg(self.fig, master=self)
             self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=6, pady=5)
+            self.canvas.mpl_connect("button_press_event", self.on_plot_click)
         self.last_rows = []
         self.last_skipped = 0
         self.last_kt = safe_float(self.kt_var.get(), 1.0) or 1.0
@@ -15408,6 +15480,7 @@ class CFLibsWindow(tk.Toplevel):
         self.last_ne_source = "default"
         self.report_window = None
         self.report_temp_dir = None
+        self.plot_points = []
         cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -15894,6 +15967,7 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
     def _draw_boltzmann(self, groups, fits, kt):
         if self.ax is None:
             return
+        self.plot_points = []
         self.ax.clear()
         self.ax.set_title("CF-LIBS Boltzmann plots")
         self.ax.set_xlabel("Upper energy Ek (eV)")
@@ -15906,14 +15980,21 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
             xmin, xmax = xmin - pad, xmax + pad
         else:
             xmin, xmax = 0.0, 1.0
-        for key, pts in sorted(groups.items()):
+        colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
+        for group_idx, (key, pts) in enumerate(sorted(groups.items())):
             if not pts:
                 continue
             specie, ion = key
             label = f"{specie} {_roman_ion(ion)}"
-            xs = [p["x"] for p in pts]
-            ys = [p["y"] for p in pts]
-            self.ax.scatter(xs, ys, s=24, label=label)
+            color = colors[group_idx % len(colors)] if colors else "#1f77b4"
+            label_used = False
+            for p in pts:
+                inactive = bool(p.get("inactive"))
+                point_color = "0.6" if inactive else color
+                point_label = label if not label_used else "_nolegend_"
+                self.ax.scatter([p["x"]], [p["y"]], s=24, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
+                label_used = True
+                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
             fit = fits.get(key)
             if fit:
                 y0 = fit["slope"] * xmin + fit["q_at_t"]
@@ -15924,6 +16005,34 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
         self.ax.legend(loc="best", fontsize=8)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
+
+    def on_plot_click(self, event):
+        if event.inaxes is not self.ax or not _matplotlib_event_has_shift(event) or event.button not in (1, 3):
+            return
+        point = self._nearest_plot_point(event)
+        if not point or point.get("line") is None:
+            return
+        activate = event.button == 3
+        _set_template_line_active(point["line"], activate)
+        self.master_app.notify_template_changed(redraw=True)
+        self.master_app.status("Point reactivated" if activate else "Point excluded from CF-LIBS calculation")
+        self.compute()
+
+    def _nearest_plot_point(self, event, max_pixels=12.0):
+        if not self.plot_points or event.x is None or event.y is None:
+            return None
+        best = None
+        best_dist = None
+        for point in self.plot_points:
+            try:
+                px, py = self.ax.transData.transform((point["x"], point["y"]))
+            except Exception:
+                continue
+            dist = math.hypot(px - event.x, py - event.y)
+            if best_dist is None or dist < best_dist:
+                best = point
+                best_dist = dist
+        return best if best is not None and best_dist is not None and best_dist <= max_pixels else None
 
 
 class CFLibsReportPreviewWindow(tk.Toplevel):
@@ -17262,7 +17371,9 @@ class MainWindow(tk.Tk):
             # peaks with complete transition data are yellow; assigned peaks
             # without Aki/levels/statistical weights are light blue.
             has_transition_data = bool(line.aki or line.ek or line.gk or line.gi)
-            if line.specie:
+            if safe_float(getattr(line, "aki", 0.0), 0.0) < 0.0:
+                color = "lightskyblue"
+            elif line.specie:
                 color = "gold" if has_transition_data else "lightskyblue"
             else:
                 color = "blue"
