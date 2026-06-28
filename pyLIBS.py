@@ -86,11 +86,14 @@ from pylibs.gui.icons import get_cached_menu_icon
 from pylibs.gui.toolbar import build_retro_toolbar
 from pylibs.gui.helpers import (
     _prepare_messagebox_parent,
+    center_window,
     legacy_geometry_to_tk,
     _askyesno,
     _showerror,
     _showinfo,
     _showwarning,
+    restore_lift_focus,
+    show_existing_or_create,
 )
 from pylibs.gui.simple_dialogs import (
     show_about,
@@ -11844,6 +11847,7 @@ class OptionsWindow(tk.Toplevel):
         self.vars: dict[str, tk.Variable] = {}
         self._build_original_layout()
         fit_toplevel_to_content(self, min_width=860, min_height=390)
+        center_window(self, master)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
     def v(self, attr, default="", kind="str"):
@@ -12307,6 +12311,7 @@ class LineIdentificationWindow(tk.Toplevel):
         self.tree.pack(fill="both", expand=True)
         tree_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.tree.bind("<Double-1>", self.assign)
+        center_window(self, master)
 
     def load_db(self):
         fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("CSV/TXT","*.csv *.txt *.dat"),("All","*.*")])
@@ -12464,6 +12469,7 @@ class TraceLinesWindow(tk.Toplevel):
         self.tree.pack(fill="both", expand=True)
         tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
         self.refresh()
+        center_window(self, master)
 
     def refresh(self, show_message=True):
         self.tree.delete(*self.tree.get_children())
@@ -12699,6 +12705,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
         self.listbox=tk.Listbox(self)
         self.listbox.pack(fill="both", expand=True, padx=6, pady=6)
+        center_window(self, master)
 
     def _last_numeric_index(self, filename):
         nums = re.findall(r"\d+", Path(filename).stem)
@@ -12881,6 +12888,7 @@ class VerticalShiftWindow(tk.Toplevel):
         ttk.Entry(self,textvariable=self.v2).grid(row=1,column=1)
         ttk.Button(self,text="Apply to main spectrum",command=self.apply).grid(row=2,column=0,columnspan=2,pady=8)
         fit_toplevel_to_content(self)
+        center_window(self, master)
 
     def apply(self):
         if not self.master_app.spectra: return
@@ -12919,6 +12927,7 @@ class SpectrumShiftWindow(tk.Toplevel):
         ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=4)
         ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left", padx=4)
         fit_toplevel_to_content(self)
+        center_window(self, master)
 
     def begin_capture(self, target):
         self.capture_target = target
@@ -13473,6 +13482,7 @@ class ResidualsWindow(tk.Toplevel):
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
         self._plot(x_values, residuals)
+        center_window(self, master)
 
     def update_plot(self, x_values, residuals):
         self._plot(x_values, residuals)
@@ -13519,6 +13529,7 @@ class NeHalphaWindow(tk.Toplevel):
         frm.rowconfigure(len(labels), weight=1)
         frm.columnconfigure(2, weight=1)
         self.show_fit_window_on_spectrum()
+        center_window(self, master)
 
     def show_fit_window_on_spectrum(self):
         if not self.master_app.spectra or not getattr(self.master_app, "ax", None):
@@ -14590,6 +14601,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
         fit_toplevel_to_content(self, min_width=0, min_height=360, max_width_fraction=0.45, max_height_fraction=0.60)
+        center_window(self, master)
         self.lift(master)
         try:
             self.focus_force()
@@ -14813,6 +14825,7 @@ class CFLibsOPCWindow(tk.Toplevel):
         self.rows_frame.columnconfigure(2, weight=1, minsize=180)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
+        center_window(self, owner)
         self.lift(owner)
         try:
             self.focus_force()
@@ -15075,6 +15088,7 @@ class CFLibsWindow(tk.Toplevel):
         self.tree.pack(fill="both", expand=True)
         tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
         self.after(100, self.compute)
+        center_window(self, master)
 
     def enable_opc(self):
         try:
@@ -15151,11 +15165,7 @@ class CFLibsWindow(tk.Toplevel):
             return
         if self.opc_window is not None and self.opc_window.winfo_exists():
             self.opc_window.refresh()
-            self.opc_window.lift(self)
-            try:
-                self.opc_window.focus_force()
-            except Exception:
-                self.opc_window.focus_set()
+            restore_lift_focus(self.opc_window, self)
             return
         self.opc_window = CFLibsOPCWindow(self)
 
@@ -15183,11 +15193,7 @@ class CFLibsWindow(tk.Toplevel):
             fallback = True
         if self.report_window is not None and self.report_window.winfo_exists():
             self.report_window.update_report(content, "html", ".html", preview_text=preview_text)
-            self.report_window.lift(self)
-            try:
-                self.report_window.focus_force()
-            except Exception:
-                self.report_window.focus_set()
+            restore_lift_focus(self.report_window, self)
             return
         self.report_window = CFLibsReportPreviewWindow(self, content, "html", ".html", preview_text=preview_text)
         if fallback:
@@ -15373,6 +15379,7 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
         self.text.pack(fill="both", expand=True)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.update_report(content, report_format, default_extension, preview_text=preview_text)
+        center_window(self, owner)
         self.lift(owner)
         try:
             self.focus_force()
@@ -16153,11 +16160,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             return
         self.residuals_window = ResidualsWindow(self, self.residual_x, self.residual_y)
         self.residuals_window.transient(self)
-        self.residuals_window.lift(self)
-        try:
-            self.residuals_window.focus_set()
-        except Exception:
-            pass
+        restore_lift_focus(self.residuals_window, self)
 
     def update_residuals_plot(self, lift_window=False):
         if not self._residuals_window_exists():
@@ -16165,11 +16168,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             return
         self.residuals_window.update_plot(self.residual_x, self.residual_y)
         if lift_window:
-            self.residuals_window.lift(self)
-            try:
-                self.residuals_window.focus_set()
-            except Exception:
-                pass
+            restore_lift_focus(self.residuals_window, self)
 
     def on_residuals_window_close(self):
         if self._residuals_window_exists():
@@ -16420,7 +16419,18 @@ class MainWindow(tk.Tk):
         self.session_temperature_source: Optional[str] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
+        self.batch_window = None
+        self.shift_window = None
+        self.offset_window = None
+        self.saha_window = None
+        self.cflibs_window = None
+        self.standard_correction_window = None
         self.sac_check_window = None
+        self.sac_window = None
+        self.ne_halpha_window = None
+        self.statistics_window = None
+        self.about_window = None
+        self.goto_window = None
         self.shift_capture_window=None
         self._build()
         try:
@@ -16795,26 +16805,19 @@ class MainWindow(tk.Tk):
             pass
 
     def show_active_spectra(self):
-        if self.active_window is None or not self.active_window.winfo_exists(): self.active_window=ActiveSpectraWindow(self)
-        else: self.active_window.refresh()
-        self.active_window.lift()
+        self.active_window = show_existing_or_create(self, "active_window", lambda: ActiveSpectraWindow(self), refresh=lambda w: w.refresh(), parent=self)
 
     def show_response_window(self):
-        if self.response_window is None or not self.response_window.winfo_exists(): self.response_window=ResponseWindow(self)
-        else: self.response_window.redraw()
-        self.response_window.lift()
+        self.response_window = show_existing_or_create(self, "response_window", lambda: ResponseWindow(self), refresh=lambda w: w.redraw(), parent=self)
 
     def show_template(self):
         return self.show_template_manager()
 
     def show_line_identification(self):
-        if self.line_window is None or not self.line_window.winfo_exists(): self.line_window=LineIdentificationWindow(self)
-        self.line_window.lift()
+        self.line_window = show_existing_or_create(self, "line_window", lambda: LineIdentificationWindow(self), parent=self)
 
     def show_trace_lines(self):
-        if self.trace_window is None or not self.trace_window.winfo_exists(): self.trace_window=TraceLinesWindow(self)
-        else: self.trace_window.refresh()
-        self.trace_window.lift()
+        self.trace_window = show_existing_or_create(self, "trace_window", lambda: TraceLinesWindow(self), refresh=lambda w: w.refresh(), parent=self)
 
     def copy_atomic_line_to_template_line(self, template_line, atomic):
         """Copy database transition fields into a template row."""
@@ -16907,24 +16910,13 @@ class MainWindow(tk.Tk):
             self.ax.set_xlim(wave-width,wave+width); self.canvas.draw_idle()
 
     def show_fit(self): MultiGaussianFitWindow(self)
-    def show_ne_halpha(self): NeHalphaWindow(self)
-    def show_sac(self): SACWindow(self)
-    def show_saha(self): SahaBoltzmannWindow(self)
-    def show_cflibs(self): CFLibsWindow(self)
-    def show_standard_correction(self): StandardCorrectionWindow(self)
+    def show_ne_halpha(self): self.ne_halpha_window = show_existing_or_create(self, "ne_halpha_window", lambda: NeHalphaWindow(self), parent=self)
+    def show_sac(self): self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
+    def show_saha(self): self.saha_window = show_existing_or_create(self, "saha_window", lambda: SahaBoltzmannWindow(self), parent=self)
+    def show_cflibs(self): self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
+    def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_sac_check(self):
-        if self.sac_check_window is None or not self.sac_check_window.winfo_exists():
-            self.sac_check_window = SelfAbsorptionCheckWindow(self)
-        else:
-            self.sac_check_window.refresh()
-            self.sac_check_window.lift()
-            try:
-                self.sac_check_window.focus_force()
-            except Exception:
-                try:
-                    self.sac_check_window.focus_set()
-                except Exception:
-                    pass
+        self.sac_check_window = show_existing_or_create(self, "sac_check_window", lambda: SelfAbsorptionCheckWindow(self), refresh=lambda w: w.refresh(show_message=False), parent=self)
         return self.sac_check_window
 
     def _mouse(self,event):
@@ -17111,17 +17103,21 @@ def install_retro_ui(self):
 def show_template_manager(self):
     if self.template_window is None or not self.template_window.winfo_exists() or not isinstance(self.template_window, RetroTemplateManager):
         self.template_window = RetroTemplateManager(self)
+        center_window(self.template_window, self)
+        restore_lift_focus(self.template_window, self)
     else:
         self.template_window.refresh()
-        self.template_window.lift()
+        restore_lift_focus(self.template_window, self)
     return self.template_window
 
 def show_active_spectra(self):
     if self.active_window is None or not self.active_window.winfo_exists():
         self.active_window = RetroActiveSpectraWindow(self)
+        center_window(self.active_window, self)
+        restore_lift_focus(self.active_window, self)
     else:
-        self.active_window.lift()
         self.active_window.refresh()
+        restore_lift_focus(self.active_window, self)
     return self.active_window
 
 def show_retro_fit_manager(self):
@@ -17702,42 +17698,39 @@ def full_scale(self):
     self.ax.relim(); self.ax.autoscale(True); self.canvas.draw_idle(); self._update_xscroll()
 
 def show_options(self):
-    try:
-        if self.options_window is not None and self.options_window.winfo_exists():
-            self.options_window.lift()
-            try:
-                self.options_window.focus_force()
-            except Exception:
-                self.options_window.focus_set()
-            return self.options_window
-    except Exception:
-        self.options_window = None
-    self.options_window = OptionsWindow(self)
+    self.options_window = show_existing_or_create(self, "options_window", lambda: OptionsWindow(self), parent=self)
     return self.options_window
 
 def show_vertical_shift(self):
-    return VerticalShiftWindow(self)
+    self.shift_window = show_existing_or_create(self, "shift_window", lambda: VerticalShiftWindow(self), parent=self)
+    return self.shift_window
 
 def show_spectrum_shift(self):
-    return SpectrumShiftWindow(self)
+    self.shift_window = show_existing_or_create(self, "shift_window", lambda: SpectrumShiftWindow(self), parent=self)
+    return self.shift_window
 
 def show_spectrum_offset(self):
-    return SpectrumOffsetWindow(self)
+    self.offset_window = show_existing_or_create(self, "offset_window", lambda: SpectrumOffsetWindow(self), parent=self)
+    return self.offset_window
 
 def show_batch_statistics(self):
-    return BatchStatisticsWindow(self)
+    self.batch_window = show_existing_or_create(self, "batch_window", lambda: BatchStatisticsWindow(self), parent=self)
+    return self.batch_window
 
 def show_auto_element_identification(self):
     return AutoElementIdentificationWindow(self)
 
 def show_saha_boltzmann(self):
-    return SahaBoltzmannWindow(self)
+    self.saha_window = show_existing_or_create(self, "saha_window", lambda: SahaBoltzmannWindow(self), parent=self)
+    return self.saha_window
 
 def show_cf_libs(self):
-    return CFLibsWindow(self)
+    self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
+    return self.cflibs_window
 
 def show_sac_window(self):
-    return SACWindow(self)
+    self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
+    return self.sac_window
 
 def load_template_file(self, filename):
     self.template_lines = load_template_lines(filename, RetroTemplateManager.columns)

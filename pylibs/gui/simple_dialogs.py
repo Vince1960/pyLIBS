@@ -9,7 +9,7 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
-from pylibs.gui.helpers import _showerror, _showinfo
+from pylibs.gui.helpers import _showerror, _showinfo, center_window, restore_lift_focus, show_existing_or_create
 from pylibs.utils.constants import APP_NAME, APP_VERSION
 from pylibs.utils.paths import manual_path
 
@@ -93,7 +93,7 @@ def show_statistics(master):
     if not master.spectra or not master.spectra[0].x or not master.spectra[0].y:
         _showinfo(master, "Statistics", "Load a spectrum before opening Statistics.")
         return None
-    return SpectrumStatisticsWindow(master)
+    return show_existing_or_create(master, "statistics_window", lambda: SpectrumStatisticsWindow(master), parent=master)
 
 
 def show_manual(master):
@@ -113,10 +113,15 @@ def show_manual(master):
 
 
 def show_about(master):
-    win = tk.Toplevel(master)
+    win = show_existing_or_create(master, "about_window", lambda: tk.Toplevel(master), parent=master, center=False)
     win.title(f"About {APP_NAME}")
     win.resizable(False, False)
     win.transient(master)
+    for child in win.winfo_children():
+        try:
+            child.destroy()
+        except Exception:
+            pass
 
     body = ttk.Frame(win, padding=(28, 26))
     body.pack(fill="both", expand=True)
@@ -134,13 +139,10 @@ def show_about(master):
     ).pack(fill="x")
     ttk.Button(body, text="OK", command=win.destroy).pack(pady=(22, 0))
 
-    win.update_idletasks()
-    x = master.winfo_rootx() + max(0, (master.winfo_width() - win.winfo_width()) // 2)
-    y = master.winfo_rooty() + max(0, (master.winfo_height() - win.winfo_height()) // 2)
-    win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
-    win.geometry(f"+{x}+{y}")
-    win.lift(master)
-    win.focus_set()
+    if not getattr(win, "_about_centered_once", False):
+        center_window(win, master)
+        win._about_centered_once = True
+    restore_lift_focus(win, master)
 
 
 class GoToWindow(tk.Toplevel):
@@ -191,6 +193,7 @@ class GoToWindow(tk.Toplevel):
         self.grab_set()
         self.wave_var.set("")
         _fit_toplevel_to_content(self)
+        center_window(self, app)
         self.after(50, lambda: self.focus_force())
 
     def select_common_line(self, _event=None):
