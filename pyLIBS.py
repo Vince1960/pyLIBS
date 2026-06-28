@@ -13746,6 +13746,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         kt = safe_float(self.initial_kt_var.get(), 1.0)
         if kt <= 0.0:
             kt = 1.0
+        sac_corrections = getattr(self.master_app, "sa_correction_factors", {}) if getattr(self.master_app, "sac_applied", False) else {}
         skipped = 0
         groups = {}
         fits = {}
@@ -13755,7 +13756,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 ne,
                 kt,
                 getattr(self.master_app, "sac_factors", {}),
-                getattr(self.master_app, "sa_correction_factors", {}),
+                sac_corrections,
             )
             fits = libspp_fit_saha_boltzmann(self.master_app, groups)
             new_kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
@@ -13770,7 +13771,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
                     ne,
                     kt,
                     getattr(self.master_app, "sac_factors", {}),
-                    getattr(self.master_app, "sa_correction_factors", {}),
+                    sac_corrections,
                 )
                 fits = libspp_fit_saha_boltzmann(self.master_app, groups)
                 break
@@ -14677,6 +14678,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._stark_db_warning_shown = False
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
+        ttk.Button(top, text="Populate", command=self.refresh).pack(side="left")
         ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
         self.summary_var = tk.StringVar(value="Ready")
@@ -14697,7 +14699,6 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.tree.bind("<Double-1>", self._on_double_click)
         self.protocol("WM_DELETE_WINDOW", self.close)
-        self.refresh()
         fit_toplevel_to_content(self, min_width=0, min_height=360, max_width_fraction=0.45, max_height_fraction=0.60)
         center_window(self, master)
         self.lift(master)
@@ -15365,10 +15366,11 @@ class CFLibsWindow(tk.Toplevel):
             kt = 1.0
             self.kt_var.set("1")
         ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
+        sac_corrections = getattr(self.master_app, "sa_correction_factors", {}) if getattr(self.master_app, "sac_applied", False) else {}
         groups, skipped = libspp_boltzmann_groups_with_skips(
             self.master_app,
             getattr(self.master_app, "sac_factors", {}),
-            getattr(self.master_app, "sa_correction_factors", {}),
+            sac_corrections,
         )
         fits = libspp_fit_boltzmann_fixed_temperature(self.master_app, groups, kt)
         if not fits:
@@ -17174,7 +17176,7 @@ class MainWindow(tk.Tk):
     def show_cflibs(self): self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
     def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_sac_check(self):
-        self.sac_check_window = show_existing_or_create(self, "sac_check_window", lambda: SelfAbsorptionCheckWindow(self), refresh=lambda w: w.refresh(show_message=False), parent=self)
+        self.sac_check_window = show_existing_or_create(self, "sac_check_window", lambda: SelfAbsorptionCheckWindow(self), parent=self)
         return self.sac_check_window
 
     def _mouse(self,event):
