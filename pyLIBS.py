@@ -14677,7 +14677,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         temp_k = self._current_temperature_k()
         w_t = w5000 + (temp_k - 5000.0) * (w10000 - w5000) / 5000.0
         ne = self._current_electron_density()
-        width = 2.0 * (ne / 1.0e16) * w_t
+        width = 2.0 * (ne / 1.0e17) * w_t
         return _format_sa_numeric(width)
 
     def _line_label(self, line):
