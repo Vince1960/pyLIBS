@@ -131,7 +131,6 @@ def show_about(master):
         text="© 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution.",
         font=text_font,
         anchor="center",
-        wraplength=560,
     ).pack(fill="x")
     ttk.Button(body, text="OK", command=win.destroy).pack(pady=(22, 0))
 
