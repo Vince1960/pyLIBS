@@ -12082,7 +12082,7 @@ class ActiveSpectraWindow(tk.Toplevel):
         ttk.Button(bottom, text="Refresh", command=self.refresh).pack(side="right", padx=2)
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, show_message=True):
         self.tree.delete(*self.tree.get_children())
         for i, sp in enumerate(self.master_app.spectra):
             self.tree.insert("", "end", iid=str(i), values=("X" if i in self.selected else "", "yes" if sp.visible else "no", sp.name, len(sp.x)))
@@ -12220,7 +12220,7 @@ class TemplateManager(tk.Toplevel):
         self.tree.bind("<Double-1>", self.zoom)
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, show_message=True):
         selected = list(self.tree.selection())
         focus = self.tree.focus()
         self.tree.delete(*self.tree.get_children())
@@ -12465,7 +12465,7 @@ class TraceLinesWindow(tk.Toplevel):
         tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
         self.refresh()
 
-    def refresh(self):
+    def refresh(self, show_message=True):
         self.tree.delete(*self.tree.get_children())
         for i, l in enumerate(getattr(self.master_app, "trace_markers", [])):
             self.tree.insert("", "end", iid=str(i), values=[getattr(l, c) for c in self.columns])
@@ -13692,14 +13692,19 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.last_valid_mean_kt = None
         self.auto_excluded_elements = set()
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top, text="Compute Plot", command=self.compute).pack(side="left")
-        ttk.Button(top, text="CF-LIBS", command=self.master_app.show_cf_libs).pack(side="left", padx=(12, 3))
+        left = ttk.Frame(top)
+        left.pack(side="left")
+        ttk.Button(left, text="Compute Plot", command=self.compute).pack(side="left")
+        ttk.Button(left, text="CF-LIBS", command=self.master_app.show_cflibs).pack(side="left", padx=(12, 3))
         self.mode_var = tk.StringVar(value="Mean temperature")
-        ttk.Label(top, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
+        ttk.Label(left, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
         self.initial_kt_var = tk.StringVar(value="1")
-        ttk.Entry(top, textvariable=self.initial_kt_var, width=8).pack(side="left")
+        ttk.Entry(left, textvariable=self.initial_kt_var, width=8).pack(side="left")
+        right = ttk.Frame(top)
+        right.pack(side="right", fill="x", expand=True)
         self.summary_var = tk.StringVar(value="Ready")
-        ttk.Label(top, textvariable=self.summary_var, width=46).pack(side="left", padx=12, fill="x", expand=True)
+        ttk.Label(right, textvariable=self.summary_var, width=38).pack(side="left", padx=(12, 8), fill="x", expand=True)
+        ttk.Button(right, text="Check SA", command=self.master_app.show_sac_check).pack(side="right")
         cols=("use", "element", "lines", "kT eV", "q", "Z I", "Z II")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -14538,6 +14543,188 @@ class SACWindow(tk.Toplevel):
         self.master_app.sac_factors = {}
         self.tree.delete(*self.tree.get_children())
         self.master_app.status("SAC reset: the engine will use SAC=1")
+
+
+def _format_sa_numeric(value):
+    try:
+        num = float(value)
+    except Exception:
+        return ""
+    if not math.isfinite(num):
+        return ""
+    text = f"{num:.3f}".rstrip("0").rstrip(".")
+    return text if text and text != "-0" else "0"
+
+
+class SelfAbsorptionCheckWindow(tk.Toplevel):
+    """Preliminary self-absorption inspection window."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.master_app = master
+        self.title("Self-Absorption Check")
+        self.geometry("920x440")
+        self.minsize(820, 360)
+        self._editor = None
+        self._editor_item = None
+        self._editor_column = None
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=6, pady=5)
+        ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
+        ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
+        self.summary_var = tk.StringVar(value="Ready")
+        ttk.Label(top, textvariable=self.summary_var).pack(side="right", padx=6)
+
+        self.tree = ttk.Treeview(self, columns=("line", "wl", "stark_width", "sa", "use"), show="headings", height=14)
+        headings = {
+            "line": "Line",
+            "wl": "wl",
+            "stark_width": "Stark width",
+            "sa": "SA",
+            "use": "Use",
+        }
+        widths = {"line": 420, "wl": 115, "stark_width": 120, "sa": 90, "use": 80}
+        for col in ("line", "wl", "stark_width", "sa", "use"):
+            self.tree.heading(col, text=headings[col])
+            self.tree.column(col, width=widths[col], anchor="center")
+        self.tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
+        self.tree.bind("<Double-1>", self._on_double_click)
+        self.tree.bind("<space>", self._toggle_selected_use)
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.refresh()
+        self.lift(master)
+        try:
+            self.focus_force()
+        except Exception:
+            self.focus_set()
+
+    def _assigned_lines(self):
+        return [line for line in getattr(self.master_app, "template_lines", []) or [] if getattr(line, "specie", "") and getattr(line, "ion", 0)]
+
+    def _line_label(self, line):
+        wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0) or safe_float(getattr(line, "wavelen", 0.0), 0.0)
+        if not wave:
+            return ""
+        return f"{line.specie} {_roman_ion(line.ion)} {wave:.2f}"
+
+    def _line_values(self, line):
+        wl = abs(safe_float(getattr(line, "fitwavelen", 0.0), 0.0))
+        stark = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
+        return (
+            self._line_label(line),
+            _format_sa_numeric(wl) if wl > 0.0 else "",
+            _format_sa_numeric(stark) if stark > 0.0 else "",
+            "",
+            "Yes",
+        )
+
+    def refresh(self, show_message=True):
+        if self._editor is not None:
+            try:
+                self._editor.destroy()
+            except Exception:
+                pass
+            self._editor = None
+            self._editor_item = None
+            self._editor_column = None
+        lines = self._assigned_lines()
+        self.tree.delete(*self.tree.get_children())
+        if not lines:
+            self.summary_var.set("No assigned template lines available")
+            if show_message:
+                _showinfo(self, "Self-Absorption Check", "A template with assigned lines is required first.")
+            return
+        for idx, line in enumerate(lines):
+            self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
+        self.summary_var.set(f"{len(lines)} template line(s)")
+
+    def _toggle_selected_use(self, _event=None):
+        item = self.tree.focus()
+        if not item:
+            return "break"
+        self._toggle_use_value(item)
+        return "break"
+
+    def _toggle_use_value(self, item):
+        values = list(self.tree.item(item, "values"))
+        if not values:
+            return
+        values[4] = "No" if str(values[4]).strip().lower().startswith("y") else "Yes"
+        self.tree.item(item, values=values)
+
+    def _commit_use_editor(self, value):
+        if self._editor_item is None:
+            return
+        values = list(self.tree.item(self._editor_item, "values"))
+        if not values:
+            return
+        values[4] = "Yes" if str(value).strip().lower().startswith("y") else "No"
+        self.tree.item(self._editor_item, values=values)
+
+    def _close_use_editor(self, commit=True):
+        editor = self._editor
+        if editor is None:
+            return
+        if commit:
+            self._commit_use_editor(editor.get())
+        try:
+            editor.destroy()
+        except Exception:
+            pass
+        self._editor = None
+        self._editor_item = None
+        self._editor_column = None
+
+    def _on_double_click(self, event):
+        region = self.tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        column = self.tree.identify_column(event.x)
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        if column == "#5":
+            self._open_use_editor(item)
+        else:
+            self._toggle_use_value(item)
+
+    def _open_use_editor(self, item):
+        self._close_use_editor(commit=True)
+        bbox = self.tree.bbox(item, "use")
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        current = str(self.tree.item(item, "values")[4]).strip() or "Yes"
+        editor = ttk.Combobox(self.tree, values=("Yes", "No"), state="readonly", width=5)
+        editor.set("Yes" if current.lower().startswith("y") else "No")
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.bind("<<ComboboxSelected>>", lambda _e: self._close_use_editor(commit=True))
+        editor.bind("<Return>", lambda _e: self._close_use_editor(commit=True))
+        editor.bind("<Escape>", lambda _e: self._close_use_editor(commit=False))
+        editor.bind("<FocusOut>", lambda _e: self._close_use_editor(commit=True))
+        self._editor = editor
+        self._editor_item = item
+        self._editor_column = "use"
+        try:
+            editor.focus_set()
+        except Exception:
+            pass
+
+    def apply_sac(self):
+        _showinfo(self, "Self-Absorption Check", "Self-absorption correction will be implemented in a later step.")
+        self.summary_var.set("Apply SAC is not implemented yet")
+
+    def close(self):
+        try:
+            self._close_use_editor(commit=False)
+        except Exception:
+            pass
+        try:
+            if getattr(self.master_app, "sac_check_window", None) is self:
+                self.master_app.sac_check_window = None
+        except Exception:
+            pass
+        self.destroy()
 
 
 class StandardCorrectionWindow(tk.Toplevel):
@@ -16277,6 +16464,7 @@ class MainWindow(tk.Tk):
         self.session_temperature_source: Optional[str] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
+        self.sac_check_window = None
         self.shift_capture_window=None
         self._build()
         try:
@@ -16770,6 +16958,20 @@ class MainWindow(tk.Tk):
     def show_saha(self): SahaBoltzmannWindow(self)
     def show_cflibs(self): CFLibsWindow(self)
     def show_standard_correction(self): StandardCorrectionWindow(self)
+    def show_sac_check(self):
+        if self.sac_check_window is None or not self.sac_check_window.winfo_exists():
+            self.sac_check_window = SelfAbsorptionCheckWindow(self)
+        else:
+            self.sac_check_window.refresh()
+            self.sac_check_window.lift()
+            try:
+                self.sac_check_window.focus_force()
+            except Exception:
+                try:
+                    self.sac_check_window.focus_set()
+                except Exception:
+                    pass
+        return self.sac_check_window
 
     def _mouse(self,event):
         if event.inaxes is not getattr(self, "ax", None) or event.xdata is None or event.ydata is None:
@@ -17226,6 +17428,12 @@ def notify_template_changed(self, redraw=False):
         try:
             self.template_window.refresh()
             refreshed.add(self.template_window)
+        except Exception:
+            pass
+    if self.sac_check_window and self.sac_check_window.winfo_exists():
+        try:
+            self.sac_check_window.refresh(show_message=False)
+            refreshed.add(self.sac_check_window)
         except Exception:
             pass
     try:
