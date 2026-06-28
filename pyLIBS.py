@@ -52,6 +52,26 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk, colorchooser, simpledialog
 from typing import Optional
 
+from pylibs.utils.constants import (
+    APP_AUTHOR,
+    APP_COPYRIGHT,
+    APP_DESCRIPTION,
+    APP_HISTORY,
+    APP_NAME,
+    APP_SUBTITLE,
+    APP_TITLE,
+    APP_VERSION,
+    SPLASH_DURATION_MS,
+    SPLASH_SECONDS,
+)
+from pylibs.utils.paths import (
+    app_base_dir,
+    find_icon_path as _find_menu_icon,
+    icon_dirs as _menu_icon_dirs,
+    manual_path,
+    resource_path,
+)
+
 try:
     import numpy as np
 except Exception:
@@ -74,24 +94,6 @@ except Exception:
     FigureCanvasTkAgg = None
 
 
-APP_NAME = "pyLIBS"
-APP_VERSION = "9.0 Beta"
-APP_DESCRIPTION = "Advanced LIBS Spectrum Analysis"
-APP_AUTHOR = (
-    "Developed at the Applied Laser Spectroscopy "
-    "Laboratory, ICCOM–CNR, Pisa"
-)
-APP_HISTORY = (
-    "Originally developed as LIBS++ "
-    "by Vincenzo Palleschi and co-workers"
-)
-APP_COPYRIGHT = "© CNR Pisa 1999–2026"
-
-APP_TITLE = APP_NAME
-APP_SUBTITLE = APP_DESCRIPTION
-SPLASH_SECONDS = 3
-
-SPLASH_DURATION_MS = 2800
 SPLASH_IMAGE_B64 = """
 iVBORw0KGgoAAAANSUhEUgAAA4QAAAI6CAIAAADwmxHdAAEAAElEQVR42uz9ecxsW3Yfhq3f2udU
 1Tfc4c1Tz+xuqskmm+IQySQlUbIsCbIi0LIhOXEEw4njRDISR5Dj2Amc2EicwEiQwAigDLYjQbAI
@@ -11608,7 +11610,7 @@ def _cast_ini(value: str, typ, default):
 
 
 def default_ini_path() -> Path:
-    base = Path(__file__).resolve().parent
+    base = app_base_dir()
     preferred = base / "pyLIBS.ini"
     if preferred.exists():
         return preferred
@@ -11670,16 +11672,6 @@ def save_pylibs_ini(opts: AppOptions, filename: Optional[str] = None) -> Path:
 # pyLIBS v8.3 resource / ini / splash helpers
 # ---------------------------------------------------------------------------
 
-def app_base_dir() -> Path:
-    """Directory of the script/executable. Used for pyLIBS.ini, LIBS.db and splash."""
-    try:
-        return Path(__file__).resolve().parent
-    except Exception:
-        return Path.cwd()
-
-
-
-
 def remembered_initial_dir(options=None) -> str:
     """Return the last working directory stored in pyLIBS.ini, if valid."""
     try:
@@ -11705,14 +11697,6 @@ def remember_working_dir(options, filename_or_files) -> None:
             options.input_dir = str(parent)
     except Exception:
         pass
-
-def resource_path(filename: str) -> Path:
-    p = app_base_dir() / filename
-    if p.exists():
-        return p
-    alt = Path.cwd() / filename
-    return alt
-
 
 def show_startup_splash(root, seconds: float = SPLASH_SECONDS):
     """Show pyLIBS splash for a few seconds before the main window is displayed."""
@@ -17882,26 +17866,6 @@ class MainWindow(tk.Tk):
 # pyLIBS v8.10 Retro menus and windows
 # -----------------------------------------------------------------------
 
-def _menu_icon_dirs():
-    base_dir = Path(__file__).resolve().parent
-    return [base_dir / "icons", base_dir / "Icons"]
-
-def _find_menu_icon(filename):
-    if not filename:
-        return None
-    for icon_dir in _menu_icon_dirs():
-        icon_path = icon_dir / filename
-        if icon_path.exists():
-            return icon_path
-    filename_lower = filename.lower()
-    for icon_dir in _menu_icon_dirs():
-        if not icon_dir.exists():
-            continue
-        for icon_path in sorted(icon_dir.iterdir()):
-            if icon_path.name.lower() == filename_lower:
-                return icon_path
-    return None
-
 def get_menu_icon(self, filename, size=16):
     """Load a menu-only icon copy without altering toolbar images."""
     if not hasattr(self, "menu_icons"):
@@ -18144,10 +18108,7 @@ def build_retro_toolbar(self):
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
     ]
-    icon_dirs = [
-        Path(__file__).resolve().parent / "icons",
-        Path(__file__).resolve().parent / "Icons",
-    ]
+    icon_dirs = _menu_icon_dirs()
     icon_names = {
         "Open": "open.png",
         "Compare": "compare.png",
@@ -18732,7 +18693,7 @@ def find_peaks_basic(self):
     self.status(f"Find Peaks: {added} new lines, {updated} updated; template total {len(self.template_lines)}")
 
 def show_manual(self):
-    manual = app_base_dir() / "docs" / "LIBS++_Manual.pdf"
+    manual = manual_path()
     if not manual.exists():
         _showinfo(self, "Manual", f"Manual not found:\n{manual}")
         return
