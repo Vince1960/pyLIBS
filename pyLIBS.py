@@ -12565,11 +12565,43 @@ class SimpleTableWindow(tk.Toplevel):
         super().__init__(master)
         self.title(title)
         self.geometry("900x480")
+        self.minsize(520, 260)
         self.tree = ttk.Treeview(self, columns=columns, show="headings")
         for c in columns:
             self.tree.heading(c, text=c)
             self.tree.column(c, width=90, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=6)
+
+
+def fit_toplevel_to_content(win, min_width=0, min_height=0, max_width_fraction=0.90, max_height_fraction=0.85):
+    """Shrink oversized toplevels to requested content without exceeding screen bounds."""
+    try:
+        win.update_idletasks()
+        req_w = max(int(min_width or 0), win.winfo_reqwidth())
+        req_h = max(int(min_height or 0), win.winfo_reqheight())
+        max_w = max(1, int(win.winfo_screenwidth() * max_width_fraction))
+        max_h = max(1, int(win.winfo_screenheight() * max_height_fraction))
+        width = min(req_w, max_w)
+        height = min(req_h, max_h)
+        win.minsize(max(1, min(req_w, max_w)), max(1, min(req_h, max_h)))
+        win.geometry(f"{width}x{height}")
+    except Exception:
+        pass
+
+
+def pack_tree_with_scrollbars(frame, tree, *, fill_both=True, padx=6, pady=5):
+    """Attach scrollbars around a Treeview that was created inside frame."""
+    yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+    xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+    tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+    tree.grid(row=0, column=0, sticky="nsew")
+    yscroll.grid(row=0, column=1, sticky="ns")
+    xscroll.grid(row=1, column=0, sticky="ew")
+    frame.rowconfigure(0, weight=1)
+    frame.columnconfigure(0, weight=1)
+    pack_fill = "both" if fill_both else "x"
+    frame.pack(fill=pack_fill, expand=fill_both, padx=padx, pady=pady)
+    return frame
 
 
 
@@ -12585,12 +12617,13 @@ class OptionsWindow(tk.Toplevel):
         self.master_app = master
         self.title("Options")
         self.resizable(True, True)
-        self.minsize(720, 480)
-        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "900x650")
+        self.minsize(660, 300)
+        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "900x430")
         if geom:
             self.geometry(geom)
         self.vars: dict[str, tk.Variable] = {}
         self._build_original_layout()
+        fit_toplevel_to_content(self, min_width=760, min_height=360)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
     def v(self, attr, default="", kind="str"):
@@ -12991,15 +13024,17 @@ class TemplateManager(tk.Toplevel):
         self.master_app = master
         self.title("Template Manager - Unit6")
         self.geometry("1080x470")
+        self.minsize(760, 320)
         bar = ttk.Frame(self); bar.pack(fill="x", padx=5, pady=5)
         ttk.Button(bar, text="Load CSV", command=self.load).pack(side="left")
         ttk.Button(bar, text="Save CSV", command=self.save).pack(side="left", padx=3)
         ttk.Button(bar, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=3)
         ttk.Button(bar, text="Line Identification", command=master.show_line_identification).pack(side="left", padx=3)
-        self.tree = ttk.Treeview(self, columns=self.columns, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c, text=c); self.tree.column(c, width=78, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=5, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree, padx=5, pady=5)
         self.tree.bind("<Double-1>", self.zoom)
         self.refresh()
 
@@ -13069,6 +13104,7 @@ class LineIdentificationWindow(tk.Toplevel):
         self.master_app=master
         self.title("Identifications")
         self.geometry("980x500")
+        self.minsize(820, 360)
         self.atomic_lines=[]
         self.results=[]
         top=ttk.Frame(self); top.pack(fill="x", padx=5, pady=5)
@@ -13082,10 +13118,11 @@ class LineIdentificationWindow(tk.Toplevel):
         ttk.Label(top, text="range").pack(side="left", padx=(8,2))
         self.range_var=tk.StringVar(value=str(master.options.search_range)); ttk.Entry(top, textvariable=self.range_var, width=8).pack(side="left")
         ttk.Button(top, text="Search", command=self.search).pack(side="left", padx=5)
-        self.tree=ttk.Treeview(self, columns=self.columns, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree=ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c,text=c); self.tree.column(c,width=85,anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=5, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree, padx=5, pady=5)
         self.tree.bind("<Double-1>", self.assign)
 
     def load_db(self):
@@ -13167,7 +13204,7 @@ class ElementLocatorWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app=master
         self.title("Element Locator - Unit2")
-        self.geometry("460x220")
+        self.resizable(False, False)
         ttk.Label(self, text="Element symbol").grid(row=0,column=0,padx=8,pady=8,sticky="w")
         self.el_var=tk.StringVar(value="Fe")
         ttk.Entry(self, textvariable=self.el_var, width=12).grid(row=0,column=1,pady=8)
@@ -13181,6 +13218,7 @@ class ElementLocatorWindow(tk.Toplevel):
         ttk.Button(self,text="Locate",command=self.locate).grid(row=3,column=0,padx=8,pady=12)
         ttk.Button(self,text="Clear markers",command=self.master_app.clear_element_markers).grid(row=3,column=1,pady=12)
         ttk.Button(self,text="Auto assign",command=self.auto_assign).grid(row=3,column=2,pady=12)
+        fit_toplevel_to_content(self)
 
     def locate(self):
         element=self.el_var.get().strip()
@@ -13219,6 +13257,7 @@ class TraceLinesWindow(tk.Toplevel):
         self.master_app = master
         self.title("Trace Lines")
         self.geometry("760x430")
+        self.minsize(740, 340)
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=6)
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
         self.species_var = tk.StringVar(value="Si")
@@ -13235,10 +13274,11 @@ class TraceLinesWindow(tk.Toplevel):
         ttk.Button(top, text="Clear", command=self.clear).grid(row=0, column=11, padx=3)
         self.info_var = tk.StringVar(value="Trace uses the currently visible wavelength range.")
         ttk.Label(self, textvariable=self.info_var).pack(anchor="w", padx=8)
-        self.tree = ttk.Treeview(self, columns=self.columns, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c, text=c); self.tree.column(c, width=72, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=6)
+        pack_tree_with_scrollbars(tree_frame, self.tree, padx=6, pady=6)
         self.refresh()
 
     def refresh(self):
@@ -13319,6 +13359,7 @@ class AutoElementIdentificationWindow(tk.Toplevel):
         self.master_app=master
         self.title("Auto Element Identification - Unit77")
         self.geometry("760x500")
+        self.minsize(720, 340)
         self.results: list[tuple[str, float]] = []
 
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
@@ -13338,11 +13379,12 @@ class AutoElementIdentificationWindow(tk.Toplevel):
         ttk.Button(top,text="Auto assign top",command=self.auto_assign_top).pack(side="left", padx=4)
 
         cols=("sel","species","score")
-        self.tree=ttk.Treeview(self, columns=cols, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree=ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c,text=c)
             self.tree.column(c,width=120 if c!="species" else 180,anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree)
         self.tree.bind("<Button-1>", self.toggle)
 
     def template_candidates(self):
@@ -13441,7 +13483,8 @@ class BatchStatisticsWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app=master
         self.title("Batch Operations")
-        self.geometry("760x500")
+        self.geometry("860x500")
+        self.minsize(800, 340)
         menu = tk.Menu(self)
         file_menu = tk.Menu(menu, tearoff=0)
         file_menu.add_command(label="Load List", command=self.load_list)
@@ -13692,6 +13735,7 @@ class SpectrumStatisticsWindow(tk.Toplevel):
             ttk.Label(frame, text=self._fmt(ystats[label]), anchor="e").grid(row=row, column=2, sticky="e", padx=16, pady=3)
         ttk.Label(frame, text=f"Number of points: {n}").grid(row=len(self.rows) + 1, column=0, columnspan=3, sticky="w", padx=8, pady=(12, 4))
         ttk.Button(frame, text="Close", command=self.destroy).grid(row=len(self.rows) + 2, column=0, columnspan=3, pady=(8, 0))
+        fit_toplevel_to_content(self)
 
     def _fmt(self, value):
         return f"{value:.6g}"
@@ -13710,6 +13754,7 @@ class VerticalShiftWindow(tk.Toplevel):
         ttk.Entry(self,textvariable=self.v1).grid(row=0,column=1)
         ttk.Entry(self,textvariable=self.v2).grid(row=1,column=1)
         ttk.Button(self,text="Apply to main spectrum",command=self.apply).grid(row=2,column=0,columnspan=2,pady=8)
+        fit_toplevel_to_content(self)
 
     def apply(self):
         if not self.master_app.spectra: return
@@ -13747,6 +13792,7 @@ class SpectrumShiftWindow(tk.Toplevel):
         buttons.grid(row=4, column=0, columnspan=3, sticky="e", padx=8, pady=(10, 8))
         ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=4)
         ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left", padx=4)
+        fit_toplevel_to_content(self)
 
     def begin_capture(self, target):
         self.capture_target = target
@@ -13857,6 +13903,7 @@ class SpectrumOffsetWindow(SpectrumShiftWindow):
         buttons.grid(row=3, column=0, columnspan=3, sticky="e", padx=8, pady=(10, 8))
         ttk.Button(buttons, text="OK", command=self.ok).pack(side="left", padx=4)
         ttk.Button(buttons, text="Cancel", command=self.cancel).pack(side="left", padx=4)
+        fit_toplevel_to_content(self)
 
     def begin_capture(self, target):
         self.capture_target = target
@@ -14289,7 +14336,7 @@ class ResidualsWindow(tk.Toplevel):
         self.fit_window = master
         self.master_app = master.master_app
         self.title("Residuals")
-        self.geometry("1200x250")
+        self.geometry("900x260")
         self.minsize(500, 160)
         self.protocol("WM_DELETE_WINDOW", master.on_residuals_window_close)
         if Figure is None or FigureCanvasTkAgg is None:
@@ -14324,6 +14371,7 @@ class NeHalphaWindow(tk.Toplevel):
         self.master_app = master
         self.title("Ne from H-alpha - Unit16/SDIMain")
         self.geometry("620x360")
+        self.minsize(560, 320)
         frm = ttk.Frame(self); frm.pack(fill="both", expand=True, padx=10, pady=10)
         labels = [
             ("Number of lines", str(master.options.ha_lines)),
@@ -14507,7 +14555,8 @@ class SahaBoltzmannWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Saha-Boltzmann")
-        self.geometry("1050x720")
+        self.geometry("1050x700")
+        self.minsize(880, 560)
         self.saha_groups = {}
         self.saha_fits = {}
         self.included_elements = set()
@@ -14533,7 +14582,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.initial_kt_var = tk.StringVar(value="1")
         ttk.Entry(top, textvariable=self.initial_kt_var, width=8).pack(side="left")
         self.summary_var = tk.StringVar(value="Ready")
-        ttk.Label(top, textvariable=self.summary_var).pack(side="left", padx=12)
+        ttk.Label(top, textvariable=self.summary_var, width=46).pack(side="left", padx=12, fill="x", expand=True)
         cols=("use", "element", "lines", "kT eV", "q", "Z I", "Z II")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -15381,16 +15430,18 @@ class StandardCorrectionWindow(tk.Toplevel):
         self.master_app = master
         self.title("Standard Correction / OPC - Unit31")
         self.geometry("760x500")
+        self.minsize(700, 340)
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Refresh from CF-LIBS", command=self.refresh).pack(side="left")
         ttk.Button(top, text="Load .STD", command=self.load_std).pack(side="left", padx=3)
         ttk.Button(top, text="Save .STD", command=self.save_std).pack(side="left", padx=3)
         ttk.Button(top, text="Apply correction", command=self.apply_correction).pack(side="left", padx=8)
         cols = ("element", "mass %", "ref %", "factor", "corrected %")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=120, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree)
         self.tree.bind("<Double-1>", self.edit_ref)
         self.refresh()
 
@@ -15408,7 +15459,8 @@ class StandardCorrectionWindow(tk.Toplevel):
         if not item:
             return
         vals = list(self.tree.item(item, "values"))
-        win = tk.Toplevel(self); win.title(f"Reference {vals[0]}"); win.geometry("260x100")
+        win = tk.Toplevel(self); win.title(f"Reference {vals[0]}")
+        win.resizable(False, False)
         v = tk.StringVar(value=str(vals[2]))
         ttk.Label(win, text=f"{vals[0]} reference %").pack(pady=(10,2))
         ttk.Entry(win, textvariable=v).pack()
@@ -15416,6 +15468,7 @@ class StandardCorrectionWindow(tk.Toplevel):
             self.master_app.standard_refs[vals[0]] = v.get()
             self.refresh(); win.destroy()
         ttk.Button(win, text="OK", command=ok).pack(pady=6)
+        fit_toplevel_to_content(win)
 
     def load_std(self):
         fn = filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("Standard Data", "*.STD *.std"), ("All", "*.*")])
@@ -15478,6 +15531,7 @@ class CFLibsOPCWindow(tk.Toplevel):
         self.master_app = owner.master_app
         self.title("One Point Calibration")
         self.geometry("760x500")
+        self.minsize(680, 340)
         self.factors: dict[str, float] = {}
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
@@ -15485,11 +15539,12 @@ class CFLibsOPCWindow(tk.Toplevel):
         ttk.Button(top, text="Save Calibration...", command=self.save).pack(side="left", padx=4)
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
         cols = ("Element", "CF-LIBS Number %", "Nominal Number %")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c)
             self.tree.column(c, width=200, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree)
         self.tree.bind("<Double-1>", self.edit_nominal)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
@@ -15660,7 +15715,8 @@ class CFLibsWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("CF-LIBS")
-        self.geometry("1100x760")
+        self.geometry("1100x720")
+        self.minsize(940, 600)
         top=ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute CF-LIBS", command=self.compute).pack(side="left")
         self.opc_button = ttk.Button(top, text="OPC", command=self.show_opc, state="disabled")
@@ -15675,7 +15731,7 @@ class CFLibsWindow(tk.Toplevel):
         self.ne_var = tk.StringVar(value=f"{default_ne:.6g}")
         ttk.Entry(top, textvariable=self.ne_var, width=12).pack(side="left")
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(top, textvariable=self.status_var).pack(side="left", padx=12)
+        ttk.Label(top, textvariable=self.status_var, width=34).pack(side="left", padx=12, fill="x", expand=True)
         if Figure is None or FigureCanvasTkAgg is None:
             ttk.Label(self, text="matplotlib not available").pack(fill="both", expand=True, padx=10, pady=10)
             self.fig = self.ax = self.canvas = None
@@ -15699,10 +15755,11 @@ class CFLibsWindow(tk.Toplevel):
         self.opc_window = None
         self.plot_points = []
         cols=("Element", "Ionized / Neutral ratio", "Number %", "Mass %")
-        self.tree=ttk.Treeview(self, columns=cols, show="headings")
+        tree_frame = ttk.Frame(self)
+        self.tree=ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
-        self.tree.pack(fill="both", expand=True, padx=6, pady=5)
+        pack_tree_with_scrollbars(tree_frame, self.tree)
         self.after(100, self.compute)
 
     def enable_opc(self):
@@ -16301,6 +16358,7 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
         self.default_extension = default_extension
         self.title("CF-LIBS Report Preview")
         self.geometry("950x720")
+        self.minsize(720, 480)
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Save...", command=self.save).pack(side="left")
@@ -16414,6 +16472,7 @@ class RetroTemplateManager(tk.Toplevel):
         self.master_app = master
         self.title("Template")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "960x520"))
+        self.minsize(760, 340)
         self.configure(bg=RETRO_BG)
         self._build()
 
@@ -16429,18 +16488,15 @@ class RetroTemplateManager(tk.Toplevel):
         ttk.Button(panel, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=2)
         ttk.Button(panel, text="Delete Template", command=self.delete_template).pack(side="left", padx=2)
 
-        self.tree = ttk.Treeview(self, columns=self.columns, show="headings", height=22)
+        tree_frame = ttk.Frame(self)
+        self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings", height=18)
         for c in self.columns:
             self.tree.heading(c, text=c)
             self.tree.column(c, width=72, anchor="center")
         self.tree.column("specie", width=55)
         self.tree.column("wavelen", width=80)
         self.tree.column("fitwavelen", width=80)
-        self.tree.pack(side="left", fill="both", expand=True, padx=2, pady=2)
-
-        scroll = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
-        scroll.pack(side="right", fill="y")
-        self.tree.configure(yscrollcommand=scroll.set)
+        pack_tree_with_scrollbars(tree_frame, self.tree, padx=0, pady=0)
 
         self.tree.bind("<Double-1>", self.on_double_click)
         self.refresh()
@@ -16569,7 +16625,8 @@ class RetroActiveSpectraWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Active Spectra")
-        self.geometry("640x430")
+        self.geometry("760x430")
+        self.minsize(720, 340)
         self.configure(bg=RETRO_BG)
         self.selected_index = 0
         self._build()
@@ -16723,6 +16780,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.single = bool(single)
         self.title("Automatic Fit" if self.automatic else "Single Fit" if self.single else "Manual Fit")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "760x520"))
+        self.minsize(760, 500)
         self.configure(bg=RETRO_BG)
         self.line_vars = []
         self.manual_fit_lines = []
@@ -16788,8 +16846,9 @@ class RetroFitManagerWindow(tk.Toplevel):
             c3.grid(row=r+1, column=6)
             self.line_vars.append((lam, wg, wl, flam, fwg, fwl, e1, e2, e3))
 
+        results_frame = ttk.Frame(self)
         self.results = ttk.Treeview(
-            self,
+            results_frame,
             columns=("line", "center", "intensity", "lorentzian", "gaussian", "integral"),
             show="headings",
             height=7,
@@ -16804,7 +16863,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         ]:
             self.results.heading(c, text=label)
             self.results.column(c, width=w, anchor="center")
-        self.results.pack(fill="both", expand=True, padx=5, pady=4)
+        pack_tree_with_scrollbars(results_frame, self.results, padx=5, pady=4)
 
     def _color_row(self, r):
         lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
@@ -18939,6 +18998,7 @@ class GoToWindow(tk.Toplevel):
         self.transient(app)
         self.grab_set()
         self.wave_var.set("")
+        fit_toplevel_to_content(self)
         self.after(50, lambda: self.focus_force())
 
     def select_common_line(self, _event=None):
