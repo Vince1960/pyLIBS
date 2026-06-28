@@ -16849,9 +16849,7 @@ class MainWindow(tk.Tk):
         self.response_window.lift()
 
     def show_template(self):
-        if self.template_window is None or not self.template_window.winfo_exists(): self.template_window=TemplateManager(self)
-        else: self.template_window.refresh()
-        self.template_window.lift()
+        return self.show_template_manager()
 
     def show_line_identification(self):
         if self.line_window is None or not self.line_window.winfo_exists(): self.line_window=LineIdentificationWindow(self)
