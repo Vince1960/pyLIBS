@@ -13750,7 +13750,13 @@ class SahaBoltzmannWindow(tk.Toplevel):
         groups = {}
         fits = {}
         for _ in range(25):
-            groups, skipped = libspp_saha_boltzmann_groups(self.master_app, ne, kt, getattr(self.master_app, "sac_factors", {}))
+            groups, skipped = libspp_saha_boltzmann_groups(
+                self.master_app,
+                ne,
+                kt,
+                getattr(self.master_app, "sac_factors", {}),
+                getattr(self.master_app, "sa_correction_factors", {}),
+            )
             fits = libspp_fit_saha_boltzmann(self.master_app, groups)
             new_kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
             if new_kt <= 0.0:
@@ -13759,7 +13765,13 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 break
             if abs(new_kt - kt) / new_kt <= 0.01:
                 kt = new_kt
-                groups, skipped = libspp_saha_boltzmann_groups(self.master_app, ne, kt, getattr(self.master_app, "sac_factors", {}))
+                groups, skipped = libspp_saha_boltzmann_groups(
+                    self.master_app,
+                    ne,
+                    kt,
+                    getattr(self.master_app, "sac_factors", {}),
+                    getattr(self.master_app, "sa_correction_factors", {}),
+                )
                 fits = libspp_fit_saha_boltzmann(self.master_app, groups)
                 break
             kt = new_kt
@@ -13953,6 +13965,35 @@ class SahaBoltzmannWindow(tk.Toplevel):
         }
         self._draw_plot(self.saha_groups, self.saha_fits, representative_kt)
 
+    def refresh_after_sac(self):
+        if not self.winfo_exists():
+            return
+        previous_mode = self.mode_var.get()
+        previous_selected = self.selected_element()
+        previous_included = set(self.included_elements)
+        previous_initial = self.initial_kt_var.get()
+        self.compute()
+        if not self.saha_fits:
+            return
+        self.initial_kt_var.set(previous_initial)
+        if previous_mode == "Mean temperature":
+            self.included_elements = {element for element in previous_included if element in self.saha_fits}
+            if not self.included_elements:
+                self.included_elements = self._default_included_elements(self.saha_fits)
+            self.auto_excluded_elements = set(self.saha_fits) - set(self.included_elements)
+            self.representative_kt = self._mean_temperature()
+            if self.representative_kt is None:
+                self.representative_kt = self.last_valid_mean_kt
+            else:
+                self.last_valid_mean_kt = self.representative_kt
+            self.populate_tree()
+        elif previous_mode == "Single element temperature" and previous_selected in self.saha_fits:
+            try:
+                self.tree.selection_set(previous_selected)
+            except Exception:
+                pass
+        self.refresh_temperature_display()
+
     def _electron_density(self):
         ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
         if ne > 0.0:
@@ -14000,9 +14041,15 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 label = element if not label_used else "_nolegend_"
-                self.ax.scatter([p["x"]], [p["y"]], s=24, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
+                raw_y = safe_float(p.get("y_raw", p["y"]), p["y"])
+                corr_y = safe_float(p.get("y", raw_y), raw_y)
+                self.ax.scatter([p["x"]], [raw_y], s=24, alpha=(0.55 if inactive else alpha), color=point_color, label=label)
+                if abs(corr_y - raw_y) > 1e-12:
+                    self.ax.plot([p["x"], p["x"]], [raw_y, corr_y], color="0.45", linewidth=0.8, alpha=0.75)
+                    self.ax.scatter([p["x"]], [corr_y], s=64, marker="*", alpha=(0.75 if inactive else alpha), color=point_color, label="_nolegend_")
+                self.plot_points.append({"x": p["x"], "y": corr_y, "line": p.get("line"), "inactive": inactive, "corrected": True})
+                self.plot_points.append({"x": p["x"], "y": raw_y, "line": p.get("line"), "inactive": inactive, "corrected": False})
                 label_used = True
-                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
             result = fits.get(element)
             if result:
                 fixed = fixed_refits.get(element)
@@ -14096,6 +14143,13 @@ def _template_line_intensity(line: TemplateLine) -> float:
     return line.inte if getattr(line, "inte", 0.0) > 0.0 else getattr(line, "templint", 0.0)
 
 
+def _sa_correction_factor(app: "MainWindow", index: int) -> float:
+    try:
+        return safe_float(getattr(app, "sa_correction_factors", {}).get(index, 1.0), 1.0) or 1.0
+    except Exception:
+        return 1.0
+
+
 def _response_factor(app: "MainWindow", wavelength: float) -> float:
     """Original showboltz()/calcola(): divide line intensity by instrumental efficiency."""
     try:
@@ -14107,7 +14161,11 @@ def _response_factor(app: "MainWindow", wavelength: float) -> float:
     return 1.0
 
 
-def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[dict[int, float]] = None):
+def libspp_boltzmann_groups_with_skips(
+    app: "MainWindow",
+    sac_factors: Optional[dict[int, float]] = None,
+    sa_corrections: Optional[dict[int, float]] = None,
+):
     """Build LIBS++-style Boltzmann groups from current template lines.
 
     Reconstructed from Unit6/showboltz(), Unit9 and SDIMain/calcola():
@@ -14118,6 +14176,7 @@ def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[
     Returns a dictionary keyed by (specie, ion) with point dictionaries.
     """
     sac_factors = sac_factors or {}
+    sa_corrections = sa_corrections or {}
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
         if not t.specie or not t.ion or not t.aki or not t.gk or not t.ek:
@@ -14128,25 +14187,46 @@ def libspp_boltzmann_groups_with_skips(app: "MainWindow", sac_factors: Optional[
         center = _template_line_center(t)
         eff = _response_factor(app, center)
         sac = sac_factors.get(idx, 1.0) or 1.0
-        icorr = inte / (eff * sac)
+        sa_factor = safe_float(sa_corrections.get(idx, _sa_correction_factor(app, idx)), 1.0) or 1.0
+        icorr_raw = inte / eff
+        icorr = icorr_raw * sa_factor / sac
         if icorr <= 0:
             continue
         ek_ev = t.ek * 1.23985e-4
         y = math.log(icorr / abs(t.aki * t.gk))
+        y_raw = math.log(icorr_raw / abs(t.aki * t.gk))
         groups[(t.specie.strip().capitalize(), int(t.ion))].append({
-            "x": ek_ev, "y": y, "line": t, "icorr": icorr, "eff": eff, "sac": sac,
+            "x": ek_ev,
+            "y": y,
+            "y_raw": y_raw,
+            "line": t,
+            "icorr": icorr,
+            "icorr_raw": icorr_raw,
+            "eff": eff,
+            "sac": sac,
+            "sa_factor": sa_factor,
             "inactive": t.aki < 0.0,
         })
     skipped = len(app.template_lines) - sum(1 for pts in groups.values() for p in pts if not p.get("inactive"))
     return groups, skipped
 
 
-def libspp_boltzmann_groups(app: "MainWindow", sac_factors: Optional[dict[int, float]] = None):
-    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_factors)
+def libspp_boltzmann_groups(
+    app: "MainWindow",
+    sac_factors: Optional[dict[int, float]] = None,
+    sa_corrections: Optional[dict[int, float]] = None,
+):
+    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_factors, sa_corrections)
     return groups
 
 
-def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_factors: Optional[dict[int, float]] = None):
+def libspp_saha_boltzmann_groups(
+    app: "MainWindow",
+    ne: float,
+    kt: float,
+    sac_factors: Optional[dict[int, float]] = None,
+    sa_corrections: Optional[dict[int, float]] = None,
+):
     """Build Unit27 Saha-Boltzmann plot points grouped by element.
 
     Unit6/Unit27 uses neutral lines as ordinary Boltzmann points and shifts
@@ -14157,6 +14237,7 @@ def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_fa
         y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
     """
     sac_factors = sac_factors or {}
+    sa_corrections = sa_corrections or {}
     groups: dict[str, list[dict]] = defaultdict(list)
     skipped = 0
     metadata_cache: dict[str, dict] = {}
@@ -14173,12 +14254,15 @@ def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_fa
         center = _template_line_center(t)
         eff = _response_factor(app, center)
         sac = sac_factors.get(idx, 1.0) or 1.0
-        icorr = inte / (eff * sac)
+        sa_factor = safe_float(sa_corrections.get(idx, _sa_correction_factor(app, idx)), 1.0) or 1.0
+        icorr_raw = inte / eff
+        icorr = icorr_raw * sa_factor / sac
         if icorr <= 0.0:
             skipped += 1
             continue
         ek_ev = t.ek * 1.23985e-4
         y = math.log(icorr / abs(t.aki * t.gk))
+        y_raw = math.log(icorr_raw / abs(t.aki * t.gk))
         x = ek_ev
         if ion == 2:
             if ne <= 0.0 or kt <= 0.0:
@@ -14196,8 +14280,18 @@ def libspp_saha_boltzmann_groups(app: "MainWindow", ne: float, kt: float, sac_fa
             x = eion + ek_ev
             y -= math.log(6.04e21 / ne * math.pow(kt, 1.5))
         groups[specie].append({
-            "x": x, "y": y, "line": t, "ion": ion, "icorr": icorr,
-            "eff": eff, "sac": sac, "center": center, "inactive": t.aki < 0.0,
+            "x": x,
+            "y": y,
+            "y_raw": y_raw,
+            "line": t,
+            "ion": ion,
+            "icorr": icorr,
+            "icorr_raw": icorr_raw,
+            "eff": eff,
+            "sac": sac,
+            "sa_factor": sa_factor,
+            "center": center,
+            "inactive": t.aki < 0.0,
         })
     skipped += sum(1 for pts in groups.values() for p in pts if p.get("inactive"))
     return groups, skipped
@@ -14802,8 +14896,38 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._toggle_use_value(item)
 
     def apply_sac(self):
-        _showinfo(self, "Self-Absorption Check", "Self-absorption correction will be implemented in a later step.")
-        self.summary_var.set("Apply SAC is not implemented yet")
+        factors = {}
+        for idx, line in enumerate(self._rows, start=1):
+            if not bool(getattr(line, "sa_use", True)):
+                continue
+            sa = safe_float(getattr(line, "sa_value", ""), 0.0)
+            if sa <= 0.0 or sa > 1.0:
+                continue
+            factor = sa ** (-0.46)
+            if not math.isfinite(factor) or factor <= 0.0:
+                continue
+            factors[idx] = factor
+        self.master_app.sa_correction_factors = factors
+        if not factors:
+            msg = "No valid SAC corrections to apply."
+            self.summary_var.set(msg)
+            self.master_app.status(msg)
+            _showinfo(self, "Self-Absorption Check", msg)
+            return
+        msg = f"SAC applied to {len(factors)} line(s)."
+        self.summary_var.set(msg)
+        self.master_app.status(msg)
+        _showinfo(self, "Self-Absorption Check", msg)
+        if getattr(self.master_app, "saha_window", None) is not None and self.master_app.saha_window.winfo_exists():
+            try:
+                self.master_app.saha_window.refresh_after_sac()
+            except Exception:
+                pass
+        if getattr(self.master_app, "cflibs_window", None) is not None and self.master_app.cflibs_window.winfo_exists():
+            try:
+                self.master_app.cflibs_window.compute()
+            except Exception:
+                pass
 
     def close(self):
         try:
@@ -15238,7 +15362,11 @@ class CFLibsWindow(tk.Toplevel):
             kt = 1.0
             self.kt_var.set("1")
         ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
-        groups, skipped = libspp_boltzmann_groups_with_skips(self.master_app, getattr(self.master_app, "sac_factors", {}))
+        groups, skipped = libspp_boltzmann_groups_with_skips(
+            self.master_app,
+            getattr(self.master_app, "sac_factors", {}),
+            getattr(self.master_app, "sa_correction_factors", {}),
+        )
         fits = libspp_fit_boltzmann_fixed_temperature(self.master_app, groups, kt)
         if not fits:
             msg = f"No valid Boltzmann data. Skipped {skipped} incomplete template line(s)."
@@ -15430,9 +15558,15 @@ class CFLibsWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 point_label = label if not label_used else "_nolegend_"
-                self.ax.scatter([p["x"]], [p["y"]], s=24, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
+                raw_y = safe_float(p.get("y_raw", p["y"]), p["y"])
+                corr_y = safe_float(p.get("y", raw_y), raw_y)
+                self.ax.scatter([p["x"]], [raw_y], s=24, color=point_color, alpha=(0.55 if inactive else 1.0), label=point_label)
+                if abs(corr_y - raw_y) > 1e-12:
+                    self.ax.plot([p["x"], p["x"]], [raw_y, corr_y], color="0.45", linewidth=0.8, alpha=0.75)
+                    self.ax.scatter([p["x"]], [corr_y], s=64, marker="*", color=point_color, alpha=(0.75 if inactive else 1.0), label="_nolegend_")
+                self.plot_points.append({"x": p["x"], "y": corr_y, "line": p.get("line"), "inactive": inactive, "corrected": True})
+                self.plot_points.append({"x": p["x"], "y": raw_y, "line": p.get("line"), "inactive": inactive, "corrected": False})
                 label_used = True
-                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
             fit = fits.get(key)
             if fit:
                 y0 = fit["slope"] * xmin + fit["q_at_t"]
@@ -16527,6 +16661,7 @@ class MainWindow(tk.Tk):
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
         self.sac_factors: dict[int, float] = {}
+        self.sa_correction_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.last_halpha_result: Optional[dict] = None
         self.last_saha_boltzmann: Optional[dict] = None
