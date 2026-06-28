@@ -17634,12 +17634,6 @@ def notify_template_changed(self, redraw=False):
             refreshed.add(self.template_window)
         except Exception:
             pass
-    if self.sac_check_window and self.sac_check_window.winfo_exists():
-        try:
-            self.sac_check_window.refresh(show_message=False)
-            refreshed.add(self.sac_check_window)
-        except Exception:
-            pass
     try:
         for child in self.winfo_children():
             if child in refreshed:
