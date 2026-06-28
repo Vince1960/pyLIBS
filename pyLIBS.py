@@ -64,6 +64,11 @@ from pylibs.utils.constants import (
     SPLASH_DURATION_MS,
     SPLASH_SECONDS,
 )
+from pylibs.utils.formatting import (
+    format_template_display_value,
+    safe_float,
+    safe_int,
+)
 from pylibs.utils.paths import (
     app_base_dir,
     find_icon_path as _find_menu_icon,
@@ -11404,42 +11409,6 @@ cYEAAAAASUVORK5CYII=
 # v8.16 additions:
 #   - fit Voigt delle righe marcate nella finestra visibile; risultati salvati nel template.
 # ---------------------------------------------------------------------------
-
-
-def safe_float(value, default=0.0):
-    try:
-        return float(str(value).strip().replace(",", "."))
-    except Exception:
-        return default
-
-
-def safe_int(value, default=0):
-    try:
-        return int(float(str(value).strip().replace(",", ".")))
-    except Exception:
-        return default
-
-
-def format_template_display_value(value):
-    """Format Template-window display values without changing stored data."""
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        text = value.strip()
-        if text == "":
-            return ""
-        try:
-            number = float(text.replace(",", "."))
-        except Exception:
-            return value
-    else:
-        try:
-            number = float(value)
-        except Exception:
-            return value
-    if not math.isfinite(number):
-        return str(value)
-    return f"{number:.3f}".rstrip("0").rstrip(".")
 
 
 def _messagebox_parent(owner):
