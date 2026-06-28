@@ -17,6 +17,25 @@ This repository is the Python rewrite of the historical LIBS++ software.
 - Use sqlite3 for database access.
 - Store persistent settings in pyLIBS.ini.
 
+## GUI design rules
+
+pyLIBS is a scientific desktop application. Assume a standard working
+environment of a 1920x1080 monitor at 100% display scaling.
+
+- Dialogs must open with all controls immediately visible.
+- Avoid clipped buttons, clipped labels, clipped tables, clipped plots, excessive margins, and unused space.
+- Size dialogs according to content; avoid oversized fixed geometries where practical.
+- Do not introduce vertical or horizontal scrollbars in dialog windows.
+- If a dialog is crowded, reorganize with Frames, LabelFrames, or ttk.Notebook tabs, or enlarge the window moderately.
+- Dialogs containing plots or tables should remain resizable.
+- Small utility dialogs, such as Shift, Offset, GoTo, and Statistics, may remain fixed-size.
+- Keep visual organization consistent: main content, optional status/information area, then action buttons.
+- Keep similar buttons in a consistent order; Close is normally rightmost, Compute precedes Close, and Cancel is used only for editable dialogs.
+- Use consistent font family, font size, button height, and padding.
+- Window titles must be concise and in English.
+- Prefer pack/grid weights, minsize(), update_idletasks(), and requested widget sizes over obsolete oversized geometry strings.
+- The Options dialog must not show excessive bottom space, must keep all controls visible, must use pages/tabs when needed, and must preserve single-instance foreground behavior.
+
 ## Before finishing any task
 Always run:
 

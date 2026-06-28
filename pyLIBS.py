@@ -12589,23 +12589,6 @@ def fit_toplevel_to_content(win, min_width=0, min_height=0, max_width_fraction=0
         pass
 
 
-def pack_tree_with_scrollbars(frame, tree, *, fill_both=True, padx=6, pady=5):
-    """Attach scrollbars around a Treeview that was created inside frame."""
-    yscroll = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
-    xscroll = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
-    tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-    tree.grid(row=0, column=0, sticky="nsew")
-    yscroll.grid(row=0, column=1, sticky="ns")
-    xscroll.grid(row=1, column=0, sticky="ew")
-    frame.rowconfigure(0, weight=1)
-    frame.columnconfigure(0, weight=1)
-    pack_fill = "both" if fill_both else "x"
-    frame.pack(fill=pack_fill, expand=fill_both, padx=padx, pady=pady)
-    return frame
-
-
-
-
 class OptionsWindow(tk.Toplevel):
     """pyLIBS Options dialog, dynamically initialized from pyLIBS.ini.
 
@@ -12617,13 +12600,13 @@ class OptionsWindow(tk.Toplevel):
         self.master_app = master
         self.title("Options")
         self.resizable(True, True)
-        self.minsize(660, 300)
-        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "900x430")
+        self.minsize(760, 420)
+        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "860x520")
         if geom:
             self.geometry(geom)
         self.vars: dict[str, tk.Variable] = {}
         self._build_original_layout()
-        fit_toplevel_to_content(self, min_width=760, min_height=360)
+        fit_toplevel_to_content(self, min_width=820, min_height=500)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
     def v(self, attr, default="", kind="str"):
@@ -12652,57 +12635,26 @@ class OptionsWindow(tk.Toplevel):
         return lf
 
     def _build_original_layout(self):
-        scroll_host = ttk.Frame(self, padding=4)
-        scroll_host.pack(fill="both", expand=True)
-        scroll_host.rowconfigure(0, weight=1)
-        scroll_host.columnconfigure(0, weight=1)
+        buttons = ttk.Frame(self, padding=(6, 6))
+        buttons.pack(fill="x", side="bottom")
+        buttons_inner = ttk.Frame(buttons)
+        buttons_inner.pack(side="right")
+        ttk.Button(buttons_inner, text="Save Options", command=self.save).pack(side="left", padx=4)
+        ttk.Button(buttons_inner, text="OK", command=self.ok).pack(side="left", padx=4)
+        ttk.Button(buttons_inner, text="Cancel", command=self.cancel).pack(side="left", padx=4)
 
-        canvas = tk.Canvas(scroll_host, highlightthickness=0)
-        vscroll = ttk.Scrollbar(scroll_host, orient="vertical", command=canvas.yview)
-        hscroll = ttk.Scrollbar(scroll_host, orient="horizontal", command=canvas.xview)
-        canvas.configure(yscrollcommand=vscroll.set, xscrollcommand=hscroll.set)
-        canvas.grid(row=0, column=0, sticky="nsew")
-        vscroll.grid(row=0, column=1, sticky="ns")
-        hscroll.grid(row=1, column=0, sticky="ew")
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True, padx=6, pady=(6, 0))
 
-        outer = ttk.Frame(canvas)
-        outer_id = canvas.create_window((0, 0), window=outer, anchor="nw")
+        left = ttk.Frame(notebook, padding=6)
+        mid = ttk.Frame(notebook, padding=6)
+        right = ttk.Frame(notebook, padding=6)
+        notebook.add(left, text="General")
+        notebook.add(mid, text="Ranges")
+        notebook.add(right, text="Correction and Fit")
 
-        def update_scrollregion(_event=None):
-            canvas.configure(scrollregion=canvas.bbox("all"))
-
-        def resize_inner(event):
-            canvas.itemconfigure(outer_id, width=max(outer.winfo_reqwidth(), event.width))
-
-        def on_mousewheel(event):
-            if getattr(event, "num", None) == 4:
-                canvas.yview_scroll(-1, "units")
-            elif getattr(event, "num", None) == 5:
-                canvas.yview_scroll(1, "units")
-            else:
-                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
-
-        outer.bind("<Configure>", update_scrollregion)
-        canvas.bind("<Configure>", resize_inner)
-        def bind_wheel(_event):
-            canvas.bind_all("<MouseWheel>", on_mousewheel)
-            canvas.bind_all("<Button-4>", on_mousewheel)
-            canvas.bind_all("<Button-5>", on_mousewheel)
-
-        def unbind_wheel(_event):
-            canvas.unbind_all("<MouseWheel>")
-            canvas.unbind_all("<Button-4>")
-            canvas.unbind_all("<Button-5>")
-
-        canvas.bind("<Enter>", bind_wheel)
-        canvas.bind("<Leave>", unbind_wheel)
-
-        left = ttk.Frame(outer)
-        mid = ttk.Frame(outer)
-        right = ttk.Frame(outer)
-        left.grid(row=0, column=0, sticky="n")
-        mid.grid(row=0, column=1, sticky="n")
-        right.grid(row=0, column=2, sticky="n")
+        for page in (left, mid, right):
+            page.columnconfigure(0, weight=1)
 
         g_user = self.group(left, "Username", 0, 0)
         self.entry(g_user, "username", 0, 0, width=18)
@@ -12784,14 +12736,6 @@ class OptionsWindow(tk.Toplevel):
 
         g_shift = self.group(right, "AutoShift", 2, 0)
         self.entry(g_shift, "auto_shift", 0, 0, width=8)
-
-        buttons = ttk.Frame(self, padding=(4, 4))
-        buttons.pack(fill="x", side="bottom", before=scroll_host)
-        buttons_inner = ttk.Frame(buttons)
-        buttons_inner.pack(side="right")
-        ttk.Button(buttons_inner, text="OK", command=self.ok).pack(side="left", padx=5)
-        ttk.Button(buttons_inner, text="Cancel", command=self.cancel).pack(side="left", padx=5)
-        ttk.Button(buttons_inner, text="Save Options", command=self.save).pack(side="left", padx=5)
 
     def _set_global_mode(self, mode):
         self.vars["apply_before"].set(mode == "before") if "apply_before" in self.vars else None
@@ -13023,8 +12967,8 @@ class TemplateManager(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Template Manager - Unit6")
-        self.geometry("1080x470")
-        self.minsize(760, 320)
+        self.geometry("1180x520")
+        self.minsize(1040, 360)
         bar = ttk.Frame(self); bar.pack(fill="x", padx=5, pady=5)
         ttk.Button(bar, text="Load CSV", command=self.load).pack(side="left")
         ttk.Button(bar, text="Save CSV", command=self.save).pack(side="left", padx=3)
@@ -13034,7 +12978,8 @@ class TemplateManager(tk.Toplevel):
         self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c, text=c); self.tree.column(c, width=78, anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree, padx=5, pady=5)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.tree.bind("<Double-1>", self.zoom)
         self.refresh()
 
@@ -13103,8 +13048,8 @@ class LineIdentificationWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app=master
         self.title("Identifications")
-        self.geometry("980x500")
-        self.minsize(820, 360)
+        self.geometry("1020x520")
+        self.minsize(940, 380)
         self.atomic_lines=[]
         self.results=[]
         top=ttk.Frame(self); top.pack(fill="x", padx=5, pady=5)
@@ -13122,7 +13067,8 @@ class LineIdentificationWindow(tk.Toplevel):
         self.tree=ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c,text=c); self.tree.column(c,width=85,anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree, padx=5, pady=5)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.tree.bind("<Double-1>", self.assign)
 
     def load_db(self):
@@ -13256,8 +13202,8 @@ class TraceLinesWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Trace Lines")
-        self.geometry("760x430")
-        self.minsize(740, 340)
+        self.geometry("900x460")
+        self.minsize(840, 360)
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=6)
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
         self.species_var = tk.StringVar(value="Si")
@@ -13278,7 +13224,8 @@ class TraceLinesWindow(tk.Toplevel):
         self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
             self.tree.heading(c, text=c); self.tree.column(c, width=72, anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree, padx=6, pady=6)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
         self.refresh()
 
     def refresh(self):
@@ -13384,7 +13331,8 @@ class AutoElementIdentificationWindow(tk.Toplevel):
         for c in cols:
             self.tree.heading(c,text=c)
             self.tree.column(c,width=120 if c!="species" else 180,anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
         self.tree.bind("<Button-1>", self.toggle)
 
     def template_candidates(self):
@@ -15441,7 +15389,8 @@ class StandardCorrectionWindow(tk.Toplevel):
         self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=120, anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
         self.tree.bind("<Double-1>", self.edit_ref)
         self.refresh()
 
@@ -15544,7 +15493,8 @@ class CFLibsOPCWindow(tk.Toplevel):
         for c in cols:
             self.tree.heading(c, text=c)
             self.tree.column(c, width=200, anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
         self.tree.bind("<Double-1>", self.edit_nominal)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
@@ -15759,7 +15709,8 @@ class CFLibsWindow(tk.Toplevel):
         self.tree=ttk.Treeview(tree_frame, columns=cols, show="headings")
         for c in cols:
             self.tree.heading(c, text=c); self.tree.column(c, width=135, anchor="center")
-        pack_tree_with_scrollbars(tree_frame, self.tree)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
         self.after(100, self.compute)
 
     def enable_opc(self):
@@ -16368,15 +16319,8 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
 
         frame = ttk.Frame(self)
         frame.pack(fill="both", expand=True, padx=6, pady=(0, 6))
-        self.text = tk.Text(frame, wrap="none", font=("TkFixedFont", 10))
-        yscroll = ttk.Scrollbar(frame, orient="vertical", command=self.text.yview)
-        xscroll = ttk.Scrollbar(frame, orient="horizontal", command=self.text.xview)
-        self.text.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
-        self.text.grid(row=0, column=0, sticky="nsew")
-        yscroll.grid(row=0, column=1, sticky="ns")
-        xscroll.grid(row=1, column=0, sticky="ew")
-        frame.rowconfigure(0, weight=1)
-        frame.columnconfigure(0, weight=1)
+        self.text = tk.Text(frame, wrap="word", font=("TkFixedFont", 10))
+        self.text.pack(fill="both", expand=True)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.update_report(content, report_format, default_extension, preview_text=preview_text)
         self.lift(owner)
@@ -16471,8 +16415,8 @@ class RetroTemplateManager(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Template")
-        self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "960x520"))
-        self.minsize(760, 340)
+        self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "1280x560"))
+        self.minsize(1180, 420)
         self.configure(bg=RETRO_BG)
         self._build()
 
@@ -16496,7 +16440,8 @@ class RetroTemplateManager(tk.Toplevel):
         self.tree.column("specie", width=55)
         self.tree.column("wavelen", width=80)
         self.tree.column("fitwavelen", width=80)
-        pack_tree_with_scrollbars(tree_frame, self.tree, padx=0, pady=0)
+        self.tree.pack(fill="both", expand=True)
+        tree_frame.pack(fill="both", expand=True, padx=2, pady=2)
 
         self.tree.bind("<Double-1>", self.on_double_click)
         self.refresh()
@@ -16779,8 +16724,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.automatic = bool(automatic)
         self.single = bool(single)
         self.title("Automatic Fit" if self.automatic else "Single Fit" if self.single else "Manual Fit")
-        self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "760x520"))
-        self.minsize(760, 500)
+        self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "840x540"))
+        self.minsize(800, 520)
         self.configure(bg=RETRO_BG)
         self.line_vars = []
         self.manual_fit_lines = []
@@ -16863,7 +16808,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         ]:
             self.results.heading(c, text=label)
             self.results.column(c, width=w, anchor="center")
-        pack_tree_with_scrollbars(results_frame, self.results, padx=5, pady=4)
+        self.results.pack(fill="both", expand=True)
+        results_frame.pack(fill="both", expand=True, padx=5, pady=4)
 
     def _color_row(self, r):
         lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
