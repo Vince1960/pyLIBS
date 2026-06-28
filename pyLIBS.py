@@ -102,6 +102,7 @@ from pylibs.utils.constants import (
     APP_TITLE,
     SPLASH_DURATION_MS,
     SPLASH_SECONDS,
+    APP_VERSION,
 )
 from pylibs.utils.formatting import (
     format_template_display_value,
@@ -15291,8 +15292,55 @@ def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
         else:
             image = tk.PhotoImage(data=SPLASH_IMAGE_B64)
         splash._image_ref = image
-        label = tk.Label(splash, image=image, bd=0, highlightthickness=0, bg="black")
-        label.pack()
+        canvas = tk.Canvas(splash, width=image.width(), height=image.height(), bd=0, highlightthickness=0, bg="black")
+        canvas.pack()
+        canvas.create_image(0, 0, image=image, anchor="nw")
+        lines = [
+            f"ver. {APP_VERSION}",
+            "Originally developed as LIBS++ by Vincenzo Palleschi and coworkers",
+            "© 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution.",
+        ]
+        margin_x = 18
+        margin_y = 16
+        font = ("TkDefaultFont", 8)
+        text_x = image.width() - margin_x
+        text_y = image.height() - margin_y
+        shadow = canvas.create_text(
+            text_x + 1,
+            text_y + 1,
+            text="\n".join(lines),
+            anchor="se",
+            fill="#000000",
+            font=font,
+            justify="right",
+            width=max(1, image.width() - 2 * margin_x),
+        )
+        text = canvas.create_text(
+            text_x,
+            text_y,
+            text="\n".join(lines),
+            anchor="se",
+            fill="#f0f0f0",
+            font=font,
+            justify="right",
+            width=max(1, image.width() - 2 * margin_x),
+        )
+        splash.update_idletasks()
+        bbox = canvas.bbox(text)
+        if bbox:
+            pad_x = 7
+            pad_y = 5
+            canvas.create_rectangle(
+                bbox[0] - pad_x,
+                bbox[1] - pad_y,
+                bbox[2] + pad_x,
+                bbox[3] + pad_y,
+                fill="#000000",
+                outline="",
+                stipple="gray75",
+            )
+            canvas.tag_raise(shadow)
+            canvas.tag_raise(text)
         splash.update_idletasks()
         w, h = image.width(), image.height()
         sw, sh = splash.winfo_screenwidth(), splash.winfo_screenheight()
