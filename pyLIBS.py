@@ -53,6 +53,7 @@ from typing import Optional
 from pylibs.core.models import AtomicLine, TemplateLine
 from pylibs.db.libs_database import LibsDatabase
 from pylibs.io.ini import load_pylibs_ini, save_pylibs_ini
+from pylibs.io.template_io import load_template_lines, save_template_lines
 from pylibs.io.spectrum_io import (
     SPECTRUM_FILETYPES,
     load_spectrum_for_open as _load_spectrum_for_open,
@@ -18095,43 +18096,12 @@ def show_sac_window(self):
     return SACWindow(self)
 
 def load_template_file(self, filename):
-    import csv
-    cols = list(RetroTemplateManager.columns)
-    rows = []
-    with open(filename, "r", encoding="utf-8", errors="ignore", newline="") as f:
-        sample = f.read(4096); f.seek(0)
-        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t ") if sample.strip() else csv.excel
-        reader = csv.DictReader(f, dialect=dialect)
-        if reader.fieldnames and any(name in reader.fieldnames for name in cols):
-            for r in reader:
-                kw = {}
-                for c in cols:
-                    v = (r.get(c) or "").strip()
-                    if c == "specie": kw[c] = v
-                    elif c in ("ion", "gk", "gi", "acc"):
-                        kw[c] = safe_int(v, 0)
-                    else:
-                        kw[c] = safe_float(v, 0.0)
-                if kw.get("wavelen", 0.0): rows.append(TemplateLine(**kw))
-        else:
-            f.seek(0)
-            for line in f:
-                parts=line.replace(",", ".").split()
-                if not parts: continue
-                try: rows.append(TemplateLine(wavelen=float(parts[0])))
-                except Exception: pass
-    self.template_lines = rows
+    self.template_lines = load_template_lines(filename, RetroTemplateManager.columns)
     self.notify_template_changed(redraw=False)
     self.redraw()
 
 def save_template_file(self, filename):
-    import csv
-    cols = list(RetroTemplateManager.columns)
-    with open(filename, "w", encoding="utf-8", newline="") as f:
-        w=csv.writer(f)
-        w.writerow(cols)
-        for l in self.template_lines:
-            w.writerow([getattr(l,c,"") for c in cols])
+    save_template_lines(filename, self.template_lines, RetroTemplateManager.columns)
 
 class GoToWindow(tk.Toplevel):
     """Small LIBS++-style Utilities/GoTo dialog.
