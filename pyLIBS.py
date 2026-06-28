@@ -14604,8 +14604,8 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Self-Absorption Check")
-        self.geometry("500x400")
-        self.minsize(460, 360)
+        self.geometry("585x400")
+        self.minsize(560, 360)
         self._rows = []
         self._stark_db_warning_shown = False
         top = ttk.Frame(self)
@@ -14615,22 +14615,23 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.summary_var = tk.StringVar(value="Ready")
         ttk.Label(top, textvariable=self.summary_var).pack(side="right", padx=6)
 
-        self.tree = ttk.Treeview(self, columns=("line", "wl", "stark_width", "sa", "use"), show="headings", height=14)
+        self.tree = ttk.Treeview(self, columns=("line", "wl", "stark_width", "sa", "sac", "use"), show="headings", height=14)
         headings = {
             "line": "Line",
             "wl": "wl",
             "stark_width": "Stark width",
             "sa": "SA",
+            "sac": "SAC",
             "use": "Use",
         }
-        widths = {"line": 160, "wl": 66, "stark_width": 76, "sa": 48, "use": 44}
-        for col in ("line", "wl", "stark_width", "sa", "use"):
+        widths = {"line": 166, "wl": 64, "stark_width": 84, "sa": 54, "sac": 54, "use": 48}
+        for col in ("line", "wl", "stark_width", "sa", "sac", "use"):
             self.tree.heading(col, text=headings[col])
             self.tree.column(col, width=widths[col], minwidth=widths[col], stretch=False, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.tree.bind("<Double-1>", self._on_double_click)
         self.protocol("WM_DELETE_WINDOW", self.close)
-        fit_toplevel_to_content(self, min_width=0, min_height=360, max_width_fraction=0.45, max_height_fraction=0.60)
+        fit_toplevel_to_content(self, min_width=560, min_height=360, max_width_fraction=0.55, max_height_fraction=0.60)
         center_window(self, master)
         self.lift(master)
         try:
@@ -14733,14 +14734,19 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         wl = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
         stark = getattr(line, "sa_stark_width", "")
         sa = getattr(line, "sa_value", "")
+        sac = ""
         if not sa and wl > 0.0 and stark:
             sa = self._sa_value_for_line(_format_sa_numeric(wl), stark)
+        sa_num = safe_float(sa, 0.0)
+        if sa_num > 0.0 and sa_num <= 1.0:
+            sac = _format_sa_numeric(sa_num ** (-0.46))
         use_value = "No" if not bool(getattr(line, "sa_use", True)) else "Yes"
         return (
             self._line_label(line),
             _format_sa_numeric(wl) if wl > 0.0 else "",
             stark if stark else "",
             sa if sa else "",
+            sac,
             use_value,
         )
 
