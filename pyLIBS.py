@@ -11568,7 +11568,7 @@ def remember_working_dir(options, filename_or_files) -> None:
 
 def show_startup_splash(root, seconds: float = SPLASH_SECONDS):
     """Show pyLIBS splash for a few seconds before the main window is displayed."""
-    img_path = resource_path("pyLIBS_splash_noversion_clean.png")
+    img_path = resource_path("pyLIBS_splash.png")
     if not img_path.exists():
         return None
     splash_win = tk.Toplevel(root)
@@ -15396,7 +15396,11 @@ def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
         splash = tk.Toplevel(root)
         splash.overrideredirect(True)
         splash.configure(bg="black")
-        image = tk.PhotoImage(data=SPLASH_IMAGE_B64)
+        img_path = resource_path("pyLIBS_splash.png")
+        if img_path.exists():
+            image = tk.PhotoImage(file=str(img_path))
+        else:
+            image = tk.PhotoImage(data=SPLASH_IMAGE_B64)
         splash._image_ref = image
         label = tk.Label(splash, image=image, bd=0, highlightthickness=0, bg="black")
         label.pack()
