@@ -14583,7 +14583,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             "sa": "SA",
             "use": "Use",
         }
-        widths = {"line": 420, "wl": 115, "stark_width": 120, "sa": 90, "use": 80}
+        widths = {"line": 235, "wl": 88, "stark_width": 96, "sa": 72, "use": 52}
         for col in ("line", "wl", "stark_width", "sa", "use"):
             self.tree.heading(col, text=headings[col])
             self.tree.column(col, width=widths[col], anchor="center")
@@ -14602,13 +14602,13 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         return [line for line in getattr(self.master_app, "template_lines", []) or [] if getattr(line, "specie", "") and getattr(line, "ion", 0)]
 
     def _line_label(self, line):
-        wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0) or safe_float(getattr(line, "wavelen", 0.0), 0.0)
+        wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
         if not wave:
             return ""
-        return f"{line.specie} {_roman_ion(line.ion)} {wave:.2f}"
+        return f"{line.specie} {_roman_ion(line.ion)} {_format_sa_numeric(wave)}"
 
     def _line_values(self, line):
-        wl = abs(safe_float(getattr(line, "fitwavelen", 0.0), 0.0))
+        wl = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
         stark = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
         return (
             self._line_label(line),
