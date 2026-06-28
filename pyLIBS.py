@@ -53,6 +53,7 @@ from tkinter import filedialog, messagebox, ttk, colorchooser, simpledialog
 from typing import Optional
 
 from pylibs.io.ini import load_pylibs_ini, save_pylibs_ini
+from pylibs.gui.icons import get_cached_menu_icon, load_toolbar_icon
 from pylibs.utils.constants import (
     APP_AUTHOR,
     APP_COPYRIGHT,
@@ -72,8 +73,6 @@ from pylibs.utils.formatting import (
 )
 from pylibs.utils.paths import (
     app_base_dir,
-    find_icon_path as _find_menu_icon,
-    icon_dirs as _menu_icon_dirs,
     manual_path,
     resource_path,
 )
@@ -17583,40 +17582,7 @@ class MainWindow(tk.Tk):
 # -----------------------------------------------------------------------
 
 def get_menu_icon(self, filename, size=16):
-    """Load a menu-only icon copy without altering toolbar images."""
-    if not hasattr(self, "menu_icons"):
-        self.menu_icons = {}
-    if not hasattr(self, "menu_icon_files"):
-        self.menu_icon_files = {}
-    if not hasattr(self, "menu_missing_icons"):
-        self.menu_missing_icons = []
-    key = (filename, size)
-    if key in self.menu_icons:
-        return self.menu_icons[key]
-    icon_path = _find_menu_icon(filename)
-    if not icon_path:
-        if filename not in self.menu_missing_icons:
-            self.menu_missing_icons.append(filename)
-        return None
-    try:
-        image = tk.PhotoImage(file=str(icon_path))
-        width = max(1, image.width())
-        height = max(1, image.height())
-        if width != size or height != size:
-            # Existing icons are 24 px.  zoom(2).subsample(3) gives a clean
-            # 16 px menu copy while leaving the toolbar image untouched.
-            if width == 24 and height == 24 and size == 16:
-                image = image.zoom(2, 2).subsample(3, 3)
-            elif width > size or height > size:
-                factor = max(1, int(math.ceil(max(width / size, height / size))))
-                image = image.subsample(factor, factor)
-        self.menu_icons[key] = image
-        self.menu_icon_files[filename] = str(icon_path)
-        return image
-    except Exception:
-        if filename not in self.menu_missing_icons:
-            self.menu_missing_icons.append(filename)
-        return None
+    return get_cached_menu_icon(self, filename, size)
 
 def _menu_shortcut_handler(self, command):
     def handler(event=None):
@@ -17824,7 +17790,6 @@ def build_retro_toolbar(self):
         ("Saha Boltzmann", self.show_saha_boltzmann),
         ("CF LIBS", self.show_cf_libs),
     ]
-    icon_dirs = _menu_icon_dirs()
     icon_names = {
         "Open": "open.png",
         "Compare": "compare.png",
@@ -17857,39 +17822,14 @@ def build_retro_toolbar(self):
         "Trace": "Trace Lines",
         "Full Scale": "Full View",
     }
-    def find_icon(filename):
-        if not filename:
-            return None
-        for icon_dir in icon_dirs:
-            icon_path = icon_dir / filename
-            if icon_path.exists():
-                return icon_path
-        filename_lower = filename.lower()
-        for icon_dir in icon_dirs:
-            if not icon_dir.exists():
-                continue
-            for icon_path in sorted(icon_dir.iterdir()):
-                if icon_path.name.lower() == filename_lower:
-                    return icon_path
-        return None
-
     self.toolbar_icons = {}
     self.toolbar_icon_files = {}
     self.toolbar_tooltips = []
     self.toolbar_missing_icons = []
     for label, cmd in buttons:
         icon_name = icon_names.get(label)
-        icon_path = find_icon(icon_name)
-        if not icon_path:
-            fallback_name = icon_fallbacks.get(label)
-            fallback_path = find_icon(fallback_name)
-            if fallback_path:
-                icon_name = fallback_name
-                icon_path = fallback_path
-        if icon_path:
-            image = tk.PhotoImage(file=str(icon_path))
-            self.toolbar_icons[label] = image
-            self.toolbar_icon_files[label] = str(icon_path)
+        image, icon_name, icon_path = load_toolbar_icon(self, label, icon_name, icon_fallbacks.get(label))
+        if image is not None:
             button = ttk.Button(self.retro_toolbar, image=image, command=cmd)
             button.pack(side="left", padx=1, pady=1)
             self.toolbar_tooltips.append(ToolbarTooltip(button, tooltip_text.get(label, label)))
