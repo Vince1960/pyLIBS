@@ -11439,7 +11439,7 @@ cYEAAAAASUVORK5CYII=
 # v8 additions:
 #   - nome applicazione aggiornato a pyLIBS.
 #   - finestra SAC operativa da Unit21/23: calcola SAC = ssa^0.46 e Wl0 = Wl*ssa^0.54.
-#   - Apply SAC applica uno shift additivo ln(SAC) ai punti di Saha-Boltzmann e CF-LIBS.
+#   - i fattori SAC sono ora conservati in MainWindow.sac_factors e usati da Boltzmann/CF-LIBS.
 #   - finestra Standard Correction / OPC da Unit31 con caricamento/salvataggio .STD.
 # v8.3 additions:
 #   - lettura/scrittura pyLIBS.ini, compatibile con il vecchio libs++.ini.
@@ -12258,7 +12258,6 @@ class TemplateManager(tk.Toplevel):
                     fitwavelen=safe_float(r.get("fitwavelen"))
                 ))
         self.master_app.template_lines = lines
-        self.master_app.clear_active_sac_corrections()
         self.master_app.notify_template_changed(redraw=True)
 
     def save(self):
@@ -13755,7 +13754,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 self.master_app,
                 ne,
                 kt,
-                getattr(self.master_app, "active_sac_ln_shifts", {}),
+                getattr(self.master_app, "sac_factors", {}),
             )
             fits = libspp_fit_saha_boltzmann(self.master_app, groups)
             new_kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
@@ -13769,7 +13768,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
                     self.master_app,
                     ne,
                     kt,
-                    getattr(self.master_app, "active_sac_ln_shifts", {}),
+                    getattr(self.master_app, "sac_factors", {}),
                 )
                 fits = libspp_fit_saha_boltzmann(self.master_app, groups)
                 break
@@ -14011,14 +14010,8 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 label = element if not label_used else "_nolegend_"
-                y_original = safe_float(p.get("y_original", p["y"]), p["y"])
-                y_corrected = safe_float(p.get("y", y_original), y_original)
-                self.ax.scatter([p["x"]], [y_original], s=24, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
-                if bool(p.get("sac_applied")):
-                    if abs(y_corrected - y_original) > 0.0:
-                        self.ax.plot([p["x"], p["x"]], [y_original, y_corrected], linestyle=":", linewidth=0.8, alpha=alpha, color=point_color)
-                    self.ax.scatter([p["x"]], [y_corrected], s=85, marker="*", alpha=alpha, color=point_color, edgecolors="black", linewidths=0.4, label="_nolegend_")
-                self.plot_points.append({"x": p["x"], "y": y_corrected, "y_original": y_original, "line": p.get("line"), "inactive": inactive})
+                self.ax.scatter([p["x"]], [p["y"]], s=24, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
+                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
                 label_used = True
             result = fits.get(element)
             if result:
@@ -14126,7 +14119,7 @@ def _response_factor(app: "MainWindow", wavelength: float) -> float:
 
 def libspp_boltzmann_groups_with_skips(
     app: "MainWindow",
-    sac_shifts: Optional[dict[int, float]] = None,
+    sac_factors: Optional[dict[int, float]] = None,
 ):
     """Build LIBS++-style Boltzmann groups from current template lines.
 
@@ -14137,7 +14130,7 @@ def libspp_boltzmann_groups_with_skips(
 
     Returns a dictionary keyed by (specie, ion) with point dictionaries.
     """
-    sac_shifts = sac_shifts or {}
+    sac_factors = sac_factors or {}
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
         if not t.specie or not t.ion or not t.aki or not t.gk or not t.ek:
@@ -14151,19 +14144,13 @@ def libspp_boltzmann_groups_with_skips(
         if icorr <= 0:
             continue
         ek_ev = t.ek * 1.23985e-4
-        y_original = math.log(icorr / abs(t.aki * t.gk))
-        ln_sac = safe_float(sac_shifts.get(id(t), 0.0), 0.0)
-        sac_applied = id(t) in sac_shifts and math.isfinite(ln_sac) and ln_sac >= 0.0
-        y = y_original + ln_sac if sac_applied else y_original
+        y = math.log(icorr / abs(t.aki * t.gk))
         groups[(t.specie.strip().capitalize(), int(t.ion))].append({
             "x": ek_ev,
             "y": y,
-            "y_original": y_original,
             "line": t,
             "icorr": icorr,
             "eff": eff,
-            "sac_applied": sac_applied,
-            "sac_ln_shift": ln_sac if sac_applied else 0.0,
             "inactive": t.aki < 0.0,
         })
     skipped = len(app.template_lines) - sum(1 for pts in groups.values() for p in pts if not p.get("inactive"))
@@ -14172,9 +14159,9 @@ def libspp_boltzmann_groups_with_skips(
 
 def libspp_boltzmann_groups(
     app: "MainWindow",
-    sac_shifts: Optional[dict[int, float]] = None,
+    sac_factors: Optional[dict[int, float]] = None,
 ):
-    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_shifts)
+    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_factors)
     return groups
 
 
@@ -14182,7 +14169,7 @@ def libspp_saha_boltzmann_groups(
     app: "MainWindow",
     ne: float,
     kt: float,
-    sac_shifts: Optional[dict[int, float]] = None,
+    sac_factors: Optional[dict[int, float]] = None,
 ):
     """Build Unit27 Saha-Boltzmann plot points grouped by element.
 
@@ -14193,7 +14180,7 @@ def libspp_saha_boltzmann_groups(
         x(II) = Eion + Ek
         y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
     """
-    sac_shifts = sac_shifts or {}
+    sac_factors = sac_factors or {}
     groups: dict[str, list[dict]] = defaultdict(list)
     skipped = 0
     metadata_cache: dict[str, dict] = {}
@@ -14214,10 +14201,7 @@ def libspp_saha_boltzmann_groups(
             skipped += 1
             continue
         ek_ev = t.ek * 1.23985e-4
-        y_original = math.log(icorr / abs(t.aki * t.gk))
-        ln_sac = safe_float(sac_shifts.get(id(t), 0.0), 0.0)
-        sac_applied = id(t) in sac_shifts and math.isfinite(ln_sac) and ln_sac >= 0.0
-        y = y_original + ln_sac if sac_applied else y_original
+        y = math.log(icorr / abs(t.aki * t.gk))
         x = ek_ev
         if ion == 2:
             if ne <= 0.0 or kt <= 0.0:
@@ -14237,14 +14221,11 @@ def libspp_saha_boltzmann_groups(
         groups[specie].append({
             "x": x,
             "y": y,
-            "y_original": y_original,
             "line": t,
             "ion": ion,
             "icorr": icorr,
             "eff": eff,
             "center": center,
-            "sac_applied": sac_applied,
-            "sac_ln_shift": ln_sac if sac_applied else 0.0,
             "inactive": t.aki < 0.0,
         })
     skipped += sum(1 for pts in groups.values() for p in pts if p.get("inactive"))
@@ -14769,12 +14750,6 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             use_value,
         )
 
-    def _template_line_index(self, line):
-        for idx, candidate in enumerate(getattr(self.master_app, "template_lines", []) or []):
-            if candidate is line:
-                return idx
-        return None
-
     def refresh(self, show_message=True):
         lines = self._assigned_lines()
         self._rows = list(lines)
@@ -14861,47 +14836,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._toggle_use_value(item)
 
     def apply_sac(self):
-        shifts: dict[int, float] = {}
-        applied = 0
-        for item, line in zip(self.tree.get_children(), self._rows):
-            values = self.tree.item(item, "values")
-            if not values:
-                continue
-            use_value = str(values[5]).strip().lower() if len(values) > 5 else ""
-            if use_value != "yes":
-                continue
-            sac = safe_float(values[4], 0.0) if len(values) > 4 else 0.0
-            if not math.isfinite(sac) or sac < 1.0:
-                continue
-            raw_intensity = safe_float(getattr(line, "inte", 0.0), 0.0)
-            ag = abs(safe_float(getattr(line, "aki", 0.0), 0.0) * safe_float(getattr(line, "gk", 0.0), 0.0))
-            if raw_intensity <= 0.0 or ag <= 0.0:
-                continue
-            if self._template_line_index(line) is None:
-                continue
-            ln_sac = math.log(sac)
-            y_original = math.log(raw_intensity / ag)
-            y_corrected = y_original + ln_sac
-            if y_corrected + 1e-12 < y_original:
-                continue
-            shifts[id(line)] = ln_sac
-            applied += 1
-        self.master_app.active_sac_ln_shifts = shifts
-        self.master_app.invalidate_cflibs_results()
-        try:
-            if getattr(self.master_app, "saha_window", None) is not None and self.master_app.saha_window.winfo_exists():
-                self.master_app.saha_window.compute()
-        except Exception:
-            pass
-        try:
-            if getattr(self.master_app, "cflibs_window", None) is not None and self.master_app.cflibs_window.winfo_exists():
-                self.master_app.cflibs_window.compute()
-        except Exception:
-            pass
-        if applied:
-            msg = f"SAC applied to {applied} analytical points."
-        else:
-            msg = "No valid SAC corrections to apply."
+        msg = "Self-absorption correction is not implemented yet."
         self.summary_var.set(msg)
         self.master_app.status(msg)
         _showinfo(self, "Self-Absorption Check", msg)
@@ -15341,7 +15276,7 @@ class CFLibsWindow(tk.Toplevel):
         ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
         groups, skipped = libspp_boltzmann_groups_with_skips(
             self.master_app,
-            getattr(self.master_app, "active_sac_ln_shifts", {}),
+            getattr(self.master_app, "sac_factors", {}),
         )
         fits = libspp_fit_boltzmann_fixed_temperature(self.master_app, groups, kt)
         if not fits:
@@ -15534,14 +15469,8 @@ class CFLibsWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 point_label = label if not label_used else "_nolegend_"
-                y_original = safe_float(p.get("y_original", p["y"]), p["y"])
-                y_corrected = safe_float(p.get("y", y_original), y_original)
-                self.ax.scatter([p["x"]], [y_original], s=24, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
-                if bool(p.get("sac_applied")):
-                    if abs(y_corrected - y_original) > 0.0:
-                        self.ax.plot([p["x"], p["x"]], [y_original, y_corrected], linestyle=":", linewidth=0.8, alpha=0.9, color=point_color)
-                    self.ax.scatter([p["x"]], [y_corrected], s=85, marker="*", color=point_color, alpha=1.0, edgecolors="black", linewidths=0.4, label="_nolegend_")
-                self.plot_points.append({"x": p["x"], "y": y_corrected, "y_original": y_original, "line": p.get("line"), "inactive": inactive})
+                self.ax.scatter([p["x"]], [p["y"]], s=24, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
+                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
                 label_used = True
             fit = fits.get(key)
             if fit:
@@ -16637,7 +16566,6 @@ class MainWindow(tk.Tk):
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
         self.sac_factors: dict[int, float] = {}
-        self.active_sac_ln_shifts: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.last_halpha_result: Optional[dict] = None
         self.last_saha_boltzmann: Optional[dict] = None
@@ -17591,14 +17519,12 @@ def template_info_from_menu(self):
 
 def close_template_from_menu(self):
     self.template_lines.clear()
-    self.clear_active_sac_corrections()
     self.notify_template_changed(redraw=False)
     self.redraw()
     self.status("Template closed")
 
 def clear_template_data(self):
     self.template_lines.clear()
-    self.clear_active_sac_corrections()
     self.notify_template_changed(redraw=False)
 
 def invalidate_cflibs_results(self):
@@ -17612,9 +17538,6 @@ def invalidate_cflibs_results(self):
                 child.disable_opc()
     except Exception:
         pass
-
-def clear_active_sac_corrections(self):
-    self.active_sac_ln_shifts = {}
 
 def notify_template_changed(self, redraw=False):
     self.invalidate_cflibs_results()
@@ -17973,7 +17896,6 @@ def show_sac_window(self):
 
 def load_template_file(self, filename):
     self.template_lines = load_template_lines(filename, RetroTemplateManager.columns)
-    self.clear_active_sac_corrections()
     self.notify_template_changed(redraw=False)
     self.redraw()
 
