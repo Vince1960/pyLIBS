@@ -14563,8 +14563,8 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Self-Absorption Check")
-        self.geometry("920x440")
-        self.minsize(820, 360)
+        self.geometry("500x400")
+        self.minsize(460, 360)
         self._rows = []
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
@@ -14581,7 +14581,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             "sa": "SA",
             "use": "Use",
         }
-        widths = {"line": 170, "wl": 72, "stark_width": 84, "sa": 56, "use": 48}
+        widths = {"line": 160, "wl": 66, "stark_width": 76, "sa": 48, "use": 44}
         for col in ("line", "wl", "stark_width", "sa", "use"):
             self.tree.heading(col, text=headings[col])
             self.tree.column(col, width=widths[col], minwidth=widths[col], stretch=False, anchor="center")
@@ -14589,6 +14589,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.tree.bind("<Double-1>", self._on_double_click)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
+        fit_toplevel_to_content(self, min_width=0, min_height=360, max_width_fraction=0.45, max_height_fraction=0.60)
         self.lift(master)
         try:
             self.focus_force()
