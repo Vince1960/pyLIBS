@@ -14620,6 +14620,18 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         base = abs(safe_float(getattr(self.master_app.options, "search_range", 0.2), 0.2)) * 0.02
         return max(0.05, base)
 
+    def _current_temperature_k(self):
+        kt_ev = safe_float(getattr(self.master_app, "session_temperature", 0.0), 0.0)
+        if kt_ev <= 0.0:
+            kt_ev = 1.0
+        return kt_ev * 11600.0
+
+    def _current_electron_density(self):
+        ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
+        if ne <= 0.0:
+            ne = 1.0e17
+        return ne
+
     def _stark_species(self, line):
         return str(getattr(line, "specie", "")).strip().capitalize()
 
@@ -14634,16 +14646,16 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             return 2
         return 0
 
-    def _line_has_stark_data(self, conn, line, tolerance):
+    def _lookup_stark_row(self, conn, line, tolerance):
         specie = self._stark_species(line)
         ion = self._stark_ion(line)
         asswl = abs(safe_float(getattr(line, "asswavelen", 0.0), 0.0))
         if not specie or ion not in (1, 2) or asswl <= 0.0:
-            return False
+            return None
         try:
-            row = conn.execute(
+            return conn.execute(
                 """
-                SELECT 1
+                SELECT Element, Ion, Wavelength, "w-T5000", "w-T10000"
                 FROM Stark
                 WHERE UPPER(TRIM(Element)) = ?
                   AND CAST(Ion AS INTEGER) = ?
@@ -14652,9 +14664,21 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 """,
                 (specie.upper(), ion, asswl - tolerance, asswl + tolerance),
             ).fetchone()
-            return row is not None
         except Exception:
-            return False
+            return None
+
+    def _stark_width_for_row(self, row):
+        if not row:
+            return ""
+        w5000 = safe_float(row["w-T5000"], 0.0)
+        w10000 = safe_float(row["w-T10000"], 0.0)
+        if w5000 == 0.0 and w10000 == 0.0:
+            return ""
+        temp_k = self._current_temperature_k()
+        w_t = w5000 + (temp_k - 5000.0) * (w10000 - w5000) / 5000.0
+        ne = self._current_electron_density()
+        width = 2.0 * (ne / 1.0e16) * w_t
+        return _format_sa_numeric(width)
 
     def _line_label(self, line):
         wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
@@ -14664,12 +14688,12 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
 
     def _line_values(self, line):
         wl = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
-        stark = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
+        stark = getattr(line, "sa_stark_width", "")
         use_value = "No" if not bool(getattr(line, "sa_use", True)) else "Yes"
         return (
             self._line_label(line),
             _format_sa_numeric(wl) if wl > 0.0 else "",
-            _format_sa_numeric(stark) if stark > 0.0 else "",
+            stark if stark else "",
             "",
             use_value,
         )
@@ -14701,11 +14725,15 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 _showinfo(self, "Self-Absorption Check", "A template with assigned lines is required first.")
             return
         for idx, line in enumerate(self._rows):
+            stark_row = None
             has_stark_data = False
             if stark_conn is not None:
-                has_stark_data = self._line_has_stark_data(stark_conn, line, tolerance)
+                stark_row = self._lookup_stark_row(stark_conn, line, tolerance)
+                has_stark_data = stark_row is not None
             line.sa_has_stark_data = has_stark_data
             line.sa_use = has_stark_data
+            line.sa_stark_row = stark_row
+            line.sa_stark_width = self._stark_width_for_row(stark_row)
             self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
         self.summary_var.set(f"{len(lines)} template line(s)")
         if stark_conn is not None:
