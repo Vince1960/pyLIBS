@@ -32,17 +32,13 @@ Dipendenze consigliate:
 from __future__ import annotations
 
 import csv
-import base64
 from bisect import bisect_right
 from datetime import datetime
-import html
 import math
 import os
 import re
 import subprocess
 import sys
-import tempfile
-import webbrowser
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -53,6 +49,31 @@ from typing import Optional
 from pylibs.core.models import AtomicLine, TemplateLine
 from pylibs.db.libs_database import LibsDatabase
 from pylibs.io.ini import load_pylibs_ini, save_pylibs_ini
+from pylibs.io.report_io import (
+    build_cflibs_report_html as _build_cflibs_report_html,
+    build_cflibs_report_text as _build_cflibs_report_text,
+    export_spectrum_png as _export_spectrum_png,
+    definition_table as _report_definition_table,
+    ensure_report_temp_dir as _report_ensure_temp_dir,
+    halpha_section_html as _report_halpha_section_html,
+    html_table as _report_html_table,
+    plasma_parameter_rows as _report_plasma_parameter_rows,
+    report_temp_path as _report_temp_path,
+    response_info as _report_response_info,
+    result_rows as _report_result_rows,
+    saha_rows as _report_saha_rows,
+    saha_section_html as _report_saha_section_html,
+    spectrum_info as _report_spectrum_info,
+    template_rows as _report_template_rows,
+    _fmt as _report_fmt,
+    _fmt3 as _report_fmt3,
+    _ne_source as _report_ne_source,
+    _temperature_source as _report_temperature_source,
+    _finite_values as _report_finite_values,
+    open_file_with_default_app as _open_file_with_default_app,
+    write_report_content as _write_report_content,
+    write_temp_cflibs_report as _write_temp_cflibs_report,
+)
 from pylibs.io.template_io import load_template_lines, save_template_lines
 from pylibs.io.spectrum_io import (
     SPECTRUM_FILETYPES,
@@ -15120,8 +15141,8 @@ class CFLibsWindow(tk.Toplevel):
             _showinfo(self, "CF-LIBS", "No CF-LIBS results are available to show.")
             return
         try:
-            report_path, content = self.write_temp_cflibs_report(rows)
-            self.open_file_with_default_app(report_path)
+            report_path, content = _write_temp_cflibs_report(self, rows)
+            _open_file_with_default_app(report_path)
             preview_text = (
                 "Report opened in the default HTML viewer.\n\n"
                 f"Temporary HTML file:\n{report_path}\n\n"
@@ -15131,9 +15152,9 @@ class CFLibsWindow(tk.Toplevel):
         except Exception as e:
             _showwarning(self, "CF-LIBS", f"Could not open the default HTML viewer:\n{e}\n\nShowing the report source instead.")
             report_path = None
-            image_path = self._report_temp_path("cflibs_report_spectrum.png")
-            image_info = self._export_spectrum_png(image_path)
-            content = self.build_cflibs_report_html(rows, image_info)
+            image_path = _report_temp_path(self, "cflibs_report_spectrum.png")
+            image_info = _export_spectrum_png(self, image_path)
+            content = _build_cflibs_report_html(self, rows, image_info)
             preview_text = None
             fallback = True
         if self.report_window is not None and self.report_window.winfo_exists():
@@ -15151,43 +15172,16 @@ class CFLibsWindow(tk.Toplevel):
             self.master_app.status(f"CF-LIBS report opened: {report_path}")
 
     def _ensure_report_temp_dir(self) -> Path:
-        if self.report_temp_dir:
-            path = Path(self.report_temp_dir)
-            try:
-                path.mkdir(parents=True, exist_ok=True)
-                return path
-            except Exception:
-                pass
-        path = Path(tempfile.mkdtemp(prefix="pylibs_cflibs_report_"))
-        self.report_temp_dir = str(path)
-        return path
+        return _report_ensure_temp_dir(self)
 
     def _report_temp_path(self, filename: str) -> Path:
-        return self._ensure_report_temp_dir() / filename
+        return _report_temp_path(self, filename)
 
     def write_temp_cflibs_report(self, rows):
-        report_path = self._report_temp_path("cflibs_report.html")
-        image_path = self._report_temp_path("cflibs_report_spectrum.png")
-        image_info = self._export_spectrum_png(image_path)
-        content = self.build_cflibs_report_html(rows, image_info, report_path)
-        report_path.write_text(content, encoding="utf-8")
-        return report_path, content
+        return _write_temp_cflibs_report(self, rows)
 
     def open_file_with_default_app(self, path: Path):
-        path = Path(path)
-        if os.name == "nt":
-            os.startfile(str(path))
-            return
-        if sys.platform == "darwin":
-            subprocess.Popen(["open", str(path)])
-            return
-        try:
-            subprocess.Popen(["xdg-open", str(path)])
-            return
-        except Exception:
-            if webbrowser.open(path.resolve().as_uri()):
-                return
-            raise
+        return _open_file_with_default_app(path)
 
     def on_report_window_close(self):
         self.report_window = None
@@ -15197,7 +15191,7 @@ class CFLibsWindow(tk.Toplevel):
 
     def write_report_content(self, filename: str, content: str):
         try:
-            Path(filename).write_text(content, encoding="utf-8")
+            _write_report_content(self, filename, content)
         except Exception as e:
             _showerror(self, "CF-LIBS", f"Could not save report:\n{e}")
             return
@@ -15206,344 +15200,58 @@ class CFLibsWindow(tk.Toplevel):
         _showinfo(self, "CF-LIBS", f"Report saved:\n{filename}")
 
     def _fmt(self, value):
-        if value is None or value == "":
-            return "N/A"
-        try:
-            number = float(value)
-        except Exception:
-            return str(value)
-        if not math.isfinite(number):
-            return str(value)
-        return f"{number:.8g}"
+        return _report_fmt(value)
 
     def _fmt3(self, value):
-        text = format_template_display_value(value)
-        return text if text != "" else "N/A"
+        return _report_fmt3(value)
 
     def _temperature_source(self, kt):
-        source = getattr(self.master_app, "session_temperature_source", None)
-        session_kt = safe_float(getattr(self.master_app, "session_temperature", 0.0), 0.0)
-        if source and session_kt and abs(session_kt - kt) <= max(abs(kt) * 1e-6, 1e-9):
-            return source
-        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
-        rep = safe_float(saha.get("representative_temperature", 0.0), 0.0)
-        if rep and abs(rep - kt) <= max(abs(kt) * 1e-6, 1e-9):
-            mode = saha.get("representative_mode", "")
-            return "selected element" if mode == "selected element" else "Saha-Boltzmann mean"
-        if abs(kt - 1.0) <= 1e-9:
-            return "default"
-        return "manually entered"
+        return _report_temperature_source(self, kt)
 
     def _ne_source(self, ne):
-        source = getattr(self.master_app, "session_ne_source", None)
-        session_ne = safe_float(getattr(self.master_app, "session_ne", 0.0), 0.0)
-        if source and session_ne and abs(session_ne - ne) <= max(abs(ne) * 1e-6, 1e-6):
-            return source
-        halpha = getattr(self.master_app, "last_halpha_result", None) or {}
-        h_ne = safe_float(halpha.get("ne", 0.0), 0.0)
-        if h_ne and abs(h_ne - ne) <= max(abs(ne) * 1e-6, 1e-6):
-            return "H-alpha"
-        if abs(ne - 1.0e17) <= 1.0:
-            return "default"
-        return "user input"
+        return _report_ne_source(self, ne)
 
     def _export_spectrum_png(self, image_path: Path):
-        try:
-            if not getattr(self.master_app, "fig", None):
-                return {"path": None, "error": "Main spectrum plot is not available."}
-            self.master_app.fig.savefig(str(image_path), dpi=150)
-            data_uri = None
-            try:
-                encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
-                data_uri = f"data:image/png;base64,{encoded}"
-            except Exception:
-                data_uri = None
-            return {"path": image_path, "data_uri": data_uri, "error": None}
-        except Exception as e:
-            return {"path": None, "data_uri": None, "error": str(e)}
+        return _export_spectrum_png(self, image_path)
 
     def _finite_values(self, values):
-        out = []
-        for value in values or []:
-            try:
-                number = float(value)
-            except Exception:
-                continue
-            if math.isfinite(number):
-                out.append(number)
-        return out
+        return _report_finite_values(values)
 
     def _spectrum_info(self):
-        spectra = getattr(self.master_app, "spectra", []) or []
-        sp = spectra[0] if spectra else None
-        if not sp:
-            return {
-                "Spectrum file name": "N/A",
-                "Full file path": "N/A",
-                "Spectrum format / extension": "N/A",
-                "Number of spectrum points": "0",
-                "Wavelength range": "N/A",
-                "Intensity range": "N/A",
-            }
-        filename = getattr(sp, "filename", "") or ""
-        path = Path(filename) if filename else None
-        xs = self._finite_values(getattr(sp, "x", []))
-        ys = self._finite_values(getattr(sp, "y", []))
-        return {
-            "Spectrum file name": path.name if path else getattr(sp, "name", "Spectrum"),
-            "Full file path": str(path) if path else "N/A",
-            "Spectrum format / extension": path.suffix if path and path.suffix else "N/A",
-            "Number of spectrum points": str(len(getattr(sp, "x", []) or [])),
-            "Wavelength range": f"{self._fmt(min(xs))} - {self._fmt(max(xs))}" if xs else "N/A",
-            "Intensity range": f"{self._fmt(min(ys))} - {self._fmt(max(ys))}" if ys else "N/A",
-        }
+        return _report_spectrum_info(self)
 
     def _response_info(self):
-        opts = self.master_app.options
-        apply_response = bool(getattr(opts, "apply_response", False))
-        apply_before = bool(getattr(opts, "apply_before", False))
-        apply_after = bool(getattr(opts, "apply_after", False))
-        already_corrected = _fit_values_already_response_corrected(self.master_app)
-        if not apply_response:
-            mode = "None"
-        elif apply_before:
-            mode = "Apply Before"
-        elif apply_after:
-            mode = "Apply After"
-        else:
-            mode = "None"
-        if already_corrected:
-            cf_state = "Already corrected before fitting"
-        elif self.last_response_used:
-            cf_state = "Corrected during CF-LIBS analysis"
-        else:
-            cf_state = "Uncorrected"
-        return {
-            "Response normalization used": "Yes" if already_corrected or self.last_response_used else "No",
-            "Normalization mode": mode,
-            "Response file": str(getattr(opts, "response_file", "") or "N/A"),
-            "Correction convention": "divide by response",
-            "CF-LIBS intensity correction state": cf_state,
-        }
+        return _report_response_info(self)
 
     def _template_rows(self):
-        rows = []
-        for idx, line in enumerate(getattr(self.master_app, "template_lines", []) or [], start=1):
-            rows.append([
-                idx,
-                self._fmt3(getattr(line, "wavelen", "")),
-                f"{getattr(line, 'specie', '')} {_roman_ion(getattr(line, 'ion', 0)) if getattr(line, 'ion', 0) else ''}".strip() or "N/A",
-                self._fmt3(getattr(line, "fitwavelen", "")),
-                self._fmt3(_template_line_intensity(line)),
-                self._fmt3(getattr(line, "wl", "")),
-                self._fmt3(getattr(line, "wg", "")),
-                self._fmt3(getattr(line, "inte", "")),
-                self._fmt3(getattr(line, "aki", "")),
-                self._fmt3(getattr(line, "gk", "")),
-                self._fmt3(getattr(line, "ek", "")),
-                self._fmt3(getattr(line, "ei", "")),
-                self._fmt3(getattr(line, "gi", "")),
-                self._fmt3(getattr(line, "asswavelen", "")),
-                self._fmt3(getattr(line, "templint", "")),
-                self._fmt3(getattr(line, "error_inte", "")),
-                self._fmt3(getattr(line, "acc", "")),
-            ])
-        return rows
+        return _report_template_rows(self)
 
     def _saha_rows(self):
-        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
-        return [
-            [
-                item.get("element", "N/A"),
-                self._fmt(item.get("temperature")),
-                self._fmt(item.get("nlines")),
-                "Yes" if item.get("included") else "No",
-            ]
-            for item in saha.get("elements", []) or []
-        ]
+        return _report_saha_rows(self)
 
     def _plasma_parameter_rows(self):
-        return [
-            ["Temperature used", f"{self._fmt(self.last_kt)} eV"],
-            ["Temperature source", self.last_temperature_source],
-            ["Electron density used", f"{self._fmt(self.last_ne)} e/cm3"],
-            ["Electron density source", self.last_ne_source],
-        ]
+        return _report_plasma_parameter_rows(self)
 
     def _result_rows(self, rows):
-        return [
-            [
-                r.get("element", ""),
-                self._fmt3(r.get("ionized_neutral_ratio")),
-                self._fmt3(r.get("number_percent")),
-                self._fmt3(r.get("mass_percent")),
-            ]
-            for r in rows
-        ]
+        return _report_result_rows(rows)
 
     def _html_table(self, headers, rows):
-        head = "".join(f"<th>{html.escape(str(h))}</th>" for h in headers)
-        body = []
-        if rows:
-            for row in rows:
-                body.append("<tr>" + "".join(f"<td>{html.escape(str(c))}</td>" for c in row) + "</tr>")
-        else:
-            body.append(f"<tr><td colspan=\"{len(headers)}\">Not available</td></tr>")
-        return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+        return _report_html_table(headers, rows)
 
     def _definition_table(self, mapping):
-        return self._html_table(["Field", "Value"], [[k, v] for k, v in mapping.items()])
+        return _report_definition_table(mapping)
 
     def _halpha_section_html(self):
-        result = getattr(self.master_app, "last_halpha_result", None) or {}
-        if not result or not result.get("available"):
-            detail = result.get("error") if result else ""
-            return "<p>Not available" + (f": {html.escape(str(detail))}" if detail else "") + ".</p>"
-        rows = [
-            ["H-alpha fitted center", self._fmt(result.get("center"))],
-            ["H-alpha Lorentzian/Stark width", self._fmt(result.get("corrected_lorentzian_width"))],
-            ["H-alpha measured Lorentzian width", self._fmt(result.get("lorentzian_width"))],
-            ["H-alpha Gaussian width", self._fmt(result.get("gaussian_width"))],
-            ["H-alpha intensity", self._fmt(result.get("intensity"))],
-            ["H-alpha integral", self._fmt(result.get("integral"))],
-            ["Electron density from H-alpha", f"{self._fmt(result.get('ne'))} e/cm3"],
-        ]
-        return self._html_table(["Field", "Value"], rows)
+        return _report_halpha_section_html(self)
 
     def _saha_section_html(self):
-        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
-        low, high = saha.get("temperature_range", ("N/A", "N/A"))
-        rows = [
-            ["Allowed temperature range", f"{self._fmt(low)} - {self._fmt(high)} eV"],
-            ["Mean temperature", f"{self._fmt(saha.get('mean_temperature'))} eV"],
-            ["Selected representative temperature mode", saha.get("representative_mode", "default value")],
-            ["Selected element", saha.get("selected_element") or "N/A"],
-            ["Representative temperature used for CF-LIBS", f"{self._fmt(self.last_kt)} eV"],
-        ]
-        return self._html_table(["Field", "Value"], rows) + self._html_table(
-            ["Element", "Temperature (eV)", "Valid lines", "Included in mean"],
-            self._saha_rows(),
-        )
+        return _report_saha_section_html(self)
 
     def build_cflibs_report_html(self, rows, image_info, report_path: Optional[Path] = None):
-        spectrum_info = self._spectrum_info()
-        response_info = self._response_info()
-        image_path = image_info.get("path")
-        image_block = "<p>Spectrum image export failed: " + html.escape(str(image_info.get("error"))) + "</p>"
-        if image_path:
-            src = image_info.get("data_uri") or str(image_path)
-            if report_path and not image_info.get("data_uri"):
-                try:
-                    src = os.path.relpath(str(image_path), str(report_path.parent))
-                except Exception:
-                    src = str(image_path)
-            image_block = f"<p>PNG file: {html.escape(str(image_path))}</p><img src=\"{html.escape(src)}\" alt=\"Current spectrum plot\">"
-        template_note = "pyLIBS stores the fitted line integral in the template intensity field used for CF-LIBS."
-        style = """
-body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
-h1 { margin-bottom: 0.2em; }
-h2 { margin-top: 1.5em; border-bottom: 1px solid #bbb; padding-bottom: 0.2em; }
-table { border-collapse: collapse; width: 100%; margin: 0.7em 0 1.2em; font-size: 13px; }
-th, td { border: 1px solid #bbb; padding: 4px 6px; text-align: left; }
-th { background: #efefef; }
-img { max-width: 100%; border: 1px solid #bbb; }
-.muted { color: #555; }
-"""
-        return f"""<!doctype html>
-<html>
-<head>
-<meta charset="utf-8">
-<title>CF-LIBS Analysis Report</title>
-<style>{style}</style>
-</head>
-<body>
-<h1>CF-LIBS Analysis Report</h1>
-<p>pyLIBS version: {html.escape(APP_VERSION)}<br>
-Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
-
-<h2>Spectrum information</h2>
-{self._definition_table(spectrum_info)}
-
-<h2>Spectrum image</h2>
-{image_block}
-
-<h2>Instrument-response normalization</h2>
-{self._definition_table(response_info)}
-
-<h2>Template contents</h2>
-<p class="muted">{html.escape(template_note)}</p>
-{self._html_table(
-    ["#", "Wavelength", "Identification / species", "Fitted center", "Fitted intensity",
-     "Lorentzian width", "Gaussian width", "Integral", "Aki", "gki", "Ek", "Ei",
-     "gi", "Assigned wavelength", "Template intensity", "Intensity error", "Accuracy"],
-    self._template_rows(),
-)}
-
-<h2>Hydrogen Stark broadening</h2>
-{self._halpha_section_html()}
-
-<h2>Saha-Boltzmann temperatures</h2>
-{self._saha_section_html()}
-
-<h2>Plasma parameters used for CF-LIBS</h2>
-{self._html_table(["Parameter", "Value"], self._plasma_parameter_rows())}
-
-<h2>CF-LIBS results</h2>
-<p>Skipped/incomplete template lines: {html.escape(str(self.last_skipped))}</p>
-{self._html_table(["Element", "Ionized / Neutral ratio", "Number %", "Mass %"], self._result_rows(rows))}
-<p class="muted">Atomic masses are read from LIBS.db table Elementi, field m_atomica. Incomplete template lines are skipped before concentration calculation.</p>
-</body>
-</html>
-"""
+        return _build_cflibs_report_html(self, rows, image_info, report_path)
 
     def build_cflibs_report_text(self, rows, image_info):
-        data = [
-            "CF-LIBS Analysis Report",
-            f"pyLIBS version: {APP_VERSION}",
-            f"Date/time: {datetime.now().isoformat(timespec='seconds')}",
-            "",
-            "Spectrum information",
-        ]
-        for key, value in self._spectrum_info().items():
-            data.append(f"{key}: {value}")
-        data.extend(["", "Spectrum image"])
-        if image_info.get("path"):
-            data.append(f"PNG file: {image_info['path']}")
-        else:
-            data.append(f"PNG export failed: {image_info.get('error')}")
-        data.extend(["", "Instrument-response normalization"])
-        for key, value in self._response_info().items():
-            data.append(f"{key}: {value}")
-        data.extend(["", "Template contents"])
-        data.append("Index\tWavelength\tSpecies\tFitted center\tFitted intensity\tLorentzian width\tGaussian width\tIntegral\tAki\tgki\tEk\tEi\tgi\tAssigned wavelength\tTemplate intensity\tIntensity error\tAccuracy")
-        for row in self._template_rows():
-            data.append("\t".join(str(v) for v in row))
-        data.extend(["", "Hydrogen Stark broadening"])
-        halpha = getattr(self.master_app, "last_halpha_result", None) or {}
-        if halpha and halpha.get("available"):
-            for key in ("center", "corrected_lorentzian_width", "lorentzian_width", "gaussian_width", "intensity", "integral", "ne"):
-                data.append(f"{key}: {self._fmt(halpha.get(key))}")
-        else:
-            data.append("Not available")
-        data.extend(["", "Saha-Boltzmann temperatures"])
-        saha = getattr(self.master_app, "last_saha_boltzmann", None) or {}
-        low, high = saha.get("temperature_range", ("N/A", "N/A"))
-        data.append(f"Allowed temperature range: {self._fmt(low)} - {self._fmt(high)} eV")
-        data.append(f"Mean temperature: {self._fmt(saha.get('mean_temperature'))} eV")
-        data.append(f"Selected representative temperature mode: {saha.get('representative_mode', 'default value')}")
-        data.append(f"Representative temperature used for CF-LIBS: {self._fmt(self.last_kt)} eV")
-        data.append("Element\tTemperature (eV)\tValid lines\tIncluded in mean")
-        for row in self._saha_rows():
-            data.append("\t".join(str(v) for v in row))
-        data.extend(["", "Plasma parameters used for CF-LIBS"])
-        for row in self._plasma_parameter_rows():
-            data.append(f"{row[0]}: {row[1]}")
-        data.extend(["", "CF-LIBS results"])
-        data.append(f"Skipped/incomplete template lines: {self.last_skipped}")
-        data.append("Element\tIonized / Neutral ratio\tNumber %\tMass %")
-        for row in self._result_rows(rows):
-            data.append("\t".join(str(v) for v in row))
-        return "\n".join(data) + "\n"
+        return _build_cflibs_report_text(self, rows, image_info)
 
     def _draw_boltzmann(self, groups, fits, kt):
         if self.ax is None:
