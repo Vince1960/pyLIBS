@@ -37,6 +37,7 @@ from datetime import datetime
 import math
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 from collections import defaultdict
@@ -14577,6 +14578,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.geometry("500x400")
         self.minsize(460, 360)
         self._rows = []
+        self._stark_db_warning_shown = False
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
@@ -14611,6 +14613,49 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
     def _assigned_lines(self):
         return [line for line in getattr(self.master_app, "template_lines", []) or [] if getattr(line, "specie", "") and getattr(line, "ion", 0)]
 
+    def _stark_db_path(self):
+        return resource_path("Stark.db")
+
+    def _stark_match_tolerance(self):
+        base = abs(safe_float(getattr(self.master_app.options, "search_range", 0.2), 0.2)) * 0.02
+        return max(0.05, base)
+
+    def _stark_species(self, line):
+        return str(getattr(line, "specie", "")).strip().capitalize()
+
+    def _stark_ion(self, line):
+        try:
+            ion = int(getattr(line, "ion", 0) or 0)
+        except Exception:
+            ion = 0
+        if ion == 1:
+            return 1
+        if ion == 2:
+            return 2
+        return 0
+
+    def _line_has_stark_data(self, conn, line, tolerance):
+        specie = self._stark_species(line)
+        ion = self._stark_ion(line)
+        asswl = abs(safe_float(getattr(line, "asswavelen", 0.0), 0.0))
+        if not specie or ion not in (1, 2) or asswl <= 0.0:
+            return False
+        try:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM Stark
+                WHERE UPPER(TRIM(Element)) = ?
+                  AND CAST(Ion AS INTEGER) = ?
+                  AND CAST(Wavelength AS REAL) BETWEEN ? AND ?
+                LIMIT 1
+                """,
+                (specie.upper(), ion, asswl - tolerance, asswl + tolerance),
+            ).fetchone()
+            return row is not None
+        except Exception:
+            return False
+
     def _line_label(self, line):
         wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
         if not wave:
@@ -14632,9 +14677,23 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
     def refresh(self, show_message=True):
         lines = self._assigned_lines()
         self._rows = list(lines)
-        for line in self._rows:
-            if not hasattr(line, "sa_use"):
-                line.sa_use = True
+        tolerance = self._stark_match_tolerance()
+        stark_conn = None
+        stark_error = False
+        stark_path = self._stark_db_path()
+        try:
+            if not stark_path.exists():
+                raise FileNotFoundError(str(stark_path))
+            stark_conn = sqlite3.connect(str(stark_path))
+            stark_conn.row_factory = sqlite3.Row
+        except Exception:
+            stark_conn = None
+            stark_error = True
+        if stark_error and not self._stark_db_warning_shown:
+            self._stark_db_warning_shown = True
+            _showwarning(self, "Self-Absorption Check", "Stark.db not found or could not be opened. Self-absorption data are unavailable.")
+        if not stark_error:
+            self._stark_db_warning_shown = False
         self.tree.delete(*self.tree.get_children())
         if not lines:
             self.summary_var.set("No assigned template lines available")
@@ -14642,8 +14701,18 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 _showinfo(self, "Self-Absorption Check", "A template with assigned lines is required first.")
             return
         for idx, line in enumerate(self._rows):
+            has_stark_data = False
+            if stark_conn is not None:
+                has_stark_data = self._line_has_stark_data(stark_conn, line, tolerance)
+            line.sa_has_stark_data = has_stark_data
+            line.sa_use = has_stark_data
             self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
         self.summary_var.set(f"{len(lines)} template line(s)")
+        if stark_conn is not None:
+            try:
+                stark_conn.close()
+            except Exception:
+                pass
 
     def _toggle_selected_use(self, _event=None):
         item = self.tree.focus()
