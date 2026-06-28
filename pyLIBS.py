@@ -14565,9 +14565,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.title("Self-Absorption Check")
         self.geometry("920x440")
         self.minsize(820, 360)
-        self._editor = None
-        self._editor_item = None
-        self._editor_column = None
+        self._rows = []
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
@@ -14583,13 +14581,12 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             "sa": "SA",
             "use": "Use",
         }
-        widths = {"line": 235, "wl": 88, "stark_width": 96, "sa": 72, "use": 52}
+        widths = {"line": 170, "wl": 72, "stark_width": 84, "sa": 56, "use": 48}
         for col in ("line", "wl", "stark_width", "sa", "use"):
             self.tree.heading(col, text=headings[col])
-            self.tree.column(col, width=widths[col], anchor="center")
+            self.tree.column(col, width=widths[col], minwidth=widths[col], stretch=False, anchor="center")
         self.tree.pack(fill="both", expand=True, padx=6, pady=(0, 6))
         self.tree.bind("<Double-1>", self._on_double_click)
-        self.tree.bind("<space>", self._toggle_selected_use)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
         self.lift(master)
@@ -14610,115 +14607,73 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
     def _line_values(self, line):
         wl = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
         stark = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
+        use_value = "No" if not bool(getattr(line, "sa_use", True)) else "Yes"
         return (
             self._line_label(line),
             _format_sa_numeric(wl) if wl > 0.0 else "",
             _format_sa_numeric(stark) if stark > 0.0 else "",
             "",
-            "Yes",
+            use_value,
         )
 
     def refresh(self, show_message=True):
-        if self._editor is not None:
-            try:
-                self._editor.destroy()
-            except Exception:
-                pass
-            self._editor = None
-            self._editor_item = None
-            self._editor_column = None
         lines = self._assigned_lines()
+        self._rows = list(lines)
+        for line in self._rows:
+            if not hasattr(line, "sa_use"):
+                line.sa_use = True
         self.tree.delete(*self.tree.get_children())
         if not lines:
             self.summary_var.set("No assigned template lines available")
             if show_message:
                 _showinfo(self, "Self-Absorption Check", "A template with assigned lines is required first.")
             return
-        for idx, line in enumerate(lines):
+        for idx, line in enumerate(self._rows):
             self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
         self.summary_var.set(f"{len(lines)} template line(s)")
 
     def _toggle_selected_use(self, _event=None):
         item = self.tree.focus()
-        if not item:
-            return "break"
-        self._toggle_use_value(item)
+        if item:
+            self._toggle_use_value(item)
         return "break"
 
     def _toggle_use_value(self, item):
-        values = list(self.tree.item(item, "values"))
-        if not values:
-            return
-        values[4] = "No" if str(values[4]).strip().lower().startswith("y") else "Yes"
-        self.tree.item(item, values=values)
-
-    def _commit_use_editor(self, value):
-        if self._editor_item is None:
-            return
-        values = list(self.tree.item(self._editor_item, "values"))
-        if not values:
-            return
-        values[4] = "Yes" if str(value).strip().lower().startswith("y") else "No"
-        self.tree.item(self._editor_item, values=values)
-
-    def _close_use_editor(self, commit=True):
-        editor = self._editor
-        if editor is None:
-            return
-        if commit:
-            self._commit_use_editor(editor.get())
         try:
-            editor.destroy()
+            idx = int(item)
         except Exception:
-            pass
-        self._editor = None
-        self._editor_item = None
-        self._editor_column = None
+            return
+        if idx < 0 or idx >= len(self._rows):
+            return
+        line = self._rows[idx]
+        current = bool(getattr(line, "sa_use", True))
+        line.sa_use = not current
+        if item in self.tree.get_children():
+            self.tree.item(item, values=self._line_values(line))
+            try:
+                self.tree.selection_set(item)
+                self.tree.focus(item)
+            except Exception:
+                pass
+        return "break"
 
     def _on_double_click(self, event):
         region = self.tree.identify("region", event.x, event.y)
         if region != "cell":
             return
         column = self.tree.identify_column(event.x)
+        if column != "#5":
+            return
         item = self.tree.identify_row(event.y)
         if not item:
             return
-        if column == "#5":
-            self._open_use_editor(item)
-        else:
-            self._toggle_use_value(item)
-
-    def _open_use_editor(self, item):
-        self._close_use_editor(commit=True)
-        bbox = self.tree.bbox(item, "use")
-        if not bbox:
-            return
-        x, y, width, height = bbox
-        current = str(self.tree.item(item, "values")[4]).strip() or "Yes"
-        editor = ttk.Combobox(self.tree, values=("Yes", "No"), state="readonly", width=5)
-        editor.set("Yes" if current.lower().startswith("y") else "No")
-        editor.place(x=x, y=y, width=width, height=height)
-        editor.bind("<<ComboboxSelected>>", lambda _e: self._close_use_editor(commit=True))
-        editor.bind("<Return>", lambda _e: self._close_use_editor(commit=True))
-        editor.bind("<Escape>", lambda _e: self._close_use_editor(commit=False))
-        editor.bind("<FocusOut>", lambda _e: self._close_use_editor(commit=True))
-        self._editor = editor
-        self._editor_item = item
-        self._editor_column = "use"
-        try:
-            editor.focus_set()
-        except Exception:
-            pass
+        self._toggle_use_value(item)
 
     def apply_sac(self):
         _showinfo(self, "Self-Absorption Check", "Self-absorption correction will be implemented in a later step.")
         self.summary_var.set("Apply SAC is not implemented yet")
 
     def close(self):
-        try:
-            self._close_use_editor(commit=False)
-        except Exception:
-            pass
         try:
             if getattr(self.master_app, "sac_check_window", None) is self:
                 self.master_app.sac_check_window = None
