@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Apply SAC now stores a separate active SAC correction map and applies `Y_corr = Y_original + ln(SAC)` only to the accepted analytical points in Saha-Boltzmann and CF-LIBS Boltzmann plots.
 - Saha-Boltzmann now builds and plots fitted template-line points with session electron-density input, Unit27 temperature iteration, and safe Apply After response correction.
 - Saha-Boltzmann mean temperature can exclude/include individual elements without changing their fitted temperatures.
 - Saha-Boltzmann now auto-excludes out-of-range element temperatures and redraws fixed-temperature intercept-only fit lines.
