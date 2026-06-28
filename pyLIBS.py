@@ -17088,10 +17088,6 @@ def change_background(self):
         self.redraw(preserve_view=True)
         self.status(f"Spectrum background: {color}")
 
-def toggle_gradient(self):
-    # Removed from the View menu; kept as a harmless compatibility stub.
-    pass
-
 def toggle_grid(self, axis="both"):
     if axis in ("x", "both"):
         if hasattr(self, "view_grid_x_var"):
@@ -17127,10 +17123,6 @@ def toggle_log(self, axis="y"):
 
 def toggle_labels(self):
     self.status("Show Labels toggled")
-
-def toggle_animated_zoom(self):
-    # Removed from the View menu; kept as a harmless compatibility stub.
-    pass
 
 def smooth_main_spectrum(self):
     if not self.spectra:
@@ -17654,12 +17646,14 @@ def goto_wavelength(self, wavelength):
     self.canvas.draw_idle(); self._update_xscroll()
     self.status(f"GoTo: {wavelength:.4f} Å  (window ±{half_window:g} Å)")
 
+# Compatibility glue for the retro UI layer. Keep these monkey patches until
+# the corresponding class methods are migrated in a dedicated pass.
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
     show_template_manager, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
-    copy_plot, change_background, toggle_gradient, toggle_grid, toggle_log,
-    toggle_labels, toggle_animated_zoom, smooth_main_spectrum,
+    copy_plot, change_background, toggle_grid, toggle_log,
+    toggle_labels, smooth_main_spectrum,
     convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
     close_template_from_menu, clear_template_data, invalidate_cflibs_results, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
