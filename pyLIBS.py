@@ -14680,6 +14680,21 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         width = 2.0 * (ne / 1.0e17) * w_t
         return _format_sa_numeric(width)
 
+    def _sa_value_for_line(self, wl_text, stark_text):
+        wl = safe_float(wl_text, 0.0)
+        stark = safe_float(stark_text, 0.0)
+        if wl <= 0.0 or stark <= 0.0:
+            return ""
+        ratio = wl / stark
+        if ratio >= 1.0:
+            try:
+                value = ratio ** (-1.85)
+            except Exception:
+                return ""
+        else:
+            value = 1.0
+        return _format_sa_numeric(value)
+
     def _line_label(self, line):
         wave = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
         if not wave:
@@ -14689,12 +14704,15 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
     def _line_values(self, line):
         wl = abs(safe_float(getattr(line, "wl", 0.0), 0.0))
         stark = getattr(line, "sa_stark_width", "")
+        sa = getattr(line, "sa_value", "")
+        if not sa and wl > 0.0 and stark:
+            sa = self._sa_value_for_line(_format_sa_numeric(wl), stark)
         use_value = "No" if not bool(getattr(line, "sa_use", True)) else "Yes"
         return (
             self._line_label(line),
             _format_sa_numeric(wl) if wl > 0.0 else "",
             stark if stark else "",
-            "",
+            sa if sa else "",
             use_value,
         )
 
@@ -14734,6 +14752,10 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             line.sa_use = has_stark_data
             line.sa_stark_row = stark_row
             line.sa_stark_width = self._stark_width_for_row(stark_row)
+            line.sa_value = self._sa_value_for_line(
+                _format_sa_numeric(abs(safe_float(getattr(line, "wl", 0.0), 0.0))) if abs(safe_float(getattr(line, "wl", 0.0), 0.0)) > 0.0 else "",
+                line.sa_stark_width,
+            )
             self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
         self.summary_var.set(f"{len(lines)} template line(s)")
         if stark_conn is not None:
