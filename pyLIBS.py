@@ -14145,6 +14145,8 @@ def _template_line_intensity(line: TemplateLine) -> float:
 
 def _sa_correction_factor(app: "MainWindow", index: int) -> float:
     try:
+        if not bool(getattr(app, "sac_applied", False)):
+            return 1.0
         return safe_float(getattr(app, "sa_correction_factors", {}).get(index, 1.0), 1.0) or 1.0
     except Exception:
         return 1.0
@@ -14908,6 +14910,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 continue
             factors[idx] = factor
         self.master_app.sa_correction_factors = factors
+        self.master_app.sac_applied = bool(factors)
         if not factors:
             msg = "No valid SAC corrections to apply."
             self.summary_var.set(msg)
@@ -16661,6 +16664,7 @@ class MainWindow(tk.Tk):
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
         self.sac_factors: dict[int, float] = {}
+        self.sac_applied: bool = False
         self.sa_correction_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.last_halpha_result: Optional[dict] = None
@@ -17627,6 +17631,8 @@ def invalidate_cflibs_results(self):
 
 def notify_template_changed(self, redraw=False):
     self.invalidate_cflibs_results()
+    self.sac_applied = False
+    self.sa_correction_factors = {}
     refreshed = set()
     if self.template_window and self.template_window.winfo_exists():
         try:
