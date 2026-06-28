@@ -14610,7 +14610,6 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._stark_db_warning_shown = False
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top, text="Populate", command=self.refresh).pack(side="left")
         ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
         self.summary_var = tk.StringVar(value="Ready")
@@ -17069,7 +17068,17 @@ class MainWindow(tk.Tk):
     def show_cflibs(self): self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
     def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_sac_check(self):
-        self.sac_check_window = show_existing_or_create(self, "sac_check_window", lambda: SelfAbsorptionCheckWindow(self), parent=self)
+        self.sac_check_window = show_existing_or_create(
+            self,
+            "sac_check_window",
+            lambda: SelfAbsorptionCheckWindow(self),
+            refresh=lambda w: w.refresh(show_message=False),
+            parent=self,
+        )
+        try:
+            self.sac_check_window.refresh(show_message=False)
+        except Exception:
+            pass
         return self.sac_check_window
 
     def _mouse(self,event):
