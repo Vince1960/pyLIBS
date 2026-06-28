@@ -12600,13 +12600,13 @@ class OptionsWindow(tk.Toplevel):
         self.master_app = master
         self.title("Options")
         self.resizable(True, True)
-        self.minsize(760, 420)
-        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "860x520")
+        self.minsize(820, 360)
+        geom = legacy_geometry_to_tk(getattr(master.options, "options_geometry", ""), "900x430")
         if geom:
             self.geometry(geom)
         self.vars: dict[str, tk.Variable] = {}
         self._build_original_layout()
-        fit_toplevel_to_content(self, min_width=820, min_height=500)
+        fit_toplevel_to_content(self, min_width=860, min_height=390)
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
     def v(self, attr, default="", kind="str"):
@@ -12643,18 +12643,18 @@ class OptionsWindow(tk.Toplevel):
         ttk.Button(buttons_inner, text="OK", command=self.ok).pack(side="left", padx=4)
         ttk.Button(buttons_inner, text="Cancel", command=self.cancel).pack(side="left", padx=4)
 
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True, padx=6, pady=(6, 0))
+        outer = ttk.Frame(self, padding=6)
+        outer.pack(fill="both", expand=True)
+        outer.columnconfigure(0, weight=0)
+        outer.columnconfigure(1, weight=1)
+        outer.columnconfigure(2, weight=0)
 
-        left = ttk.Frame(notebook, padding=6)
-        mid = ttk.Frame(notebook, padding=6)
-        right = ttk.Frame(notebook, padding=6)
-        notebook.add(left, text="General")
-        notebook.add(mid, text="Ranges")
-        notebook.add(right, text="Correction and Fit")
-
-        for page in (left, mid, right):
-            page.columnconfigure(0, weight=1)
+        left = ttk.Frame(outer)
+        mid = ttk.Frame(outer)
+        right = ttk.Frame(outer)
+        left.grid(row=0, column=0, sticky="n", padx=(0, 6))
+        mid.grid(row=0, column=1, sticky="n", padx=6)
+        right.grid(row=0, column=2, sticky="n", padx=(6, 0))
 
         g_user = self.group(left, "Username", 0, 0)
         self.entry(g_user, "username", 0, 0, width=18)
@@ -15482,20 +15482,23 @@ class CFLibsOPCWindow(tk.Toplevel):
         self.geometry("760x500")
         self.minsize(680, 340)
         self.factors: dict[str, float] = {}
+        self.nominal_vars: dict[str, tk.StringVar] = {}
+        self.nominal_entries: list[ttk.Entry] = []
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute OPC", command=self.compute).pack(side="left")
         ttk.Button(top, text="Save Calibration...", command=self.save).pack(side="left", padx=4)
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
-        cols = ("Element", "CF-LIBS Number %", "Nominal Number %")
-        tree_frame = ttk.Frame(self)
-        self.tree = ttk.Treeview(tree_frame, columns=cols, show="headings")
-        for c in cols:
-            self.tree.heading(c, text=c)
-            self.tree.column(c, width=200, anchor="center")
-        self.tree.pack(fill="both", expand=True)
-        tree_frame.pack(fill="both", expand=True, padx=6, pady=5)
-        self.tree.bind("<Double-1>", self.edit_nominal)
+
+        self.rows_frame = ttk.Frame(self)
+        self.rows_frame.pack(fill="both", expand=True, padx=6, pady=5)
+        for col, title in enumerate(("Element", "CF-LIBS Number %", "Nominal Number %")):
+            ttk.Label(self.rows_frame, text=title, anchor="center", font=("TkDefaultFont", 9, "bold")).grid(
+                row=0, column=col, sticky="ew", padx=4, pady=(0, 4)
+            )
+        self.rows_frame.columnconfigure(0, weight=1, minsize=160)
+        self.rows_frame.columnconfigure(1, weight=1, minsize=180)
+        self.rows_frame.columnconfigure(2, weight=1, minsize=180)
         self.protocol("WM_DELETE_WINDOW", self.close)
         self.refresh()
         self.lift(owner)
@@ -15505,57 +15508,105 @@ class CFLibsOPCWindow(tk.Toplevel):
             self.focus_set()
 
     def refresh(self):
-        self.tree.delete(*self.tree.get_children())
+        for child in self.rows_frame.grid_slaves():
+            if int(child.grid_info().get("row", 0)) > 0:
+                child.destroy()
+        self.nominal_entries = []
         rows = self.owner.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
-        for row in rows:
+        for display_row, row in enumerate(rows, start=1):
             element = row.get("element", "")
             number_percent = safe_float(row.get("number_percent", 0.0), 0.0)
-            nominal = safe_float(getattr(self.master_app, "opc_nominal_percent", {}).get(element, ""), 0.0)
-            self.tree.insert("", "end", iid=element, values=(
-                element,
-                format_template_display_value(number_percent),
-                format_template_display_value(nominal) if nominal > 0.0 else "",
-            ))
+            saved = getattr(self.master_app, "opc_nominal_percent", {}).get(element, "")
+            var = self.nominal_vars.get(element)
+            if var is None:
+                text = format_template_display_value(saved) if safe_float(saved, 0.0) > 0.0 else ""
+                var = tk.StringVar(value=text)
+                self.nominal_vars[element] = var
+            ttk.Label(self.rows_frame, text=element, anchor="center").grid(
+                row=display_row, column=0, sticky="ew", padx=4, pady=2
+            )
+            ttk.Label(self.rows_frame, text=format_template_display_value(number_percent), anchor="center").grid(
+                row=display_row, column=1, sticky="ew", padx=4, pady=2
+            )
+            entry = ttk.Entry(self.rows_frame, textvariable=var, justify="center")
+            entry.grid(row=display_row, column=2, sticky="ew", padx=4, pady=2)
+            entry.bind("<Return>", lambda event, idx=len(self.nominal_entries): self._entry_return(idx))
+            entry.bind("<KP_Enter>", lambda event, idx=len(self.nominal_entries): self._entry_return(idx))
+            entry.bind("<Shift-Tab>", lambda event, idx=len(self.nominal_entries): self._focus_nominal_entry(idx - 1))
+            self.nominal_entries.append(entry)
 
-    def edit_nominal(self, _event=None):
-        item = self.tree.focus()
-        if not item:
-            return
-        vals = list(self.tree.item(item, "values"))
-        element = vals[0]
-        current = safe_float(vals[2], 0.0)
-        value = simpledialog.askfloat(
-            "Nominal Number %",
-            f"{element} nominal number %:",
-            initialvalue=current if current > 0.0 else safe_float(vals[1], 0.0),
-            minvalue=0.0,
-            maxvalue=100.0,
-            parent=_prepare_messagebox_parent(self),
-        )
-        if value is None:
-            return
-        if value < 0.0 or value > 100.0:
-            _showwarning(self, "OPC", "Nominal Number % must be between 0 and 100.")
-            return
+    def _focus_nominal_entry(self, index):
+        if not self.nominal_entries:
+            return "break"
+        index = max(0, min(index, len(self.nominal_entries) - 1))
+        self.nominal_entries[index].focus_set()
+        self.nominal_entries[index].selection_range(0, "end")
+        return "break"
+
+    def _entry_return(self, index):
+        if index + 1 < len(self.nominal_entries):
+            return self._focus_nominal_entry(index + 1)
+        self.compute()
+        return "break"
+
+    def _nominal_value(self, element, text):
+        text = str(text or "").strip()
+        if not text:
+            return None
+        value = safe_float(text, None)
+        if value is None or value < 0.0 or value > 100.0:
+            raise ValueError(f"{element}: Nominal Number % must be between 0 and 100.")
+        return value
+
+    def _current_rows(self):
+        return self.owner.last_rows or getattr(self.master_app, "last_cflibs_rows", []) or []
+
+    def _store_nominal_values(self):
         nominal = getattr(self.master_app, "opc_nominal_percent", None)
         if nominal is None:
             self.master_app.opc_nominal_percent = {}
             nominal = self.master_app.opc_nominal_percent
-        nominal[element] = value
-        self.refresh()
+        for row in self._current_rows():
+            element = row.get("element", "")
+            var = self.nominal_vars.get(element)
+            if var is None:
+                continue
+            value = self._nominal_value(element, var.get())
+            if value is None:
+                nominal.pop(element, None)
+            else:
+                nominal[element] = value
 
-    def compute(self):
+    def _show_nominal_error(self, message):
+        _showwarning(self, "OPC", message)
+        element = str(message).split(":", 1)[0]
+        rows = [row.get("element", "") for row in self._current_rows()]
+        if element in rows:
+            idx = rows.index(element)
+            if idx < len(self.nominal_entries):
+                self._focus_nominal_entry(idx)
+
+    def _compute_factors_from_entries(self):
         factors = {}
-        for iid in self.tree.get_children():
-            vals = list(self.tree.item(iid, "values"))
-            element = vals[0]
-            cflibs_percent = safe_float(vals[1], 0.0)
-            nominal_percent = safe_float(vals[2], 0.0)
+        nominal = getattr(self.master_app, "opc_nominal_percent", {})
+        for row in self._current_rows():
+            element = row.get("element", "")
+            cflibs_percent = safe_float(row.get("number_percent", 0.0), 0.0)
+            nominal_percent = safe_float(nominal.get(element, 0.0), 0.0)
             if 0.0 < cflibs_percent <= 100.0 and 0.0 < nominal_percent <= 100.0:
                 factors[element] = nominal_percent / cflibs_percent
-        self.factors = factors
-        self.refresh()
-        self.master_app.status(f"OPC correction factors computed for {len(factors)} element(s).")
+        return factors
+
+    def compute(self):
+        try:
+            self._store_nominal_values()
+        except ValueError as e:
+            self.factors = {}
+            self._show_nominal_error(str(e))
+            return False
+        self.factors = self._compute_factors_from_entries()
+        self.master_app.status(f"OPC correction factors computed for {len(self.factors)} element(s).")
+        return True
 
     def _source_spectrum_filename(self):
         spectra = getattr(self.master_app, "spectra", []) or []
@@ -15564,8 +15615,8 @@ class CFLibsOPCWindow(tk.Toplevel):
         return getattr(spectra[0], "filename", "") or getattr(spectra[0], "name", "")
 
     def _calibration_rows(self):
-        if not self.factors:
-            self.compute()
+        if not self.compute():
+            return []
         rows = []
         cflibs_percent = {
             str(row.get("element", "")).strip().capitalize(): safe_float(row.get("number_percent", 0.0), 0.0)
