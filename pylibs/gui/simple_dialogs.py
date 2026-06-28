@@ -10,7 +10,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from pylibs.gui.helpers import _showerror, _showinfo
-from pylibs.utils.constants import APP_AUTHOR, APP_COPYRIGHT, APP_DESCRIPTION, APP_HISTORY, APP_NAME, APP_VERSION
+from pylibs.utils.constants import APP_NAME, APP_VERSION
 from pylibs.utils.paths import manual_path
 
 
@@ -118,20 +118,27 @@ def show_about(master):
     win.resizable(False, False)
     win.transient(master)
 
-    body = ttk.Frame(win, padding=(28, 24))
+    body = ttk.Frame(win, padding=(28, 26))
     body.pack(fill="both", expand=True)
 
-    ttk.Label(body, text=APP_NAME, font=("TkDefaultFont", 18, "bold"), anchor="center").pack(fill="x", pady=(0, 10))
-    ttk.Label(body, text=APP_DESCRIPTION, font=("TkDefaultFont", 11, "bold"), anchor="center").pack(fill="x")
-    ttk.Label(body, text=f"Version {APP_VERSION}", anchor="center").pack(fill="x", pady=(8, 16))
-    ttk.Label(body, text=APP_AUTHOR, anchor="center", justify="center", wraplength=420).pack(fill="x", pady=(0, 12))
-    ttk.Label(body, text=APP_HISTORY, anchor="center", justify="center", wraplength=420).pack(fill="x", pady=(0, 16))
-    ttk.Label(body, text=APP_COPYRIGHT, anchor="center").pack(fill="x")
+    text_font = ("TkDefaultFont", 11)
+    ttk.Label(body, text=APP_NAME, font=text_font, anchor="center").pack(fill="x", pady=(0, 8))
+    ttk.Label(body, text="Python Laser-Induced Breakdown Spectroscopy", font=text_font, anchor="center").pack(fill="x", pady=(0, 10))
+    ttk.Label(body, text=f"Version {APP_VERSION}", font=text_font, anchor="center").pack(fill="x", pady=(0, 12))
+    ttk.Label(body, text="Originally developed as LIBS++ by Vincenzo Palleschi and coworkers", font=text_font, anchor="center", justify="center", wraplength=520).pack(fill="x", pady=(0, 12))
+    ttk.Label(
+        body,
+        text="© 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution.",
+        font=text_font,
+        anchor="center",
+        wraplength=560,
+    ).pack(fill="x")
     ttk.Button(body, text="OK", command=win.destroy).pack(pady=(22, 0))
 
     win.update_idletasks()
     x = master.winfo_rootx() + max(0, (master.winfo_width() - win.winfo_width()) // 2)
     y = master.winfo_rooty() + max(0, (master.winfo_height() - win.winfo_height()) // 2)
+    win.minsize(win.winfo_reqwidth(), win.winfo_reqheight())
     win.geometry(f"+{x}+{y}")
     win.lift(master)
     win.focus_set()
