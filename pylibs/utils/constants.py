@@ -1,7 +1,7 @@
 """Stable application constants for pyLIBS."""
 
 APP_NAME = "pyLIBS"
-APP_VERSION = "9.0 Beta"
+APP_VERSION = "1.0.0"
 APP_DESCRIPTION = "Advanced LIBS Spectrum Analysis"
 APP_AUTHOR = (
     "Developed at the Applied Laser Spectroscopy "
