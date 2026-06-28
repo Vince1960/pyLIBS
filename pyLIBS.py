@@ -13693,17 +13693,8 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.auto_excluded_elements = set()
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Button(top, text="Compute Plot", command=self.compute).pack(side="left")
-        ttk.Label(top, text="Temperature mode").pack(side="left", padx=(12, 3))
+        ttk.Button(top, text="CF-LIBS", command=self.master_app.show_cf_libs).pack(side="left", padx=(12, 3))
         self.mode_var = tk.StringVar(value="Mean temperature")
-        self.mode_box = ttk.Combobox(
-            top,
-            textvariable=self.mode_var,
-            values=("Mean temperature", "Single element temperature"),
-            state="readonly",
-            width=27,
-        )
-        self.mode_box.pack(side="left")
-        self.mode_box.bind("<<ComboboxSelected>>", self.on_mode_changed)
         ttk.Label(top, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
         self.initial_kt_var = tk.StringVar(value="1")
         ttk.Entry(top, textvariable=self.initial_kt_var, width=8).pack(side="left")
