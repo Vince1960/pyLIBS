@@ -1,26 +1,32 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Python software for Laser-Induced Breakdown Spectroscopy (LIBS)
-data processing, plasma diagnostics and quantitative analysis.
+pyLIBS Python prototype v8.5 consolidated
 
-Main features
--------------
-- Spectrum visualization and processing
-- Spectral line identification using the LIBS database
-- Voigt profile fitting
-- Template management
-- Plasma diagnostics
-- Self-absorption correction
-- Calibration-Free LIBS (CF-LIBS)
-- Instrument response correction
-- Spectrum import/export and reporting
+Versione consolidata v8.3 del port Python del vecchio LIBS++ Borland C++Builder, rinominato pyLIBS.
 
-Copyright (C) 2026
-ICCOM-CNR, Pisa, Italy
+Questa v6 consolida e rende operative diverse parti ricostruite:
+- supporto nativo al database SQLite LIBS.db
+- lettura tabelle Datalibs/Daticerti e tabelle elemento-specifiche
+- Auto Element Identification, ricostruito da Unit77
+- funzioni batch/statistiche ricostruite da Unit35/36
+- annotazioni sul motore di fit multi-gaussiano e Savitzky-Golay da SDIMain
 
-Author:
-Vincenzo Palleschi
+Include ora:
+- Main spectrum viewer
+- apertura/salvataggio/import multiplo spettri ASCII
+- gestione più spettri attivi, stile Unit13
+- shift verticale, scaling, average, max, min
+- Options, stile Unit1
+- Instrument Response, stile Unit10/12
+- Template Manager, stile Unit6
+- Line Identification, stile Unit5
+- Element Locator / Auto Assign, stile Unit2
+- Vertical Shift semplice, stile Unit4
+- finestre operative per fit multi-gaussiano, Ne da Hα, Saha-Boltzmann e scheletro CF-LIBS
+
+Dipendenze consigliate:
+    pip install matplotlib numpy scipy
 """
 
 from __future__ import annotations
@@ -135,6 +141,37 @@ except Exception:
 
 
 
+
+
+# ---------------------------------------------------------------------------
+# v8 checkpoint, 2026-06-18
+# ---------------------------------------------------------------------------
+# Questa versione incorpora il reverse engineering completato oggi su:
+#   - Unit6 / showboltz(): costruzione diagrammi Boltzmann per specie/ione.
+#   - Unit9 / zZ(): funzioni di partizione Payling da partfunctPay.
+#   - Unit23: fattori SAC calcolati e mostrati nella diagnostica SAC.
+#   - Unit27: iterazione T/Ne con convergenza 1%.
+#   - Unit31: OPC/standard correction con file .STD.
+#   - SDIMain.cpp.~194~ / calcola(): temperatura media pesata sulle righe,
+#     ricalcolo q alla temperatura scelta, Saha, concentrazioni relative.
+#
+# La GUI resta deliberatamente compatta, ma il motore CF-LIBS sotto è ora
+# molto più vicino al comportamento originale Borland LIBS++.
+# ---------------------------------------------------------------------------
+# v8 additions:
+#   - nome applicazione aggiornato a pyLIBS.
+#   - finestra SAC diagnostica da Unit21/23: calcola SAC = ssa^0.46 e Wl0 = Wl*ssa^0.54.
+#   - finestra Standard Correction / OPC da Unit31 con caricamento/salvataggio .STD.
+# v8.3 additions:
+#   - lettura/scrittura pyLIBS.ini, compatibile con il vecchio libs++.ini.
+#   - finestra Options ridisegnata in stile originale, richiamabile da Edit > Options.
+# v8.15 additions:
+#   - salvataggio/rilettura in pyLIBS.ini di GridX, GridY, LogX, LogY, BackgroundColor.
+#   - salvataggio/rilettura di InDir per riaprire i dialog dalla directory dell'ultimo spettro.
+# v8.16 additions:
+#   - fit Voigt delle righe marcate nella finestra visibile; risultati salvati nel template.
+# ---------------------------------------------------------------------------
+
 @dataclass
 class AppOptions:
     username: str = ""
@@ -185,7 +222,7 @@ class AppOptions:
 
 
 # ---------------------------------------------------------------------------
-# pyLIBS resource / ini / splash helpers
+# pyLIBS v8.3 resource / ini / splash helpers
 # ---------------------------------------------------------------------------
 
 def remembered_initial_dir(options=None) -> str:
@@ -241,7 +278,7 @@ def show_startup_splash(root, seconds: float = SPLASH_SECONDS):
 
 
 # ---------------------------------------------------------------------------
-# pyLIBS Retro GUI helpers
+# pyLIBS v8.3 Retro GUI helpers
 # ---------------------------------------------------------------------------
 
 RETRO_BG = "#d4d0c8"
@@ -517,6 +554,7 @@ def fit_toplevel_to_content(win, min_width=0, min_height=0, max_width_fraction=0
 class OptionsWindow(tk.Toplevel):
     """pyLIBS Options dialog, dynamically initialized from pyLIBS.ini.
 
+    The layout intentionally follows the original LIBS++/C++Builder dialog.
     """
 
     def __init__(self, master: "MainWindow"):
@@ -1115,7 +1153,7 @@ class ElementLocatorWindow(tk.Toplevel):
 
 
 class TraceLinesWindow(tk.Toplevel):
-    """Analyse > Trace Lines
+    """Analyse > Trace Lines, reconstructed from LIBS++ manual section 3.5.2.
 
     The command traces the strongest expected lines for the selected element and
     ionization stage(s) inside the wavelength interval displayed in the main
@@ -1166,7 +1204,8 @@ class TraceLinesWindow(tk.Toplevel):
             return
         mode = self.mode_var.get()
         # Use exactly the wavelength interval that is visible in the main plot
-        # at the moment the user presses OK.
+        # at the moment the user presses OK.  This reproduces the LIBS++ Trace
+        # behaviour and avoids searching the full spectrum after a zoom.
         view_xlim, view_ylim = self.master_app.current_plot_view()
         lo, hi = view_xlim
         maxn = safe_int(self.max_var.get(), 20)
@@ -1194,7 +1233,7 @@ class TraceLinesWindow(tk.Toplevel):
         except Exception as e:
             _showerror(self, "Trace Lines", str(e))
             return
-        # Repeated Trace calls accumulate
+        # Repeated Trace calls accumulate, as in LIBS++.
         existing = getattr(self.master_app, "trace_markers", [])
         for l in lines:
             if not any(abs(t.wavelen-l.wavelen) < 1e-6 and t.specie == l.specie and t.ion == l.ion for t in existing):
@@ -1582,6 +1621,7 @@ class VerticalShiftWindow(tk.Toplevel):
 
 
 class SpectrumShiftWindow(tk.Toplevel):
+    """Historical LIBS++ Utilities > Shift wavelength dialog."""
     def __init__(self, master: "MainWindow"):
         super().__init__(master)
         self.master_app = master
@@ -1695,6 +1735,7 @@ class SpectrumShiftWindow(tk.Toplevel):
 
 
 class SpectrumOffsetWindow(SpectrumShiftWindow):
+    """Historical LIBS++ Utilities > Offset intensity dialog."""
     def __init__(self, master: "MainWindow"):
         tk.Toplevel.__init__(self, master)
         self.master_app = master
@@ -1859,7 +1900,8 @@ def linear_fit(x: list[float], y: list[float]):
 def pseudo_voigt(x, amp, center, wg, wl, baseline, slope, eta):
     """Simple pseudo-Voigt used for H-alpha checkpoint.
 
-    wg and wl are FWHM-like widths. 
+    wg and wl are FWHM-like widths. This is not yet the exact original voigt()
+    routine, but preserves the LIBS++ parameters: center, Gaussian width, Lorentzian width.
     """
     if np is None:
         raise RuntimeError("numpy not available")
@@ -1896,6 +1938,7 @@ def halpha_lorentzian_model(x, *params):
 
 
 def libspp_halpha_ne(width_angstrom, kt_ev):
+    """Historical LIBS++ H-alpha Ne iteration from SDIMain.cpp Ne()."""
     d = float(width_angstrom)
     kt = float(kt_ev)
     if d <= 0.0:
@@ -1986,7 +2029,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             amp = max(_nearest_y(sp.x, sp.y, t.wavelen) - baseline, 1.0)
             center0 = abs(t.fitwavelen) if t.fitwavelen else t.wavelen
             p0.extend([amp, center0, abs(t.wg) if t.wg else sigma0])
-            # fixed parameters are represented as negative.
+            # fixed parameters are represented as negative in LIBS++ templates.
             if t.fitwavelen < 0:
                 bounds_lo.extend([0, center0 - 1e-9, 1e-6])
                 bounds_hi.extend([np.inf, center0 + 1e-9, max(10.0, sigma0*20)])
@@ -2003,7 +2046,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             amp, cen, sig = popt[2+3*idx], popt[3+3*idx], abs(popt[4+3*idx])
             t.fitwavelen = float(cen)
             t.inte = float(amp * sig * math.sqrt(math.pi))
-            t.wg = float(2.0 * sig)  # H-alpha code uses wgau = 2*a[3]
+            t.wg = float(2.0 * sig)  # LIBS++ H-alpha code uses wgau = 2*a[3]
             self.tree.insert("", "end", values=(idx+1, f"{cen:.5f}", f"{amp:.5g}", f"{sig:.5g}", f"{t.wg:.5g}", "OK"))
         self.master_app.fit_overlay = (xs.tolist(), multigaussian_model(xs, *popt).tolist())
         self.master_app.redraw()
@@ -2151,7 +2194,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
 
 class ResidualsWindow(tk.Toplevel):
-    """Compact residual plot for Manual Fit."""
+    """Compact LIBS++-style residual plot for Manual Fit."""
 
     def __init__(self, master, x_values, residuals):
         super().__init__(master)
@@ -2341,7 +2384,7 @@ class NeHalphaWindow(tk.Toplevel):
                 "temperature_k": T,
                 "ne": None,
                 "alpha": alfa,
-                "formula": "H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
+                "formula": "LIBS++ H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
                 "error": ne_error,
             }
             status = "H-alpha fit complete; Ne calculation failed"
