@@ -160,8 +160,11 @@ class StarkDbEditor(tk.Tk):
         self.status_var = tk.StringVar(value="Open a Stark.db file.")
         ttk.Label(self, textvariable=self.status_var, anchor="w").pack(fill="x", padx=8, pady=(0, 4))
 
+        container = ttk.Frame(self)
+        container.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
         columns = ["rowid"] + COLUMNS
-        self.tree = ttk.Treeview(self, columns=columns, show="headings")
+        self.tree = ttk.Treeview(container, columns=columns, show="headings")
         widths = {
             "rowid": 70,
             "Element": 80,
@@ -177,9 +180,6 @@ class StarkDbEditor(tk.Tk):
         for col in columns:
             self.tree.heading(col, text=col)
             self.tree.column(col, width=widths.get(col, 100), anchor="center" if col != "note" else "w")
-
-        container = ttk.Frame(self)
-        container.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
         yscroll = ttk.Scrollbar(container, orient="vertical")
         xscroll = ttk.Scrollbar(container, orient="horizontal")
