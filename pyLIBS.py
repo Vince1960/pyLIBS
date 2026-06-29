@@ -1,32 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pyLIBS Python prototype v8.5 consolidated
+pyLIBS Python ver. 1.0.0
+Originally developed as LIBS++ by Vincenzo Palleschi and coworkers,
+© 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution
 
-Versione consolidata v8.3 del port Python del vecchio LIBS++ Borland C++Builder, rinominato pyLIBS.
-
-Questa v6 consolida e rende operative diverse parti ricostruite:
-- supporto nativo al database SQLite LIBS.db
-- lettura tabelle Datalibs/Daticerti e tabelle elemento-specifiche
-- Auto Element Identification, ricostruito da Unit77
-- funzioni batch/statistiche ricostruite da Unit35/36
-- annotazioni sul motore di fit multi-gaussiano e Savitzky-Golay da SDIMain
-
-Include ora:
-- Main spectrum viewer
-- apertura/salvataggio/import multiplo spettri ASCII
-- gestione più spettri attivi, stile Unit13
-- shift verticale, scaling, average, max, min
-- Options, stile Unit1
-- Instrument Response, stile Unit10/12
-- Template Manager, stile Unit6
-- Line Identification, stile Unit5
-- Element Locator / Auto Assign, stile Unit2
-- Vertical Shift semplice, stile Unit4
-- finestre operative per fit multi-gaussiano, Ne da Hα, Saha-Boltzmann e scheletro CF-LIBS
-
-Dipendenze consigliate:
-    pip install matplotlib numpy scipy
 """
 
 from __future__ import annotations
@@ -139,38 +117,6 @@ except Exception:
     Figure = None
     FigureCanvasTkAgg = None
 
-
-
-
-
-# ---------------------------------------------------------------------------
-# v8 checkpoint, 2026-06-18
-# ---------------------------------------------------------------------------
-# Questa versione incorpora il reverse engineering completato oggi su:
-#   - Unit6 / showboltz(): costruzione diagrammi Boltzmann per specie/ione.
-#   - Unit9 / zZ(): funzioni di partizione Payling da partfunctPay.
-#   - Unit23: fattori SAC calcolati e mostrati nella diagnostica SAC.
-#   - Unit27: iterazione T/Ne con convergenza 1%.
-#   - Unit31: OPC/standard correction con file .STD.
-#   - SDIMain.cpp.~194~ / calcola(): temperatura media pesata sulle righe,
-#     ricalcolo q alla temperatura scelta, Saha, concentrazioni relative.
-#
-# La GUI resta deliberatamente compatta, ma il motore CF-LIBS sotto è ora
-# molto più vicino al comportamento originale Borland LIBS++.
-# ---------------------------------------------------------------------------
-# v8 additions:
-#   - nome applicazione aggiornato a pyLIBS.
-#   - finestra SAC diagnostica da Unit21/23: calcola SAC = ssa^0.46 e Wl0 = Wl*ssa^0.54.
-#   - finestra Standard Correction / OPC da Unit31 con caricamento/salvataggio .STD.
-# v8.3 additions:
-#   - lettura/scrittura pyLIBS.ini, compatibile con il vecchio libs++.ini.
-#   - finestra Options ridisegnata in stile originale, richiamabile da Edit > Options.
-# v8.15 additions:
-#   - salvataggio/rilettura in pyLIBS.ini di GridX, GridY, LogX, LogY, BackgroundColor.
-#   - salvataggio/rilettura di InDir per riaprire i dialog dalla directory dell'ultimo spettro.
-# v8.16 additions:
-#   - fit Voigt delle righe marcate nella finestra visibile; risultati salvati nel template.
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AppOptions:
@@ -553,8 +499,6 @@ def fit_toplevel_to_content(win, min_width=0, min_height=0, max_width_fraction=0
 
 class OptionsWindow(tk.Toplevel):
     """pyLIBS Options dialog, dynamically initialized from pyLIBS.ini.
-
-    The layout intentionally follows the original LIBS++/C++Builder dialog.
     """
 
     def __init__(self, master: "MainWindow"):
@@ -1153,7 +1097,7 @@ class ElementLocatorWindow(tk.Toplevel):
 
 
 class TraceLinesWindow(tk.Toplevel):
-    """Analyse > Trace Lines, reconstructed from LIBS++ manual section 3.5.2.
+    """Analyse > Trace Lines:
 
     The command traces the strongest expected lines for the selected element and
     ionization stage(s) inside the wavelength interval displayed in the main
@@ -1204,8 +1148,8 @@ class TraceLinesWindow(tk.Toplevel):
             return
         mode = self.mode_var.get()
         # Use exactly the wavelength interval that is visible in the main plot
-        # at the moment the user presses OK.  This reproduces the LIBS++ Trace
-        # behaviour and avoids searching the full spectrum after a zoom.
+        # at the moment the user presses OK.  This 
+        # avoids searching the full spectrum after a zoom.
         view_xlim, view_ylim = self.master_app.current_plot_view()
         lo, hi = view_xlim
         maxn = safe_int(self.max_var.get(), 20)
@@ -1233,7 +1177,7 @@ class TraceLinesWindow(tk.Toplevel):
         except Exception as e:
             _showerror(self, "Trace Lines", str(e))
             return
-        # Repeated Trace calls accumulate, as in LIBS++.
+        # Repeated Trace calls accumulate
         existing = getattr(self.master_app, "trace_markers", [])
         for l in lines:
             if not any(abs(t.wavelen-l.wavelen) < 1e-6 and t.specie == l.specie and t.ion == l.ion for t in existing):
@@ -1621,7 +1565,7 @@ class VerticalShiftWindow(tk.Toplevel):
 
 
 class SpectrumShiftWindow(tk.Toplevel):
-    """Historical LIBS++ Utilities > Shift wavelength dialog."""
+    """Shift wavelength dialog."""
     def __init__(self, master: "MainWindow"):
         super().__init__(master)
         self.master_app = master
@@ -1735,7 +1679,7 @@ class SpectrumShiftWindow(tk.Toplevel):
 
 
 class SpectrumOffsetWindow(SpectrumShiftWindow):
-    """Historical LIBS++ Utilities > Offset intensity dialog."""
+    """ Offset intensity dialog."""
     def __init__(self, master: "MainWindow"):
         tk.Toplevel.__init__(self, master)
         self.master_app = master
@@ -1900,8 +1844,7 @@ def linear_fit(x: list[float], y: list[float]):
 def pseudo_voigt(x, amp, center, wg, wl, baseline, slope, eta):
     """Simple pseudo-Voigt used for H-alpha checkpoint.
 
-    wg and wl are FWHM-like widths. This is not yet the exact original voigt()
-    routine, but preserves the LIBS++ parameters: center, Gaussian width, Lorentzian width.
+    wg and wl are FWHM-like widths. This preserves the parameters: center, Gaussian width, Lorentzian width.
     """
     if np is None:
         raise RuntimeError("numpy not available")
@@ -1938,7 +1881,7 @@ def halpha_lorentzian_model(x, *params):
 
 
 def libspp_halpha_ne(width_angstrom, kt_ev):
-    """Historical LIBS++ H-alpha Ne iteration from SDIMain.cpp Ne()."""
+    """H-alpha Ne iteration from SDIMain.cpp Ne()."""
     d = float(width_angstrom)
     kt = float(kt_ev)
     if d <= 0.0:
@@ -2029,7 +1972,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             amp = max(_nearest_y(sp.x, sp.y, t.wavelen) - baseline, 1.0)
             center0 = abs(t.fitwavelen) if t.fitwavelen else t.wavelen
             p0.extend([amp, center0, abs(t.wg) if t.wg else sigma0])
-            # fixed parameters are represented as negative in LIBS++ templates.
+            # fixed parameters are represented as negative in templates.
             if t.fitwavelen < 0:
                 bounds_lo.extend([0, center0 - 1e-9, 1e-6])
                 bounds_hi.extend([np.inf, center0 + 1e-9, max(10.0, sigma0*20)])
@@ -2046,7 +1989,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             amp, cen, sig = popt[2+3*idx], popt[3+3*idx], abs(popt[4+3*idx])
             t.fitwavelen = float(cen)
             t.inte = float(amp * sig * math.sqrt(math.pi))
-            t.wg = float(2.0 * sig)  # LIBS++ H-alpha code uses wgau = 2*a[3]
+            t.wg = float(2.0 * sig)  # H-alpha code uses wgau = 2*a[3]
             self.tree.insert("", "end", values=(idx+1, f"{cen:.5f}", f"{amp:.5g}", f"{sig:.5g}", f"{t.wg:.5g}", "OK"))
         self.master_app.fit_overlay = (xs.tolist(), multigaussian_model(xs, *popt).tolist())
         self.master_app.redraw()
@@ -2229,7 +2172,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
 
 class ResidualsWindow(tk.Toplevel):
-    """Compact LIBS++-style residual plot for Manual Fit."""
+    """Compact residual plot for Manual Fit."""
 
     def __init__(self, master, x_values, residuals):
         super().__init__(master)
@@ -2419,13 +2362,13 @@ class NeHalphaWindow(tk.Toplevel):
                 "temperature_k": T,
                 "ne": None,
                 "alpha": alfa,
-                "formula": "LIBS++ H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
+                "formula": "H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
                 "error": ne_error,
             }
             status = "H-alpha fit complete; Ne calculation failed"
         else:
             lines.extend([
-                f"LIBS++ alpha correction: {alfa:.6g}",
+                f"Alpha correction: {alfa:.6g}",
                 f"Ne: {ne_value:.6e} cm^-3",
                 f"Ne / 1e17: {ne_value / 1.0e17:.6g}",
             ])
@@ -2443,7 +2386,7 @@ class NeHalphaWindow(tk.Toplevel):
                 "temperature_k": T,
                 "ne": ne_value,
                 "alpha": alfa,
-                "formula": "LIBS++ H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
+                "formula": "H-alpha Stark broadening: Ne = 8.02e12 * (FWHM/alpha)^1.5",
                 "error": None,
             }
             status = f"H-alpha fit complete; Ne={ne_value:.3e} cm^-3"
@@ -2924,7 +2867,7 @@ def _response_factor(app: "MainWindow", wavelength: float) -> float:
 def libspp_boltzmann_groups_with_skips(
     app: "MainWindow",
 ):
-    """Build LIBS++-style Boltzmann groups from current template lines.
+    """Build Boltzmann groups from current template lines.
 
     Reconstructed from Unit6/showboltz(), Unit9 and SDIMain/calcola():
         x = Ek * 1.23985e-4  # cm^-1 -> eV
@@ -3101,7 +3044,7 @@ def libspp_fit_boltzmann(app: "MainWindow", groups):
             z = app.libs_db.partition_function(specie, ion, kt * 11604.45)
         except Exception:
             z = 1.0
-        # q is the intercept of ln(I/Ag) = q - Ek/kT in LIBS++ notation.
+        # q is the intercept of ln(I/Ag) = q - Ek/kT
         results[key] = {"species": specie, "ion": ion, "nlines": len(active_pts), "kt": kt, "q": intercept, "z": z, "points": active_pts}
     return results
 
@@ -4000,7 +3943,7 @@ class CFLibsOPCWindow(tk.Toplevel):
             f"# source spectrum: {self._source_spectrum_filename() or 'N/A'}",
             f"# temperature_eV: {self.owner.last_kt:.8g}",
             f"# electron_density_e_cm3: {self.owner.last_ne:.8g}",
-            "# formula: LIBS++ OPC response from fixed-temperature Boltzmann line shifted by log(nominal_number_percent / cflibs_number_percent)",
+            "# formula: OPC response from fixed-temperature Boltzmann line shifted by log(nominal_number_percent / cflibs_number_percent)",
             "# columns: wavelength correction_factor element species",
         ]
         for wavelength, factor, element, species in calibration_rows:
@@ -5442,7 +5385,7 @@ class MainWindow(tk.Tk):
         self.element_markers: list[AtomicLine]=[]
         self.trace_markers: list[AtomicLine]=[]
         self.trace_window=None
-        # View menu state (LIBS++ compatible): independent X/Y grids,
+        # View menu state: independent X/Y grids,
         # independent logarithmic axes and spectrum-area background colour.
         self.view_grid_x = bool(getattr(self.options, "view_grid_x", True))
         self.view_grid_y = bool(getattr(self.options, "view_grid_y", True))
@@ -5508,7 +5451,7 @@ class MainWindow(tk.Tk):
         self.fig=Figure(figsize=(8,5),dpi=100); self.ax=self.fig.add_subplot(111)
         self.canvas=FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        # LIBS++-compatible navigation state: left drag zoom, right drag pan.
+        # Navigation state: left drag zoom, right drag pan.
         self._nav_press = None
         self._nav_dragged = False
         self._xscroll_updating = False
@@ -5784,7 +5727,7 @@ class MainWindow(tk.Tk):
         ymin,ymax=self.ax.get_ylim()
         h=ymax-ymin if ymax>ymin else 1
         for line in (self.template_lines if self.spectra else []):
-            # LIBS++ convention: unassigned marked peaks are blue; assigned
+            # Convention: unassigned marked peaks are blue; assigned
             # peaks with complete transition data are yellow; assigned peaks
             # without Aki/levels/statistical weights are light blue.
             has_transition_data = bool(line.aki or line.ek or line.gk or line.gi)
@@ -5794,7 +5737,7 @@ class MainWindow(tk.Tk):
                 color = "gold" if has_transition_data else "lightskyblue"
             else:
                 color = "blue"
-            # Manual/identified LIBS++ marker: from baseline y=0 to the
+            # Manual/identified marker: from baseline y=0 to the
             # intensity of the active spectrum at the marked wavelength.
             ytop = self._active_spectrum_y_at(line.wavelen)
             self.ax.vlines(line.wavelen, 0.0, ytop, linestyles="solid", linewidth=0.9, colors=color)
@@ -6044,7 +5987,7 @@ def _add_menu_checkbutton(self, menu, shortcut_items, label, command, variable=N
         shortcut_items.append({"label": label, "accelerator": accelerator, "event": event, "command": command})
 
 def build_retro_menu(self):
-    """Build the original-like LIBS++ menu tree."""
+    """Build the menu tree."""
     menu = tk.Menu(self)
     self.config(menu=menu)
     shortcut_items = []
@@ -6521,7 +6464,7 @@ def _merge_template_line(self, new_line, tolerance=None, overwrite_fit=False):
     return old, False
 
 def add_template_peak_at(self, wavelength, intensity=None, refresh=True):
-    """Manual peak marking as in LIBS++: Shift+left click adds a template row."""
+    """Manual peak marking: Shift+left click adds a template row."""
     x, y, idx = self._nearest_spectrum_point(wavelength)
     if intensity is None or not intensity:
         intensity = y
@@ -6534,7 +6477,7 @@ def add_template_peak_at(self, wavelength, intensity=None, refresh=True):
     self.status(("Marked peak" if added else "Updated marked peak") + f": {x:.4f}")
 
 def delete_template_peak_at(self, wavelength, refresh=True):
-    """Delete nearest manually marked/template line, as LIBS++ Shift+right click."""
+    """Delete nearest manually marked/template line, as Shift+right click."""
     if not self.template_lines:
         return
     lo, hi = self.current_xlim()
@@ -6550,7 +6493,7 @@ def delete_template_peak_at(self, wavelength, refresh=True):
     self.status(f"Deleted marked peak: {removed.wavelen:.4f}")
 
 def _click(self, event):
-    """Mouse behavior reconstructed from LIBS++ manual.
+    """Mouse behavior:
 
     Shift+left: mark peak and append a template row.
     Shift+right: delete the nearest marked/template line.
@@ -6581,7 +6524,7 @@ def _click(self, event):
         self.line_window.range_var.set(str(self.options.search_range))
         self.line_window.search()
         return
-    # Store press point for LIBS++ zoom/pan.  Release decides whether it was
+    # Store press point for zoom/pan.  Release decides whether it was
     # a navigation drag or just a click.
     try:
         self._nav_press = (event.button, float(event.xdata), float(event.ydata), int(event.x), int(event.y), tuple(self.ax.get_xlim()), tuple(self.ax.get_ylim()))
@@ -6856,7 +6799,7 @@ def _release(self, event):
     dxdata = event.xdata - x0
     dydata = event.ydata - y0
     if button == 1:
-        # Old LIBS++ convention: drag left-high -> right-low to zoom in;
+        # Old convention: drag left-high -> right-low to zoom in;
         # reverse direction restores the full spectrum.
         if dxdata > 0 and dydata < 0:
             self.clear_fit_artists()
