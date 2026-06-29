@@ -2113,8 +2113,12 @@ class MultiGaussianFitWindow(tk.Toplevel):
         slope = 0.0
         # Estimate a sensible initial width from the x sampling and Options.
         dx = float(np.median(np.diff(np.sort(xs)))) if len(xs) > 2 else width/100.0
-        sigma0 = max(abs(safe_float(self.sigma_var.get(), 0.5)), abs(dx), 1e-6)
-        gamma0 = max(abs(getattr(self.master_app.options, "fixed_wl", 0.5) or 0.5) / 2.0, abs(dx), 1e-6)
+        fixed_wg_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wg", 0.5), 0.5))
+        fixed_wl_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wl", 0.5), 0.5))
+        min_sigma0 = max(fixed_wg_fwhm / 2.354820045, 1e-6)
+        min_gamma0 = max(fixed_wl_fwhm / 2.0, 1e-6)
+        sigma0 = max(abs(safe_float(self.sigma_var.get(), 0.5)), min_sigma0, abs(dx), 1e-6)
+        gamma0 = max(min_gamma0, abs(dx), 1e-6)
         p0 = [baseline, slope]
         bounds_lo = [-np.inf, -np.inf]
         bounds_hi = [np.inf, np.inf]
@@ -2126,6 +2130,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
             area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
             sig0 = abs(t.wg) / 2.354820045 if getattr(t, "wg", 0.0) else sigma0
             gam0 = abs(t.wl) / 2.0 if getattr(t, "wl", 0.0) else gamma0
+            # Keep initial FWHM estimates at least as large as the Options
+            # fixed widths, so the starting point remains feasible and stable.
+            sig0 = max(sig0, min_sigma0)
+            gam0 = max(gam0, min_gamma0)
             p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
