@@ -11427,7 +11427,7 @@ cYEAAAAASUVORK5CYII=
 # Questa versione incorpora il reverse engineering completato oggi su:
 #   - Unit6 / showboltz(): costruzione diagrammi Boltzmann per specie/ione.
 #   - Unit9 / zZ(): funzioni di partizione Payling da partfunctPay.
-#   - Unit23: fattori SAC applicati come Icorr = I/(efficiency*SAC).
+#   - Unit23: fattori SAC calcolati e mostrati nella diagnostica SAC.
 #   - Unit27: iterazione T/Ne con convergenza 1%.
 #   - Unit31: OPC/standard correction con file .STD.
 #   - SDIMain.cpp.~194~ / calcola(): temperatura media pesata sulle righe,
@@ -11438,8 +11438,7 @@ cYEAAAAASUVORK5CYII=
 # ---------------------------------------------------------------------------
 # v8 additions:
 #   - nome applicazione aggiornato a pyLIBS.
-#   - finestra SAC operativa da Unit21/23: calcola SAC = ssa^0.46 e Wl0 = Wl*ssa^0.54.
-#   - i fattori SAC sono ora conservati in MainWindow.sac_factors e usati da Boltzmann/CF-LIBS.
+#   - finestra SAC diagnostica da Unit21/23: calcola SAC = ssa^0.46 e Wl0 = Wl*ssa^0.54.
 #   - finestra Standard Correction / OPC da Unit31 con caricamento/salvataggio .STD.
 # v8.3 additions:
 #   - lettura/scrittura pyLIBS.ini, compatibile con il vecchio libs++.ini.
@@ -13754,7 +13753,6 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 self.master_app,
                 ne,
                 kt,
-                getattr(self.master_app, "sac_factors", {}),
             )
             fits = libspp_fit_saha_boltzmann(self.master_app, groups)
             new_kt = libspp_weighted_temperature(fits, self.master_app.options.kt_low, self.master_app.options.kt_high)
@@ -13768,7 +13766,6 @@ class SahaBoltzmannWindow(tk.Toplevel):
                     self.master_app,
                     ne,
                     kt,
-                    getattr(self.master_app, "sac_factors", {}),
                 )
                 fits = libspp_fit_saha_boltzmann(self.master_app, groups)
                 break
@@ -14119,18 +14116,16 @@ def _response_factor(app: "MainWindow", wavelength: float) -> float:
 
 def libspp_boltzmann_groups_with_skips(
     app: "MainWindow",
-    sac_factors: Optional[dict[int, float]] = None,
 ):
     """Build LIBS++-style Boltzmann groups from current template lines.
 
     Reconstructed from Unit6/showboltz(), Unit9 and SDIMain/calcola():
         x = Ek * 1.23985e-4  # cm^-1 -> eV
         y = ln( Icorr / |Aki*gk| )
-        Icorr = I / (instrument_response * SAC)
+        Icorr = I / instrument_response
 
     Returns a dictionary keyed by (specie, ion) with point dictionaries.
     """
-    sac_factors = sac_factors or {}
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
         if not t.specie or not t.ion or not t.aki or not t.gk or not t.ek:
@@ -14159,9 +14154,8 @@ def libspp_boltzmann_groups_with_skips(
 
 def libspp_boltzmann_groups(
     app: "MainWindow",
-    sac_factors: Optional[dict[int, float]] = None,
 ):
-    groups, _skipped = libspp_boltzmann_groups_with_skips(app, sac_factors)
+    groups, _skipped = libspp_boltzmann_groups_with_skips(app)
     return groups
 
 
@@ -14169,7 +14163,6 @@ def libspp_saha_boltzmann_groups(
     app: "MainWindow",
     ne: float,
     kt: float,
-    sac_factors: Optional[dict[int, float]] = None,
 ):
     """Build Unit27 Saha-Boltzmann plot points grouped by element.
 
@@ -14180,7 +14173,6 @@ def libspp_saha_boltzmann_groups(
         x(II) = Eion + Ek
         y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
     """
-    sac_factors = sac_factors or {}
     groups: dict[str, list[dict]] = defaultdict(list)
     skipped = 0
     metadata_cache: dict[str, dict] = {}
@@ -14457,7 +14449,7 @@ def _experimental_lorentzian_width(line: TemplateLine, instrumental_width: float
 
 
 def compute_sac_for_template_lines(app: "MainWindow", kt: float, ne: float, path_length: float, total_density: float, element_percent: dict[str, float]):
-    """Reconstructed operational SAC calculation from Unit21.
+    """Diagnostic SAC factor calculation from Unit21.
 
     Original Unit21 computes:
         knu0 = 9E-2*Nl*|Aki|*1.5E-8*wave^4*gk/gi /(pi^1.5*3.6E18) * (1/sl2)/lor * lu
@@ -14524,11 +14516,11 @@ def compute_sac_for_template_lines(app: "MainWindow", kt: float, ne: float, path
 
 
 class SACWindow(tk.Toplevel):
-    """Unit21/23 SAC factors window."""
+    """Diagnostic SAC factors window."""
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
-        self.title("SAC factors - Unit21/23")
+        self.title("SAC factors")
         self.geometry("940x540")
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=5)
         ttk.Label(top, text="kT eV").pack(side="left")
@@ -14574,16 +14566,14 @@ class SACWindow(tk.Toplevel):
         lu = safe_float(self.lu_var.get(), 1.0)
         ntot = safe_float(self.ntot_var.get(), 1e18)
         rows = compute_sac_for_template_lines(self.master_app, kt, ne, lu, ntot, self._element_percentages())
-        self.master_app.sac_factors = {r["index"]: r["sac"] for r in rows}
         self.tree.delete(*self.tree.get_children())
         for r in rows:
             self.tree.insert("", "end", values=(r["index"], r["species"], f"{r['wavelength']:.4f}", f"{r['sac']:.6g}", f"{r['wl']:.6g}", f"{r['wl0']:.6g}", f"{r['knu0']:.4g}"))
-        self.master_app.status(f"SAC: {len(rows)} factors calculated and applied to the pyLIBS engine")
+        self.master_app.status(f"SAC: {len(rows)} factors calculated")
 
     def clear(self):
-        self.master_app.sac_factors = {}
         self.tree.delete(*self.tree.get_children())
-        self.master_app.status("SAC reset: the engine will use SAC=1")
+        self.master_app.status("SAC reset")
 
 
 def _format_sa_numeric(value):
@@ -14836,7 +14826,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._toggle_use_value(item)
 
     def apply_sac(self):
-        msg = "Self-absorption correction is not implemented yet."
+        msg = "Self-absorption correction will be implemented with the new algorithm."
         self.summary_var.set(msg)
         self.master_app.status(msg)
         _showinfo(self, "Self-Absorption Check", msg)
@@ -15276,7 +15266,6 @@ class CFLibsWindow(tk.Toplevel):
         ne = safe_float(self.ne_var.get(), 1.0e17) or 1.0e17
         groups, skipped = libspp_boltzmann_groups_with_skips(
             self.master_app,
-            getattr(self.master_app, "sac_factors", {}),
         )
         fits = libspp_fit_boltzmann_fixed_temperature(self.master_app, groups, kt)
         if not fits:
@@ -16565,7 +16554,6 @@ class MainWindow(tk.Tk):
         self.view_log_y = bool(getattr(self.options, "view_log_y", False))
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
-        self.sac_factors: dict[int, float] = {}
         self.last_cflibs_rows: list[dict] = []
         self.last_halpha_result: Optional[dict] = None
         self.last_saha_boltzmann: Optional[dict] = None
