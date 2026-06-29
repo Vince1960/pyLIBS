@@ -4640,6 +4640,7 @@ class RetroActiveSpectraWindow(tk.Toplevel):
         idx = self.selected_index
         if 0 < idx < len(self.master_app.spectra):
             self.master_app.spectra[idx-1], self.master_app.spectra[idx] = self.master_app.spectra[idx], self.master_app.spectra[idx-1]
+            self.master_app.spectra[idx-1].color, self.master_app.spectra[idx].color = self.master_app.spectra[idx].color, self.master_app.spectra[idx-1].color
             self.selected_index = idx-1
             self.refresh()
             self.master_app.redraw()
@@ -6040,6 +6041,7 @@ def swap_spectra(self):
             return
         first, second = first_num - 1, second_num - 1
     self.spectra[first], self.spectra[second] = self.spectra[second], self.spectra[first]
+    self.spectra[first].color, self.spectra[second].color = self.spectra[second].color, self.spectra[first].color
     self.redraw()
     if self.active_window and self.active_window.winfo_exists():
         self.active_window.refresh()
