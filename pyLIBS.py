@@ -2076,6 +2076,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
         p0 = [baseline, slope]
         bounds_lo = [-np.inf, -np.inf]
         bounds_hi = [np.inf, np.inf]
+        fixed_mask = [False, False]
         half_window = max(abs(safe_float(self.range_var.get(), width / 20.0)), width * 0.02, abs(dx) * 2.0)
         for t in lines:
             override = line_overrides.get(id(t), {})
@@ -2084,11 +2085,16 @@ class MultiGaussianFitWindow(tk.Toplevel):
             height = max(float(peak_y) - baseline, max(ys)-baseline, 1.0)
             area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
             if override:
+                # Manual/Automatic/Single Fit rows are initialized from Options
+                # when the window opens, but the user-edited row values and
+                # checkboxes must take precedence at fit time.
                 row_fix_wg = bool(override.get("fix_wg", False))
                 row_fix_wl = bool(override.get("fix_wl", False))
                 wg_fwhm = abs(safe_float(override.get("wg"), getattr(t, "wg", 0.0) or default_fixed_wg))
                 wl_fwhm = abs(safe_float(override.get("wl"), getattr(t, "wl", 0.0) or default_fixed_wl))
             else:
+                # Standalone Voigt Fit has no editor overrides, so use the
+                # template sign convention and the current Options defaults.
                 row_fix_wg = bool(getattr(self.master_app.options, "fix_wg", False)) or getattr(t, "wg", 0.0) < 0
                 row_fix_wl = bool(getattr(self.master_app.options, "fix_wl", False)) or getattr(t, "wl", 0.0) < 0
                 wg_fwhm = default_fixed_wg if bool(getattr(self.master_app.options, "fix_wg", False)) else (abs(t.wg) if getattr(t, "wg", 0.0) else default_fixed_wg)
@@ -2099,23 +2105,41 @@ class MultiGaussianFitWindow(tk.Toplevel):
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
             row_fix_center = bool(override.get("fix_center", False)) if override else (t.fitwavelen < 0)
-            if row_fix_center:
-                c_lo, c_hi = center0 - 1e-9, center0 + 1e-9
             sigma_lo = max(abs(dx)*0.05, 1e-9)
             sigma_hi = max(width, sigma0*50.0)
             gamma_lo = max(abs(dx)*0.05, 1e-9)
             gamma_hi = max(width, gamma0*50.0)
-            if row_fix_wg:
-                eps = max(abs(sig0) * 1e-9, 1e-12)
-                sigma_lo, sigma_hi = max(sig0 - eps, 1e-12), sig0 + eps
-            if row_fix_wl:
-                eps = max(abs(gam0) * 1e-9, 1e-12)
-                gamma_lo, gamma_hi = max(gam0 - eps, 1e-12), gam0 + eps
             bounds_lo.extend([0.0, c_lo, sigma_lo, gamma_lo])
             bounds_hi.extend([np.inf, c_hi, sigma_hi, gamma_hi])
+            fixed_mask.extend([False, row_fix_center, row_fix_wg, row_fix_wl])
+        p0_full = np.asarray(p0, dtype=float)
+        bounds_lo_full = np.asarray(bounds_lo, dtype=float)
+        bounds_hi_full = np.asarray(bounds_hi, dtype=float)
+        fixed_mask = np.asarray(fixed_mask, dtype=bool)
+        free_mask = ~fixed_mask
+
+        # Fixed parameters are removed from the optimizer parameter vector.
+        # This keeps them exactly locked at the values currently visible in
+        # the fit window, instead of only constraining them with narrow bounds.
+        def _expand_fit_parameters(p_free):
+            p_all = p0_full.copy()
+            p_all[free_mask] = np.asarray(p_free, dtype=float)
+            return p_all
+
+        def _multivoigt_model_free(x, *p_free):
+            return multivoigt_model(x, *_expand_fit_parameters(p_free))
+
         old_xlim, old_ylim = xlim, ylim
         try:
-            popt, pcov = curve_fit(multivoigt_model, xs, ys, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=max(2000, self.master_app.options.iterations*400))
+            popt_free, pcov = curve_fit(
+                _multivoigt_model_free,
+                xs,
+                ys,
+                p0=p0_full[free_mask],
+                bounds=(bounds_lo_full[free_mask], bounds_hi_full[free_mask]),
+                maxfev=max(2000, self.master_app.options.iterations*400),
+            )
+            popt = _expand_fit_parameters(popt_free)
         except Exception as e:
             msg = str(e)
             if show_messages:
@@ -2130,9 +2154,9 @@ class MultiGaussianFitWindow(tk.Toplevel):
             fitted_wg = float(2.354820045 * sigma)   # Gaussian FWHM
             fitted_wl = float(2.0 * gamma)           # Lorentzian FWHM
             # Store/report both Voigt widths as positive FWHM values.  Fixed
-            # widths are enforced through the optimizer bounds; the sign is not
-            # used as an output marker because it makes the reported fit result
-            # misleading and has no physical meaning.
+            # widths are enforced by removing them from the optimizer vector;
+            # the sign is not used as an output marker because it makes the
+            # reported fit result misleading and has no physical meaning.
             t.wg = abs(fitted_wg)
             t.wl = abs(fitted_wl)
             peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
@@ -3031,7 +3055,8 @@ def libspp_fit_boltzmann(app: "MainWindow", groups):
         if len(active_pts) < 2:
             continue
         x = [p["x"] for p in active_pts]
-        y = [p["y"] for p in active_pts]
+        y = [_sac_corrected_fit_y(app, p) for p in active_pts]
+        # y = [p["y"] for p in active_pts]
         fit = linear_fit(x, y)
         if not fit:
             continue
@@ -3059,7 +3084,8 @@ def libspp_fit_boltzmann_fixed_temperature(app: "MainWindow", groups, kt: float)
         if not active_pts:
             continue
         specie, ion = key
-        intercept = sum(p["y"] + p["x"] / kt for p in active_pts) / len(active_pts)
+        intercept = sum(_sac_corrected_fit_y(app, p) + p["x"] / kt for p in active_pts) / len(active_pts)
+        # intercept = sum(p["y"] + p["x"] / kt for p in active_pts) / len(active_pts)
         try:
             z = app.libs_db.partition_function(specie, ion, kt * 11604.45)
         except Exception:
