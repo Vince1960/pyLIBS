@@ -2772,8 +2772,11 @@ class SahaBoltzmannWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 label = element if not label_used else "_nolegend_"
-                self.ax.scatter([p["x"]], [p["y"]], s=24, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
-                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
+                plot_y, sac_marker = _sac_corrected_plot_y(self.master_app, p)
+                marker = "*" if sac_marker else "o"
+                size = 70 if sac_marker else 24
+                self.ax.scatter([p["x"]], [plot_y], s=size, marker=marker, alpha=(0.65 if inactive else alpha), color=point_color, label=label)
+                self.plot_points.append({"x": p["x"], "y": plot_y, "line": p.get("line"), "inactive": inactive})
                 label_used = True
             result = fits.get(element)
             if result:
@@ -2866,6 +2869,40 @@ def _template_line_center(line: TemplateLine) -> float:
 
 def _template_line_intensity(line: TemplateLine) -> float:
     return line.inte if getattr(line, "inte", 0.0) > 0.0 else getattr(line, "templint", 0.0)
+
+
+def _sac_factor_for_line(line: TemplateLine) -> Optional[float]:
+    """Return the SAC factor selected in the Show SA table for this line.
+
+    SAC is not recomputed here.  It is used only when the Show SA row has
+    Use/checkbox = Yes and the already-calculated SAC value is >= 1.
+    """
+    try:
+        if not bool(getattr(line, "sa_use", False)):
+            return None
+        sac = safe_float(getattr(line, "sa_sac", ""), 0.0)
+        if sac >= 1.0 and math.isfinite(sac):
+            return sac
+    except Exception:
+        pass
+    return None
+
+
+def _sac_corrected_plot_y(app: "MainWindow", point: dict) -> tuple[float, bool]:
+    """Return plot ordinate and whether the SAC marker must be used."""
+    y = safe_float(point.get("y"), 0.0)
+    if not bool(getattr(app, "apply_sac_correction", False)):
+        return y, False
+    line = point.get("line")
+    if line is None:
+        return y, False
+    sac = _sac_factor_for_line(line)
+    if sac is None:
+        return y, False
+    try:
+        return y + math.log(sac), True
+    except Exception:
+        return y, False
 
 
 def _response_factor(app: "MainWindow", wavelength: float) -> float:
@@ -3494,7 +3531,11 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             sa = self._sa_value_for_line(_format_sa_numeric(wl), stark)
         sa_num = safe_float(sa, 0.0)
         if sa_num > 0.0 and sa_num <= 1.0:
-            sac = _format_sa_numeric(sa_num ** (-0.46))
+            sac_value = sa_num ** (-0.46)
+            sac = _format_sa_numeric(sac_value)
+            line.sa_sac = sac_value
+        else:
+            line.sa_sac = ""
         use_value = "No" if not bool(getattr(line, "sa_use", True)) else "Yes"
         return (
             self._line_label(line),
@@ -3591,10 +3632,49 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._toggle_use_value(item)
 
     def apply_sac(self):
-        msg = "Self-absorption correction will be implemented with the new algorithm."
+        """Toggle plotting-only SAC correction using the current Show SA table.
+
+        The SAC value is already calculated in this window.  For each displayed
+        row, the correction is enabled only if SAC >= 1 and the Use/checkbox
+        column is Yes.  No SAC value is recalculated here and the template data
+        are not otherwise modified.
+        """
+        self.master_app.apply_sac_correction = not bool(getattr(self.master_app, "apply_sac_correction", False))
+        state = bool(getattr(self.master_app, "apply_sac_correction", False))
+
+        # Read the current visible Show SA table before redrawing any plot.
+        # Do not call refresh() here: it would rebuild the table and could reset
+        # the user-selected Yes/No values.
+        enabled_rows = 0
+        for item in self.tree.get_children():
+            try:
+                idx = int(item)
+            except Exception:
+                continue
+            if idx < 0 or idx >= len(self._rows):
+                continue
+            line = self._rows[idx]
+            values = list(self.tree.item(item, "values") or [])
+            sac = safe_float(values[4] if len(values) > 4 else "", 0.0)
+            use_text = str(values[5] if len(values) > 5 else "").strip().lower()
+            use_yes = use_text in ("yes", "y", "true", "1", "si", "sì")
+            line.sa_sac = sac if sac >= 1.0 and math.isfinite(sac) else ""
+            line.sa_use = bool(use_yes and sac >= 1.0 and math.isfinite(sac))
+            if state and line.sa_use:
+                enabled_rows += 1
+
+        msg = f"SAC applied to {enabled_rows} plot point(s)" if state else "SAC removed from plots"
         self.summary_var.set(msg)
         self.master_app.status(msg)
-        _showinfo(self, "Self-Absorption Check", msg)
+        for attr in ("saha_window", "cflibs_window"):
+            win = getattr(self.master_app, attr, None)
+            try:
+                if win is not None and win.winfo_exists():
+                    compute = getattr(win, "compute", None)
+                    if callable(compute):
+                        compute()
+            except Exception:
+                pass
 
     def close(self):
         try:
@@ -4223,8 +4303,11 @@ class CFLibsWindow(tk.Toplevel):
                 inactive = bool(p.get("inactive"))
                 point_color = "0.6" if inactive else color
                 point_label = label if not label_used else "_nolegend_"
-                self.ax.scatter([p["x"]], [p["y"]], s=24, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
-                self.plot_points.append({"x": p["x"], "y": p["y"], "line": p.get("line"), "inactive": inactive})
+                plot_y, sac_marker = _sac_corrected_plot_y(self.master_app, p)
+                marker = "*" if sac_marker else "o"
+                size = 70 if sac_marker else 24
+                self.ax.scatter([p["x"]], [plot_y], s=size, marker=marker, color=point_color, alpha=(0.65 if inactive else 1.0), label=point_label)
+                self.plot_points.append({"x": p["x"], "y": plot_y, "line": p.get("line"), "inactive": inactive})
                 label_used = True
             fit = fits.get(key)
             if fit:
