@@ -3625,16 +3625,13 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         return "break"
 
     def _on_double_click(self, event):
-        region = self.tree.identify("region", event.x, event.y)
-        if region != "cell":
-            return
-        column = self.tree.identify_column(event.x)
-        if column != "#5":
-            return
+        # Toggle Yes/No for the clicked Show SA row, independently of the
+        # column/cell that was double-clicked.  Ignore clicks outside rows
+        # (for example on the heading or in empty table space).
         item = self.tree.identify_row(event.y)
         if not item:
             return
-        self._toggle_use_value(item)
+        return self._toggle_use_value(item)
 
     def apply_sac(self):
         """Toggle plotting-only SAC correction using the current Show SA table.
