@@ -2068,8 +2068,14 @@ class MultiGaussianFitWindow(tk.Toplevel):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
         self.fit_voigt_lines()
 
-    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True):
-        """Fit explicit template lines with the existing visible-window Voigt model."""
+    def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True, line_overrides=None):
+        """Fit explicit template lines with the existing visible-window Voigt model.
+
+        line_overrides is an optional dict keyed by id(template_line).  It is
+        used by the Manual/Automatic/Single Fit editor so values initialized
+        from Options can be changed by the user before pressing Fit without
+        being overwritten by the global defaults.
+        """
         self.last_residual_x = []
         self.last_residual_y = []
         if np is None:
@@ -2113,35 +2119,44 @@ class MultiGaussianFitWindow(tk.Toplevel):
         slope = 0.0
         # Estimate a sensible initial width from the x sampling and Options.
         dx = float(np.median(np.diff(np.sort(xs)))) if len(xs) > 2 else width/100.0
-        opt_fix_wg = bool(getattr(self.master_app.options, "fix_wg", False))
-        opt_fix_wl = bool(getattr(self.master_app.options, "fix_wl", False))
-        fixed_wg_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wg", 0.5), 0.5))
-        fixed_wl_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wl", 0.5), 0.5))
-        min_sigma0 = max(fixed_wg_fwhm / 2.354820045, 1e-6)
-        min_gamma0 = max(fixed_wl_fwhm / 2.0, 1e-6)
-        sigma0 = max(abs(safe_float(self.sigma_var.get(), 0.5)), min_sigma0, abs(dx), 1e-6)
-        gamma0 = max(min_gamma0, abs(dx), 1e-6)
+        line_overrides = line_overrides or {}
+        # Options are used only to initialize fit windows.  During a fit,
+        # per-row values edited in the open Manual/Automatic/Single Fit window
+        # take precedence through line_overrides.  For the standalone Voigt
+        # window, fall back to the template sign convention/options.
+        default_fixed_wg = abs(safe_float(getattr(self.master_app.options, "fixed_wg", 0.5), 0.5))
+        default_fixed_wl = abs(safe_float(getattr(self.master_app.options, "fixed_wl", 0.5), 0.5))
+        min_sigma0 = max(abs(safe_float(self.sigma_var.get(), default_fixed_wg)) / 2.354820045, abs(dx), 1e-6)
+        min_gamma0 = max(default_fixed_wl / 2.0, abs(dx), 1e-6)
+        sigma0 = max(abs(safe_float(self.sigma_var.get(), default_fixed_wg)), abs(dx), 1e-6)
+        gamma0 = max(default_fixed_wl / 2.0, abs(dx), 1e-6)
         p0 = [baseline, slope]
         bounds_lo = [-np.inf, -np.inf]
         bounds_hi = [np.inf, np.inf]
         half_window = max(abs(safe_float(self.range_var.get(), width / 20.0)), width * 0.02, abs(dx) * 2.0)
         for t in lines:
-            center0 = t.wavelen
+            override = line_overrides.get(id(t), {})
+            center0 = abs(safe_float(override.get("center"), t.fitwavelen or t.wavelen)) if override else t.wavelen
             peak_y = _nearest_y(sp.x, sp.y, center0)
             height = max(float(peak_y) - baseline, max(ys)-baseline, 1.0)
             area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
-            row_fix_wg = opt_fix_wg or getattr(t, "wg", 0.0) < 0
-            row_fix_wl = opt_fix_wl or getattr(t, "wl", 0.0) < 0
-            sig0 = fixed_wg_fwhm / 2.354820045 if opt_fix_wg else (abs(t.wg) / 2.354820045 if getattr(t, "wg", 0.0) else sigma0)
-            gam0 = fixed_wl_fwhm / 2.0 if opt_fix_wl else (abs(t.wl) / 2.0 if getattr(t, "wl", 0.0) else gamma0)
-            # Keep initial FWHM estimates at least as large as the Options
-            # fixed widths, so the starting point remains feasible and stable.
-            sig0 = max(sig0, min_sigma0)
-            gam0 = max(gam0, min_gamma0)
+            if override:
+                row_fix_wg = bool(override.get("fix_wg", False))
+                row_fix_wl = bool(override.get("fix_wl", False))
+                wg_fwhm = abs(safe_float(override.get("wg"), getattr(t, "wg", 0.0) or default_fixed_wg))
+                wl_fwhm = abs(safe_float(override.get("wl"), getattr(t, "wl", 0.0) or default_fixed_wl))
+            else:
+                row_fix_wg = bool(getattr(self.master_app.options, "fix_wg", False)) or getattr(t, "wg", 0.0) < 0
+                row_fix_wl = bool(getattr(self.master_app.options, "fix_wl", False)) or getattr(t, "wl", 0.0) < 0
+                wg_fwhm = default_fixed_wg if bool(getattr(self.master_app.options, "fix_wg", False)) else (abs(t.wg) if getattr(t, "wg", 0.0) else default_fixed_wg)
+                wl_fwhm = default_fixed_wl if bool(getattr(self.master_app.options, "fix_wl", False)) else (abs(t.wl) if getattr(t, "wl", 0.0) else default_fixed_wl)
+            sig0 = max(wg_fwhm / 2.354820045, min_sigma0)
+            gam0 = max(wl_fwhm / 2.0, min_gamma0)
             p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
-            if t.fitwavelen < 0:
+            row_fix_center = bool(override.get("fix_center", False)) if override else (t.fitwavelen < 0)
+            if row_fix_center:
                 c_lo, c_hi = center0 - 1e-9, center0 + 1e-9
             sigma_lo = max(abs(dx)*0.05, 1e-9)
             sigma_hi = max(width, sigma0*50.0)
@@ -2171,12 +2186,12 @@ class MultiGaussianFitWindow(tk.Toplevel):
             t.inte = float(area)
             fitted_wg = float(2.354820045 * sigma)   # Gaussian FWHM
             fitted_wl = float(2.0 * gamma)           # Lorentzian FWHM
-            # Store/report the Gaussian width as a positive FWHM.  Fixed
-            # Gaussian widths are enforced through the optimizer bounds above;
-            # the sign is not used as an output marker because it makes the
-            # reported fit result misleading.
+            # Store/report both Voigt widths as positive FWHM values.  Fixed
+            # widths are enforced through the optimizer bounds; the sign is not
+            # used as an output marker because it makes the reported fit result
+            # misleading and has no physical meaning.
             t.wg = abs(fitted_wg)
-            t.wl = -abs(fitted_wl) if (opt_fix_wl or getattr(t, "wl", 0.0) < 0) else abs(fitted_wl)
+            t.wl = abs(fitted_wl)
             peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
             # If the row is already identified, keep the identification and
             # complete Ek/Aki/gk/gi from LIBS.db so Save Template writes a
@@ -2914,7 +2929,15 @@ def libspp_saha_boltzmann_groups(
     ne: float,
     kt: float,
 ):
+    """Build Unit27 Saha-Boltzmann plot points grouped by element.
 
+    Unit6/Unit27 uses neutral lines as ordinary Boltzmann points and shifts
+    singly-ionized points by Eion and the Saha electron-density term:
+        x(I)  = Ek
+        y(I)  = ln(I / |Aki*gk|)
+        x(II) = Eion + Ek
+        y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
+    """
     groups: dict[str, list[dict]] = defaultdict(list)
     skipped = 0
     metadata_cache: dict[str, dict] = {}
@@ -4725,6 +4748,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.minsize(800, 520)
         self.configure(bg=RETRO_BG)
         self.line_vars = []
+        self.displayed_group_key = None
+        self.displayed_lines = []
         self.manual_fit_lines = []
         self.manual_fit_index = 0
         self.manual_fit_failed = False
@@ -4861,8 +4886,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             gw = safe_float(wg.get(), t.wg or self.master_app.options.fixed_wg)
             lw = safe_float(wl.get(), t.wl or self.master_app.options.fixed_wl)
             t.fitwavelen = -abs(center) if flam.get() else abs(center)
-            t.wg = -abs(gw) if fwg.get() else abs(gw)
-            t.wl = -abs(lw) if fwl.get() else abs(lw)
+            t.wg = abs(gw)
+            t.wl = abs(lw)
 
     def _sorted_template_lines(self):
         return sorted(
@@ -4908,6 +4933,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app.canvas.draw_idle()
         self.master_app._update_xscroll()
         self.load_from_template(group)
+        self.displayed_lines = list(group)
+        self.displayed_group_key = self._group_key(group)
 
     def _show_group_region(self, group):
         if not group:
@@ -5020,15 +5047,41 @@ class RetroFitManagerWindow(tk.Toplevel):
                 break
         return point_count, expanded, retries
 
+    def _line_overrides_from_editor(self, lines):
+        overrides = {}
+        displayed = list(getattr(self, "displayed_lines", []) or [])
+        for r, t in enumerate(displayed[:10]):
+            if t not in lines or r >= len(self.line_vars):
+                continue
+            lam, wg, wl, flam, fwg, fwl, *_ = self.line_vars[r]
+            center = safe_float(lam.get(), getattr(t, "fitwavelen", 0.0) or getattr(t, "wavelen", 0.0))
+            gw = abs(safe_float(wg.get(), getattr(t, "wg", 0.0) or getattr(self.master_app.options, "fixed_wg", 0.5)))
+            lw = abs(safe_float(wl.get(), getattr(t, "wl", 0.0) or getattr(self.master_app.options, "fixed_wl", 0.5)))
+            t.fitwavelen = -abs(center) if flam.get() else abs(center)
+            # Keep both widths positive in the template/output, even when fixed.
+            t.wg = abs(gw)
+            t.wl = abs(lw)
+            overrides[id(t)] = {
+                "center": abs(center),
+                "fix_center": bool(flam.get()),
+                "wg": gw,
+                "wl": lw,
+                "fix_wg": bool(fwg.get()),
+                "fix_wl": bool(fwl.get()),
+            }
+        return overrides
+
     def _fit_manual_group(self, lines):
         tmp = None
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
             tmp.withdraw()
+            overrides = self._line_overrides_from_editor(list(lines))
             ok, message, results = tmp.fit_voigt_lines(
                 lines=lines,
                 preserve_view=True,
                 show_messages=False,
+                line_overrides=overrides,
             )
             if ok and not self.automatic:
                 self.residual_x = list(getattr(tmp, "last_residual_x", []) or [])
@@ -5081,7 +5134,10 @@ class RetroFitManagerWindow(tk.Toplevel):
         first = group[0].wavelen
         last = group[-1].wavelen
         self.msg_var.set(f"Fitting {len(group)} line(s): {first:.4f} - {last:.4f}")
-        self._display_manual_group(group)
+        # Do not reload the editor rows when the same group is already shown:
+        # the user may have changed widths or fixed/free checkboxes before Fit.
+        if self.displayed_group_key != self._group_key(group):
+            self._display_manual_group(group)
         self.update_idletasks()
         min_points = self._minimum_fit_points(group)
         point_count = self._current_fit_point_count()
@@ -5184,7 +5240,10 @@ class RetroFitManagerWindow(tk.Toplevel):
     def run_single_fit(self):
         fit_lines = self._visible_template_lines()
         self.manual_fit_lines = fit_lines
-        self.load_from_template(fit_lines)
+        if self.displayed_group_key != self._group_key(fit_lines):
+            self.load_from_template(fit_lines)
+            self.displayed_lines = list(fit_lines)
+            self.displayed_group_key = self._group_key(fit_lines)
         if not fit_lines:
             self.msg_var.set("Single Fit: no template lines are visible in the current window")
             _showinfo(self, "Single Fit", "No template lines are visible in the current spectrum window.")
