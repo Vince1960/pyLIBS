@@ -2610,7 +2610,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
     def _fixed_temperature_refits(self, representative_kt):
         if not representative_kt or representative_kt <= 0.0:
             return {}
-        return libspp_refit_saha_fixed_temperature(self.saha_groups, representative_kt)
+        return libspp_refit_saha_fixed_temperature(self.master_app, self.saha_groups, representative_kt)
 
     def _plot_x_limits(self, groups):
         xs = [p["x"] for pts in groups.values() for p in pts]
@@ -2905,6 +2905,11 @@ def _sac_corrected_plot_y(app: "MainWindow", point: dict) -> tuple[float, bool]:
         return y, False
 
 
+def _sac_corrected_fit_y(app: "MainWindow", point: dict) -> float:
+    """Return the same ordinate used in the plot, for refitting after Apply SAC."""
+    return _sac_corrected_plot_y(app, point)[0]
+
+
 def _response_factor(app: "MainWindow", wavelength: float) -> float:
     """Original showboltz()/calcola(): divide line intensity by instrumental efficiency."""
     try:
@@ -3032,7 +3037,7 @@ def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
         active_pts = [p for p in pts if not p.get("inactive")]
         if len(active_pts) < 2:
             continue
-        fit = linear_fit([p["x"] for p in active_pts], [p["y"] for p in active_pts])
+        fit = linear_fit([p["x"] for p in active_pts], [_sac_corrected_fit_y(app, p) for p in active_pts])
         if not fit:
             continue
         slope, intercept = fit
@@ -3054,7 +3059,7 @@ def libspp_fit_saha_boltzmann(app: "MainWindow", groups: dict[str, list[dict]]):
     return results
 
 
-def libspp_refit_saha_fixed_temperature(groups: dict[str, list[dict]], kt: float):
+def libspp_refit_saha_fixed_temperature(app: "MainWindow", groups: dict[str, list[dict]], kt: float):
     if kt <= 0.0:
         return {}
     slope = -1.0 / kt
@@ -3063,7 +3068,7 @@ def libspp_refit_saha_fixed_temperature(groups: dict[str, list[dict]], kt: float
         active_pts = [p for p in pts if not p.get("inactive")]
         if not active_pts:
             continue
-        intercept = sum(p["y"] - slope * p["x"] for p in active_pts) / len(active_pts)
+        intercept = sum(_sac_corrected_fit_y(app, p) - slope * p["x"] for p in active_pts) / len(active_pts)
         results[element] = {
             "species": element,
             "nlines": len(active_pts),
