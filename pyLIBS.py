@@ -2113,6 +2113,8 @@ class MultiGaussianFitWindow(tk.Toplevel):
         slope = 0.0
         # Estimate a sensible initial width from the x sampling and Options.
         dx = float(np.median(np.diff(np.sort(xs)))) if len(xs) > 2 else width/100.0
+        opt_fix_wg = bool(getattr(self.master_app.options, "fix_wg", False))
+        opt_fix_wl = bool(getattr(self.master_app.options, "fix_wl", False))
         fixed_wg_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wg", 0.5), 0.5))
         fixed_wl_fwhm = abs(safe_float(getattr(self.master_app.options, "fixed_wl", 0.5), 0.5))
         min_sigma0 = max(fixed_wg_fwhm / 2.354820045, 1e-6)
@@ -2128,8 +2130,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
             peak_y = _nearest_y(sp.x, sp.y, center0)
             height = max(float(peak_y) - baseline, max(ys)-baseline, 1.0)
             area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
-            sig0 = abs(t.wg) / 2.354820045 if getattr(t, "wg", 0.0) else sigma0
-            gam0 = abs(t.wl) / 2.0 if getattr(t, "wl", 0.0) else gamma0
+            row_fix_wg = opt_fix_wg or getattr(t, "wg", 0.0) < 0
+            row_fix_wl = opt_fix_wl or getattr(t, "wl", 0.0) < 0
+            sig0 = fixed_wg_fwhm / 2.354820045 if opt_fix_wg else (abs(t.wg) / 2.354820045 if getattr(t, "wg", 0.0) else sigma0)
+            gam0 = fixed_wl_fwhm / 2.0 if opt_fix_wl else (abs(t.wl) / 2.0 if getattr(t, "wl", 0.0) else gamma0)
             # Keep initial FWHM estimates at least as large as the Options
             # fixed widths, so the starting point remains feasible and stable.
             sig0 = max(sig0, min_sigma0)
@@ -2139,8 +2143,18 @@ class MultiGaussianFitWindow(tk.Toplevel):
             c_hi = min(xmax, center0 + half_window)
             if t.fitwavelen < 0:
                 c_lo, c_hi = center0 - 1e-9, center0 + 1e-9
-            bounds_lo.extend([0.0, c_lo, max(abs(dx)*0.05, 1e-9), max(abs(dx)*0.05, 1e-9)])
-            bounds_hi.extend([np.inf, c_hi, max(width, sigma0*50.0), max(width, gamma0*50.0)])
+            sigma_lo = max(abs(dx)*0.05, 1e-9)
+            sigma_hi = max(width, sigma0*50.0)
+            gamma_lo = max(abs(dx)*0.05, 1e-9)
+            gamma_hi = max(width, gamma0*50.0)
+            if row_fix_wg:
+                eps = max(abs(sig0) * 1e-9, 1e-12)
+                sigma_lo, sigma_hi = max(sig0 - eps, 1e-12), sig0 + eps
+            if row_fix_wl:
+                eps = max(abs(gam0) * 1e-9, 1e-12)
+                gamma_lo, gamma_hi = max(gam0 - eps, 1e-12), gam0 + eps
+            bounds_lo.extend([0.0, c_lo, sigma_lo, gamma_lo])
+            bounds_hi.extend([np.inf, c_hi, sigma_hi, gamma_hi])
         old_xlim, old_ylim = xlim, ylim
         try:
             popt, pcov = curve_fit(multivoigt_model, xs, ys, p0=p0, bounds=(bounds_lo, bounds_hi), maxfev=max(2000, self.master_app.options.iterations*400))
@@ -2155,8 +2169,14 @@ class MultiGaussianFitWindow(tk.Toplevel):
             area, cen, sigma, gamma = popt[2+4*idx], popt[3+4*idx], abs(popt[4+4*idx]), abs(popt[5+4*idx])
             t.fitwavelen = float(cen)
             t.inte = float(area)
-            t.wg = float(2.354820045 * sigma)   # Gaussian FWHM
-            t.wl = float(2.0 * gamma)           # Lorentzian FWHM
+            fitted_wg = float(2.354820045 * sigma)   # Gaussian FWHM
+            fitted_wl = float(2.0 * gamma)           # Lorentzian FWHM
+            # Store/report the Gaussian width as a positive FWHM.  Fixed
+            # Gaussian widths are enforced through the optimizer bounds above;
+            # the sign is not used as an output marker because it makes the
+            # reported fit result misleading.
+            t.wg = abs(fitted_wg)
+            t.wl = -abs(fitted_wl) if (opt_fix_wl or getattr(t, "wl", 0.0) < 0) else abs(fitted_wl)
             peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
             # If the row is already identified, keep the identification and
             # complete Ek/Aki/gk/gi from LIBS.db so Save Template writes a
@@ -2894,15 +2914,7 @@ def libspp_saha_boltzmann_groups(
     ne: float,
     kt: float,
 ):
-    """Build Unit27 Saha-Boltzmann plot points grouped by element.
 
-    Unit6/Unit27 uses neutral lines as ordinary Boltzmann points and shifts
-    singly-ionized points by Eion and the Saha electron-density term:
-        x(I)  = Ek
-        y(I)  = ln(I / |Aki*gk|)
-        x(II) = Eion + Ek
-        y(II) = ln(I / |Aki*gk|) - ln(6.04e21/Ne * kT^1.5)
-    """
     groups: dict[str, list[dict]] = defaultdict(list)
     skipped = 0
     metadata_cache: dict[str, dict] = {}
@@ -4804,8 +4816,16 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def load_from_template(self, lines=None):
         lines = list(lines if lines is not None else self.master_app.template_lines[:10])
+        opts = self.master_app.options
+        option_fix_wg = bool(getattr(opts, "fix_wg", False))
+        option_fix_wl = bool(getattr(opts, "fix_wl", False))
+        option_fixed_wg = abs(safe_float(getattr(opts, "fixed_wg", 0.5), 0.5))
+        option_fixed_wl = abs(safe_float(getattr(opts, "fixed_wl", 0.5), 0.5))
         for r in range(10):
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
+            # Empty rows are not part of the current fit.  Do not preload
+            # Options fixed widths there, otherwise Manual/Single/Auto Fit
+            # appears to constrain lines that will not actually be fitted.
             lam.set("")
             wg.set("")
             wl.set("")
@@ -4819,11 +4839,13 @@ class RetroFitManagerWindow(tk.Toplevel):
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             center = t.fitwavelen if t.fitwavelen else t.wavelen
             lam.set(f"{abs(center):.6g}")
-            wg.set(f"{abs(t.wg) if t.wg else self.master_app.options.fixed_wg:.6g}")
-            wl.set(f"{abs(t.wl) if t.wl else self.master_app.options.fixed_wl:.6g}")
+            wg_value = option_fixed_wg if option_fix_wg else (abs(t.wg) if t.wg else option_fixed_wg)
+            wl_value = option_fixed_wl if option_fix_wl else (abs(t.wl) if t.wl else option_fixed_wl)
+            wg.set(f"{wg_value:.6g}")
+            wl.set(f"{wl_value:.6g}")
             flam.set(center < 0)
-            fwg.set(t.wg < 0)
-            fwl.set(t.wl < 0)
+            fwg.set(option_fix_wg or t.wg < 0)
+            fwl.set(option_fix_wl or t.wl < 0)
             self._color_row(r)
         if len(lines) > 10:
             self.msg_var.set("Too many lines for fitting (> 10)")
