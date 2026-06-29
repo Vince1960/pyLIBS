@@ -2099,8 +2099,14 @@ class MultiGaussianFitWindow(tk.Toplevel):
                 row_fix_wl = bool(getattr(self.master_app.options, "fix_wl", False)) or getattr(t, "wl", 0.0) < 0
                 wg_fwhm = default_fixed_wg if bool(getattr(self.master_app.options, "fix_wg", False)) else (abs(t.wg) if getattr(t, "wg", 0.0) else default_fixed_wg)
                 wl_fwhm = default_fixed_wl if bool(getattr(self.master_app.options, "fix_wl", False)) else (abs(t.wl) if getattr(t, "wl", 0.0) else default_fixed_wl)
-            sig0 = max(wg_fwhm / 2.354820045, min_sigma0)
-            gam0 = max(wl_fwhm / 2.0, min_gamma0)
+            if row_fix_wg:
+                sig0 = max(wg_fwhm / 2.354820045, 1e-12)
+            else:
+                sig0 = max(wg_fwhm / 2.354820045, min_sigma0)
+            if row_fix_wl:
+                gam0 = max(wl_fwhm / 2.0, 1e-12)
+            else:
+                gam0 = max(wl_fwhm / 2.0, min_gamma0)
             p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
