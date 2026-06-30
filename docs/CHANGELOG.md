@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Added View menu commands to save and load window positions for the main window, fit windows, Trace, Template, Saha-Boltzmann, Show SA, and CF-LIBS.
 - Saha-Boltzmann now builds and plots fitted template-line points with session electron-density input, Unit27 temperature iteration, and safe Apply After response correction.
 - Saha-Boltzmann mean temperature can exclude/include individual elements without changing their fitted temperatures.
 - Saha-Boltzmann now auto-excludes out-of-range element temperatures and redraws fixed-temperature intercept-only fit lines.

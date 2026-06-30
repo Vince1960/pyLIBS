@@ -55,6 +55,19 @@ PYLIBS_INI_ORDER = [
 ]
 
 
+WINDOW_POSITION_SECTION = "WindowPositions"
+WINDOW_POSITION_ORDER = [
+    "Main",
+    "ManualFit",
+    "AutoFit",
+    "Trace",
+    "Template",
+    "SahaBoltzmann",
+    "ShowSA",
+    "CFLIBS",
+]
+
+
 def parse_legacy_ini_value(line: str) -> str:
     return line.split("//", 1)[0].strip()
 
@@ -69,6 +82,31 @@ def _ini_cast(value: str, typ):
     return value
 
 
+def _read_pylibs_ini(path):
+    legacy_values = []
+    window_positions = {}
+    in_window_positions = False
+    for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_window_positions = stripped[1:-1].strip().lower() == WINDOW_POSITION_SECTION.lower()
+            continue
+        if in_window_positions:
+            clean = parse_legacy_ini_value(raw_line)
+            if "=" not in clean:
+                continue
+            key, value = clean.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key:
+                window_positions[key] = value
+            continue
+        legacy_values.append(parse_legacy_ini_value(raw_line))
+    return legacy_values, window_positions
+
+
 def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
     """Load pyLIBS.ini using the same positional layout as the original libs++.ini."""
     path = resource_path(filename)
@@ -78,12 +116,7 @@ def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
             path = old
         else:
             return False
-    values = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        if not line.strip():
-            continue
-        clean = parse_legacy_ini_value(line)
-        values.append(clean)
+    values, window_positions = _read_pylibs_ini(path)
     for (attr, typ), value in zip(PYLIBS_INI_ORDER, values):
         if hasattr(options, attr):
             setattr(options, attr, _ini_cast(value, typ))
@@ -94,8 +127,23 @@ def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
     dbp = resource_path("LIBS.db")
     if dbp.exists():
         options.libs_db_file = str(dbp)
+    if hasattr(options, "window_positions"):
+        options.window_positions = window_positions
     options.ini_file = str(path)
     return True
+
+
+def load_window_positions(filename: str = "pyLIBS.ini"):
+    """Load only the WindowPositions section from pyLIBS.ini."""
+    path = resource_path(filename)
+    if not path.exists():
+        old = resource_path("libs++.ini")
+        if old.exists():
+            path = old
+        else:
+            return {}
+    _values, window_positions = _read_pylibs_ini(path)
+    return window_positions
 
 
 def save_pylibs_ini(options, filename: str = "pyLIBS.ini"):
@@ -122,6 +170,24 @@ def save_pylibs_ini(options, filename: str = "pyLIBS.ini"):
     for i, (attr, typ) in enumerate(PYLIBS_INI_ORDER):
         value = getattr(options, attr, "")
         lines.append(f"{fmt(value)} // {comments[i]}")
+    window_positions = getattr(options, "window_positions", {}) or {}
+    if window_positions:
+        lines.append("")
+        lines.append(f"[{WINDOW_POSITION_SECTION}]")
+        for key in WINDOW_POSITION_ORDER:
+            for suffix in ("X", "Y", "W", "H"):
+                full_key = f"{key}_{suffix}"
+                if full_key not in window_positions:
+                    continue
+                value = window_positions.get(full_key, "")
+                if value is None:
+                    value = ""
+                lines.append(f"{full_key}={value}")
+        for full_key in sorted(k for k in window_positions if k.split("_", 1)[0] not in WINDOW_POSITION_ORDER):
+            value = window_positions.get(full_key, "")
+            if value is None:
+                value = ""
+            lines.append(f"{full_key}={value}")
     out = resource_path(filename)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     options.ini_file = str(out)

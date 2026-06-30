@@ -28,7 +28,7 @@ from typing import Optional
 
 from pylibs.core.models import AtomicLine, TemplateLine
 from pylibs.db.libs_database import LibsDatabase
-from pylibs.io.ini import load_pylibs_ini, save_pylibs_ini
+from pylibs.io.ini import load_pylibs_ini, load_window_positions as load_window_positions_from_ini, save_pylibs_ini
 from pylibs.io.report_io import (
     build_cflibs_report_html as _build_cflibs_report_html,
     build_cflibs_report_text as _build_cflibs_report_text,
@@ -5871,9 +5871,9 @@ class MainWindow(tk.Tk):
         self.withdraw()
         self._startup_splash = show_startup_splash(self, SPLASH_DURATION_MS)
         configure_retro_style(self)
-        self.title(APP_TITLE); self.geometry("1280x720")
         self.options=AppOptions()
         self.loaded_ini_path = load_pylibs_ini(self.options)
+        self.title(APP_TITLE); self.geometry(_window_geometry_from_positions(getattr(self.options, "window_positions", {}), "Main", "1280x720"))
         self.libs_db=LibsDatabase(self.options.libs_db_file)
         self.spectra: list[Spectrum]=[]
         self.response = None
@@ -6311,7 +6311,14 @@ class MainWindow(tk.Tk):
         self.line_window = show_existing_or_create(self, "line_window", lambda: LineIdentificationWindow(self), parent=self)
 
     def show_trace_lines(self):
-        self.trace_window = show_existing_or_create(self, "trace_window", lambda: TraceLinesWindow(self), refresh=lambda w: w.refresh(), parent=self)
+        self.trace_window = _show_persistent_window(
+            self,
+            "trace_window",
+            lambda: TraceLinesWindow(self),
+            "Trace",
+            refresh=lambda w: w.refresh(),
+            parent=self,
+        )
 
     def copy_atomic_line_to_template_line(self, template_line, atomic):
         """Copy database transition fields into a template row."""
@@ -6406,14 +6413,15 @@ class MainWindow(tk.Tk):
     def show_fit(self): MultiGaussianFitWindow(self)
     def show_ne_halpha(self): self.ne_halpha_window = show_existing_or_create(self, "ne_halpha_window", lambda: NeHalphaWindow(self), parent=self)
     def show_sac(self): self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
-    def show_saha(self): self.saha_window = show_existing_or_create(self, "saha_window", lambda: SahaBoltzmannWindow(self), parent=self)
-    def show_cflibs(self): self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
+    def show_saha(self): self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self)
+    def show_cflibs(self): self.cflibs_window = _show_persistent_window(self, "cflibs_window", lambda: CFLibsWindow(self), "CFLIBS", parent=self)
     def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_sac_check(self):
-        self.sac_check_window = show_existing_or_create(
+        self.sac_check_window = _show_persistent_window(
             self,
             "sac_check_window",
             lambda: SelfAbsorptionCheckWindow(self),
+            "ShowSA",
             refresh=lambda w: w.refresh(show_message=False),
             parent=self,
         )
@@ -6544,6 +6552,9 @@ def build_retro_menu(self):
     _add_menu_command(self, view_menu, shortcut_items, "Expand X 50%", self.expand_x_50, "F2", "<F2>", "zoom_x_in.png")
     _add_menu_command(self, view_menu, shortcut_items, "Full Y Scale", self.full_y, "F3", "<F3>", "zoom_y_out.png")
     _add_menu_command(self, view_menu, shortcut_items, "Show All", self.full_scale, "F4", "<F4>", "full_view.png")
+    view_menu.add_separator()
+    _add_menu_command(self, view_menu, shortcut_items, "Save Window Position", self.save_window_positions, "", "", "")
+    _add_menu_command(self, view_menu, shortcut_items, "Load Window Position", self.load_window_positions, "", "", "")
 
     util_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Utilities", menu=util_menu)
@@ -6685,7 +6696,11 @@ def show_template_window(self):
         win = RetroTemplateManager(self)
         self.template_window = win
         _bind_template_window_close(self, win)
-        center_window(win, self)
+        geometry = _window_geometry_from_positions(getattr(self.options, "window_positions", {}), "Template")
+        if geometry:
+            _set_window_geometry(win, geometry, self)
+        else:
+            center_window(win, self)
     else:
         self.template_window = win
         _bind_template_window_close(self, win)
@@ -6876,26 +6891,37 @@ def bring_window_to_front(win, parent=None):
     return True
 
 def _show_fit_manager(self, ref_name, automatic=False, single=False):
-    win = getattr(self, ref_name, None)
-    try:
-        exists = win is not None and win.winfo_exists()
-    except Exception:
-        exists = False
-    if exists:
+    key_map = {"manual_fit_window": "ManualFit", "auto_fit_window": "AutoFit"}
+    key = key_map.get(ref_name)
+    if key is None:
+        win = getattr(self, ref_name, None)
         try:
-            win.refresh_content()
+            exists = win is not None and win.winfo_exists()
+        except Exception:
+            exists = False
+        if exists:
+            try:
+                win.refresh_content()
+            except Exception:
+                pass
+            bring_window_to_front(win, self)
+            return win
+        try:
+            setattr(self, ref_name, None)
         except Exception:
             pass
+        win = RetroFitManagerWindow(self, automatic=automatic, single=single)
+        setattr(self, ref_name, win)
         bring_window_to_front(win, self)
         return win
-    try:
-        setattr(self, ref_name, None)
-    except Exception:
-        pass
-    win = RetroFitManagerWindow(self, automatic=automatic, single=single)
-    setattr(self, ref_name, win)
-    bring_window_to_front(win, self)
-    return win
+    return _show_persistent_window(
+        self,
+        ref_name,
+        lambda: RetroFitManagerWindow(self, automatic=automatic, single=single),
+        key,
+        refresh=lambda w: w.refresh_content(),
+        parent=self,
+    )
 
 def swap_spectra(self):
     count = len(getattr(self, "spectra", []))
@@ -7140,6 +7166,57 @@ def template_info_from_menu(self):
     if by_species:
         msg += "\n\n" + "\n".join(f"{key}: {value}" for key, value in sorted(by_species.items()))
     _showinfo(self, "Template Info", msg)
+
+def save_window_positions(self):
+    positions = {}
+    for key, spec in WINDOW_POSITION_SPECS.items():
+        attr = spec["attr"]
+        if attr is None:
+            win = self
+            fallback = self.geometry()
+        else:
+            win = getattr(self, attr, None)
+            fallback = _default_window_geometry(self, key)
+        parts = _collect_window_geometry(win, fallback)
+        if parts is None:
+            continue
+        width, height, x, y = parts
+        if x is None or y is None:
+            saved = _parse_geometry_string(fallback)
+            if saved is not None:
+                width, height, x, y = saved
+        if x is None or y is None:
+            x = 0
+            y = 0
+        positions[f"{key}_X"] = str(x)
+        positions[f"{key}_Y"] = str(y)
+        positions[f"{key}_W"] = str(width)
+        positions[f"{key}_H"] = str(height)
+    self.options.window_positions = positions
+    path = save_pylibs_ini(self.options)
+    self.status(f"Window positions saved: {path}")
+    return path
+
+def load_window_positions(self):
+    positions = load_window_positions_from_ini("pyLIBS.ini")
+    self.options.window_positions = positions
+    updated = 0
+    for key, spec in WINDOW_POSITION_SPECS.items():
+        attr = spec["attr"]
+        win = self if attr is None else getattr(self, attr, None)
+        try:
+            exists = win is not None and win.winfo_exists()
+        except Exception:
+            exists = False
+        if not exists:
+            continue
+        geometry = _window_geometry_from_positions(positions, key)
+        if not geometry:
+            continue
+        if _set_window_geometry(win, geometry, self if attr is None else self):
+            updated += 1
+    self.status(f"Window positions loaded: {updated} window(s) updated")
+    return positions
 
 def close_template_from_menu(self):
     self.template_lines.clear()
@@ -7498,6 +7575,161 @@ def _position_template_window(template_win, master_win):
     return _template_window_geometry(template_win, master_win)
 
 
+WINDOW_POSITION_SPECS = {
+    "Main": {"attr": None, "size": (1280, 720)},
+    "ManualFit": {"attr": "manual_fit_window", "size": (840, 540)},
+    "AutoFit": {"attr": "auto_fit_window", "size": (840, 540)},
+    "Trace": {"attr": "trace_window", "size": (900, 460)},
+    "Template": {"attr": "template_window", "size": (1280, 560)},
+    "SahaBoltzmann": {"attr": "saha_window", "size": (1050, 700)},
+    "ShowSA": {"attr": "sac_check_window", "size": (585, 400)},
+    "CFLIBS": {"attr": "cflibs_window", "size": (1100, 720)},
+}
+
+
+def _parse_geometry_string(geometry):
+    text = str(geometry or "").strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"(\d+)x(\d+)(?:([+-]\d+)([+-]\d+))?", text)
+    if not match:
+        return None
+    width = safe_int(match.group(1), 0)
+    height = safe_int(match.group(2), 0)
+    if width <= 0 or height <= 0:
+        return None
+    x_text = match.group(3)
+    y_text = match.group(4)
+    x = safe_int(x_text, 0) if x_text is not None else None
+    y = safe_int(y_text, 0) if y_text is not None else None
+    return width, height, x, y
+
+
+def _geometry_string_from_parts(width, height, x, y):
+    return f"{max(1, int(width))}x{max(1, int(height))}+{int(x)}+{int(y)}"
+
+
+def _centered_geometry_for_size(master, width, height):
+    try:
+        screen_w = master.winfo_screenwidth() if master is not None else 0
+        screen_h = master.winfo_screenheight() if master is not None else 0
+    except Exception:
+        screen_w = 0
+        screen_h = 0
+    if screen_w <= 0:
+        screen_w = 1920
+    if screen_h <= 0:
+        screen_h = 1080
+    x = max(0, (screen_w - max(1, int(width))) // 2)
+    y = max(0, (screen_h - max(1, int(height))) // 2)
+    return _geometry_string_from_parts(width, height, x, y)
+
+
+def _default_window_geometry(master, key):
+    spec = WINDOW_POSITION_SPECS.get(key)
+    if not spec:
+        return ""
+    width, height = spec["size"]
+    return _centered_geometry_for_size(master, width, height)
+
+
+def _window_geometry_from_positions(positions, key, fallback=""):
+    if not positions:
+        return fallback
+    values = [positions.get(f"{key}_{suffix}", "") for suffix in ("X", "Y", "W", "H")]
+    if any(str(v).strip() == "" for v in values):
+        return fallback
+    x = safe_int(values[0], None)
+    y = safe_int(values[1], None)
+    width = safe_int(values[2], None)
+    height = safe_int(values[3], None)
+    if None in (x, y, width, height):
+        return fallback
+    if width <= 0 or height <= 0:
+        return fallback
+    return _geometry_string_from_parts(width, height, x, y)
+
+
+def _set_window_geometry(win, geometry, parent=None):
+    if win is None or not geometry:
+        return False
+    try:
+        win.geometry(geometry)
+    except Exception:
+        return False
+    try:
+        win.update_idletasks()
+    except Exception:
+        pass
+    try:
+        win.state("normal")
+    except Exception:
+        pass
+    return bring_window_to_front(win, parent)
+
+
+def _show_persistent_window(owner, attr_name, factory, key, *, refresh=None, parent=None):
+    win = getattr(owner, attr_name, None)
+    exists = False
+    try:
+        exists = win is not None and win.winfo_exists()
+    except Exception:
+        exists = False
+    if exists:
+        if callable(refresh):
+            try:
+                refresh(win)
+            except TypeError:
+                try:
+                    refresh()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        bring_window_to_front(win, parent or owner)
+        return win
+    try:
+        setattr(owner, attr_name, None)
+    except Exception:
+        pass
+    win = factory()
+    setattr(owner, attr_name, win)
+    geometry = _window_geometry_from_positions(getattr(owner.options, "window_positions", {}), key)
+    if geometry:
+        _set_window_geometry(win, geometry, parent or owner)
+    else:
+        center_window(win, parent or owner)
+        bring_window_to_front(win, parent or owner)
+    return win
+
+
+def _collect_window_geometry(win, fallback_geometry=""):
+    try:
+        if win is None or not win.winfo_exists():
+            return _parse_geometry_string(fallback_geometry)
+    except Exception:
+        return _parse_geometry_string(fallback_geometry)
+    try:
+        win.update_idletasks()
+    except Exception:
+        pass
+    try:
+        geometry = win.geometry()
+    except Exception:
+        geometry = ""
+    parsed = _parse_geometry_string(geometry)
+    if parsed is not None:
+        width, height, x, y = parsed
+        if x is None or y is None:
+            try:
+                x = win.winfo_x()
+                y = win.winfo_y()
+            except Exception:
+                pass
+        return width, height, x, y
+    return _parse_geometry_string(fallback_geometry)
+
+
 def _template_file_dialog(owner, dialog_func, **kwargs):
     kwargs.setdefault("parent", owner)
     parent = getattr(owner, "master_app", None) or owner
@@ -7631,11 +7863,11 @@ def show_auto_element_identification(self):
     return AutoElementIdentificationWindow(self)
 
 def show_saha_boltzmann(self):
-    self.saha_window = show_existing_or_create(self, "saha_window", lambda: SahaBoltzmannWindow(self), parent=self)
+    self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self)
     return self.saha_window
 
 def show_cf_libs(self):
-    self.cflibs_window = show_existing_or_create(self, "cflibs_window", lambda: CFLibsWindow(self), parent=self)
+    self.cflibs_window = _show_persistent_window(self, "cflibs_window", lambda: CFLibsWindow(self), "CFLIBS", parent=self)
     return self.cflibs_window
 
 def show_sac_window(self):
@@ -7758,7 +7990,7 @@ _RETRO_METHODS = [
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_grid, toggle_log,
     toggle_labels, smooth_main_spectrum,
-    convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu,
+    convert_nm_to_angstrom, load_template_from_menu, template_info_from_menu, save_window_positions, load_window_positions,
     close_template_from_menu, clear_template_data, invalidate_cflibs_results, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     full_y_main_visible_x,

@@ -42,6 +42,7 @@ General principles:
 - LogX/LogY persistence.
 - Background colour persistence.
 - Last directory persistence.
+- Window position save/load persistence for the main window and the principal analysis/template windows.
 - Git repository created.
 - Codex development environment configured.
 
