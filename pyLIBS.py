@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pyLIBS Python ver. 1.0.0
+pyLIBS Python ver. 1.0.1
 Originally developed as LIBS++ by Vincenzo Palleschi and coworkers,
 © 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 import csv
 from bisect import bisect_right
 from datetime import datetime
+import logging
 import math
 import os
 import re
@@ -112,10 +113,12 @@ try:
     import matplotlib
     matplotlib.use("TkAgg")
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+    from matplotlib.colors import to_hex as _matplotlib_to_hex
     from matplotlib.figure import Figure
 except Exception:
     Figure = None
     FigureCanvasTkAgg = None
+    _matplotlib_to_hex = None
 
 
 @dataclass
@@ -162,7 +165,7 @@ class AppOptions:
     view_grid_y: bool = True
     view_log_x: bool = False
     view_log_y: bool = False
-    background_color: str = "white"
+    background_color: str = "#ffffff"
     ini_file: str = "pyLIBS.ini"
     window_positions: dict[str, str] = field(default_factory=dict)
 
@@ -5067,44 +5070,68 @@ class RetroFitManagerWindow(tk.Toplevel):
             return None
         return min(xs), max(xs)
 
-    def _expand_manual_window_to_points(self, group, min_points, max_retries=8):
+    def _is_too_few_fit_points_error(self, message):
+        text = str(message or "").lower()
+        return (
+            "too few" in text
+            or "not enough" in text
+            or ("number of func parameters" in text and "must not exceed" in text)
+            or ("input vector length" in text and "must not exceed" in text)
+        )
+
+    def _at_full_x_range(self, tol=1e-12):
+        data_limits = self._data_x_limits()
+        if not data_limits or not getattr(self.master_app, "ax", None):
+            return True
+        data_min, data_max = data_limits
+        lo, hi = sorted(self.master_app.ax.get_xlim())
+        span = max(abs(data_max - data_min), 1.0)
+        eps = tol * span
+        return lo <= data_min + eps and hi >= data_max - eps
+
+    def _expand_current_window_50(self):
+        data_limits = self._data_x_limits()
+        if not data_limits or not getattr(self.master_app, "ax", None):
+            return False
+        if self._at_full_x_range():
+            return False
+        data_min, data_max = data_limits
+        xmin, xmax = self.master_app.ax.get_xlim()
+        old_limits = tuple(sorted((xmin, xmax)))
+        current_width = abs(xmax - xmin)
+        full_width = data_max - data_min
+        if current_width <= 0 or full_width <= 0:
+            return False
+        center = (xmin + xmax) / 2.0
+        new_width = min(current_width * 1.5, full_width)
+        new_xmin = center - new_width / 2.0
+        new_xmax = center + new_width / 2.0
+        if new_xmin < data_min:
+            new_xmin = data_min
+            new_xmax = min(data_max, data_min + new_width)
+        if new_xmax > data_max:
+            new_xmax = data_max
+            new_xmin = max(data_min, data_max - new_width)
+        new_limits = tuple(sorted((new_xmin, new_xmax)))
+        if new_limits == old_limits:
+            return False
+        self.master_app.clear_fit_artists()
+        self.master_app.ax.set_xlim(new_xmin, new_xmax)
+        self.master_app.full_y_main_visible_x()
+        self.master_app.canvas.draw_idle()
+        self.master_app._update_xscroll()
+        return True
+
+    def _expand_manual_window_to_points(self, group, min_points, max_retries=20):
         expanded = False
         retries = 0
         point_count = self._current_fit_point_count()
-        data_limits = self._data_x_limits()
-        center = self._group_center(group)
-        while point_count < min_points and data_limits and retries < max_retries:
-            lo, hi = self.master_app.ax.get_xlim()
-            current_width = abs(hi - lo)
-            if current_width <= 0:
-                current_width = max(self._manual_delta_min() * 2.0, 1e-9)
-            deficit_factor = min_points / max(point_count, 1)
-            expansion_factor = max(deficit_factor * 1.10, 1.25)
-            new_width = current_width * expansion_factor
-            data_min, data_max = data_limits
-            full_width = data_max - data_min
-            if full_width <= 0:
+        while point_count < min_points and retries < max_retries:
+            if not self._expand_current_window_50():
                 break
-            new_width = min(new_width, full_width)
-            new_lo = center - new_width / 2.0
-            new_hi = center + new_width / 2.0
-            if new_lo < data_min:
-                new_lo = data_min
-                new_hi = min(data_max, data_min + new_width)
-            if new_hi > data_max:
-                new_hi = data_max
-                new_lo = max(data_min, data_max - new_width)
-            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
-            self.master_app.clear_fit_artists()
-            self.master_app.ax.set_xlim(new_lo, new_hi)
-            self.master_app.full_y_main_visible_x()
-            self.master_app.canvas.draw_idle()
-            self.master_app._update_xscroll()
             expanded = True
             retries += 1
             point_count = self._current_fit_point_count()
-            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
-                break
         return point_count, expanded, retries
 
     def _line_overrides_from_editor(self, lines):
@@ -5232,7 +5259,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         extra_retries = 0
         point_count = self._current_fit_point_count()
         min_points = self._minimum_fit_points(fit_lines)
-        while point_count < min_points and extra_retries < 8:
+        while point_count < min_points and extra_retries < 20:
             old_count = point_count
             point_count, expanded, retries_used = self._expand_manual_window_to_points(group, min_points)
             expanded_for_visible = expanded_for_visible or expanded
@@ -5259,6 +5286,22 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set(report)
             self.master_app.status(report)
         ok, message, results = self._fit_manual_group(fit_lines)
+        while not ok and self._is_too_few_fit_points_error(message) and extra_retries < 20:
+            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
+            if not self._expand_current_window_50():
+                break
+            extra_retries += 1
+            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
+                break
+            fit_lines = self._visible_template_lines() or list(group)
+            point_count = self._current_fit_point_count()
+            report = (
+                f"{mode_label}: expanded window, "
+                f"fitting {len(fit_lines)} line(s) using {point_count} points"
+            )
+            self.msg_var.set(report)
+            self.master_app.status(report)
+            ok, message, results = self._fit_manual_group(fit_lines)
         if not ok:
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit failed: {message}")
@@ -5315,11 +5358,33 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.msg_var.set(report)
         self.master_app.status(report)
         if point_count < min_points:
-            message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
-            self.msg_var.set(f"{report}; {message}")
-            _showerror(self, "Single Fit", f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
-            return
+            point_count, expanded, retries = self._expand_manual_window_to_points(fit_lines, min_points)
+            if expanded:
+                fit_lines = self._visible_template_lines() or fit_lines
+                min_points = self._minimum_fit_points(fit_lines)
+                report = f"Single Fit: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
+                self.msg_var.set(report)
+                self.master_app.status(report)
+            if point_count < min_points:
+                message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+                self.msg_var.set(f"{report}; {message}")
+                _showerror(self, "Single Fit", f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
+                return
         ok, message, results = self._fit_manual_group(fit_lines)
+        retries = 0
+        while not ok and self._is_too_few_fit_points_error(message) and retries < 20:
+            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
+            if not self._expand_current_window_50():
+                break
+            retries += 1
+            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
+                break
+            fit_lines = self._visible_template_lines() or fit_lines
+            point_count = self._current_fit_point_count()
+            report = f"Single Fit: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
+            self.msg_var.set(report)
+            self.master_app.status(report)
+            ok, message, results = self._fit_manual_group(fit_lines)
         if not ok:
             self.msg_var.set(f"{report}; Fit failed: {message}")
             _showerror(self, "Single Fit", f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
@@ -5416,6 +5481,25 @@ def _view_bool(value, default=False):
     return bool(default)
 
 
+def _background_color(value, default="#ffffff"):
+    """Return a Matplotlib/Tk-compatible background colour, preferably #rrggbb."""
+    text = str(value or "").strip()
+    if not text:
+        return default
+    if _matplotlib_to_hex is not None:
+        try:
+            return _matplotlib_to_hex(text)
+        except ValueError:
+            return default
+        except Exception:
+            pass
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", text):
+        return text.lower()
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", text):
+        return "#" + "".join(ch * 2 for ch in text[1:].lower())
+    return default
+
+
 class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -5439,7 +5523,8 @@ class MainWindow(tk.Tk):
         self.view_grid_y = _view_bool(getattr(self.options, "view_grid_y", True), True)
         self.view_log_x = bool(getattr(self.options, "view_log_x", False))
         self.view_log_y = bool(getattr(self.options, "view_log_y", False))
-        self.plot_background = getattr(self.options, "background_color", "white") or "white"
+        self.plot_background = _background_color(getattr(self.options, "background_color", "#ffffff"), "#ffffff")
+        self.options.background_color = self.plot_background
         self.fit_overlay: Optional[tuple[list[float], list[float]]] = None
         self.last_cflibs_rows: list[dict] = []
         self.last_halpha_result: Optional[dict] = None
@@ -5753,7 +5838,7 @@ class MainWindow(tk.Tk):
             except Exception:
                 old_xlim = old_ylim = None
         self.ax.clear(); self.update_axis_labels()
-        self.ax.set_facecolor(getattr(self, "plot_background", "white"))
+        self.ax.set_facecolor(_background_color(getattr(self, "plot_background", "#ffffff"), "#ffffff"))
         try:
             self.ax.set_xscale("log" if getattr(self, "view_log_x", False) else "linear", nonpositive="clip")
         except TypeError:
@@ -5765,20 +5850,16 @@ class MainWindow(tk.Tk):
         for spine in self.ax.spines.values():
             spine.set_linewidth(1.2)
         self.ax.tick_params(direction="in", length=5, width=1.0)
-        self.ax.xaxis.grid(
-            _view_bool(getattr(self, "view_grid_x", True), True),
-            which="major",
-            linestyle="--",
-            linewidth=0.5,
-            alpha=0.5
-        )
-        self.ax.yaxis.grid(
-            _view_bool(getattr(self, "view_grid_y", True), True),
-            which="major",
-            linestyle="--",
-            linewidth=0.5,
-            alpha=0.5
-        )
+        grid_x = _view_bool(getattr(self, "view_grid_x", True), True)
+        grid_y = _view_bool(getattr(self, "view_grid_y", True), True)
+        if grid_x:
+            self.ax.xaxis.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.5)
+        else:
+            self.ax.xaxis.grid(False)
+        if grid_y:
+            self.ax.yaxis.grid(True, which="major", linestyle="--", linewidth=0.5, alpha=0.5)
+        else:
+            self.ax.yaxis.grid(False)
         label_bbox = dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1)
         for sp in self.spectra:
             if sp.visible and sp.x:
@@ -6089,7 +6170,6 @@ def build_retro_menu(self):
     _add_menu_checkbutton(self, view_menu, shortcut_items, "GridY", lambda: self.toggle_grid(axis="y"), self.view_grid_y_var, "Ctrl+Alt+Y", "<Control-Alt-y>", "grid_xy.png")
     _add_menu_checkbutton(self, view_menu, shortcut_items, "LogX", lambda: self.toggle_log(axis="x"), self.view_log_x_var, "Ctrl+Alt+G", "<Control-Alt-g>", "log_x.png")
     _add_menu_checkbutton(self, view_menu, shortcut_items, "LogY", lambda: self.toggle_log(axis="y"), self.view_log_y_var, "Ctrl+Alt+L", "<Control-Alt-l>", "log_y.png")
-    _add_menu_checkbutton(self, view_menu, shortcut_items, "Show Labels", self.toggle_labels, None, "Ctrl+Shift+W", "<Control-Shift-W>", "")
     view_menu.add_separator()
     _add_menu_command(self, view_menu, shortcut_items, "Auto X", self.full_x, "", "", "zoom_x_out.png")
     _add_menu_command(self, view_menu, shortcut_items, "Auto Y", self.full_y, "", "", "zoom_y_out.png")
@@ -6139,7 +6219,6 @@ def build_retro_menu(self):
     self.menu_shortcut_conflicts = [
         "Ctrl+A: kept File > Append; Edit > Show Active Spectra uses Ctrl+Shift+A.",
         "Ctrl+O: kept File > Open; Edit > Options uses Ctrl+Alt+O.",
-        "Ctrl+W: kept Edit > Swap Spectra; View > Show Labels uses Ctrl+Shift+W.",
     ]
     _bind_menu_shortcuts(self, shortcut_items)
 
@@ -6325,13 +6404,13 @@ def copy_plot(self):
 
 def change_background(self):
     try:
-        initial = getattr(self, "plot_background", "white")
+        initial = _background_color(getattr(self, "plot_background", "#ffffff"), "#ffffff")
         _rgb, color = colorchooser.askcolor(color=initial, title="Change spectrum background")
     except Exception:
         color = None
     if color and hasattr(self, "ax"):
-        self.plot_background = color
-        self.options.background_color = color
+        self.plot_background = _background_color(color, "#ffffff")
+        self.options.background_color = self.plot_background
         self.redraw(preserve_view=True)
         self.status(f"Spectrum background: {color}")
 
@@ -6671,10 +6750,10 @@ def on_close(self):
         self.options.view_grid_y = _view_bool(getattr(self, "view_grid_y", True), True)
         self.options.view_log_x = bool(getattr(self, "view_log_x", False))
         self.options.view_log_y = bool(getattr(self, "view_log_y", False))
-        self.options.background_color = getattr(self, "plot_background", "white") or "white"
+        self.options.background_color = _background_color(getattr(self, "plot_background", "#ffffff"), "#ffffff")
         save_pylibs_ini(self.options)
-    except Exception:
-        pass
+    except Exception as e:
+        logging.warning("Could not save pyLIBS.ini on close: %s", e, exc_info=True)
     self.destroy()
 
 # ---------------------------------------------------------------------------
