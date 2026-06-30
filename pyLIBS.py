@@ -3385,7 +3385,8 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self._stark_db_warning_shown = False
         top = ttk.Frame(self)
         top.pack(fill="x", padx=6, pady=5)
-        ttk.Button(top, text="Apply SAC", command=self.apply_sac).pack(side="left")
+        self.apply_sac_button = ttk.Button(top, text="Apply SAC", command=self.apply_sac)
+        self.apply_sac_button.pack(side="left")
         ttk.Button(top, text="Close", command=self.close).pack(side="left", padx=4)
         self.summary_var = tk.StringVar(value="Ready")
         ttk.Label(top, textvariable=self.summary_var).pack(side="right", padx=6)
@@ -3408,11 +3409,17 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.close)
         fit_toplevel_to_content(self, min_width=560, min_height=360, max_width_fraction=0.55, max_height_fraction=0.60)
         center_window(self, master)
+        self._update_apply_sac_button()
         self.lift(master)
         try:
             self.focus_force()
         except Exception:
             self.focus_set()
+
+    def _update_apply_sac_button(self):
+        state = bool(getattr(self.master_app, "apply_sac_correction", False))
+        if hasattr(self, "apply_sac_button"):
+            self.apply_sac_button.config(text="Remove SAC" if state else "Apply SAC")
 
     def _assigned_lines(self):
         return [line for line in getattr(self.master_app, "template_lines", []) or [] if getattr(line, "specie", "") and getattr(line, "ion", 0)]
@@ -3570,6 +3577,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 line.sa_stark_width,
             )
             self.tree.insert("", "end", iid=str(idx), values=self._line_values(line))
+        self._update_apply_sac_button()
         self.summary_var.set(f"{len(lines)} template line(s)")
         if stark_conn is not None:
             try:
@@ -3646,6 +3654,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         msg = f"SAC applied to {enabled_rows} plot point(s)" if state else "SAC removed from plots"
         self.summary_var.set(msg)
         self.master_app.status(msg)
+        self._update_apply_sac_button()
         for attr in ("saha_window", "cflibs_window"):
             win = getattr(self.master_app, attr, None)
             try:
