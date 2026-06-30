@@ -2451,7 +2451,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         left = ttk.Frame(top)
         left.pack(side="left")
         ttk.Button(left, text="Compute Plot", command=self.compute).pack(side="left")
-        ttk.Button(left, text="CF-LIBS", command=self.master_app.show_cflibs).pack(side="left", padx=(12, 3))
+        ttk.Button(left, text="CF-LIBS", command=self.open_cflibs).pack(side="left", padx=(12, 3))
         self.mode_var = tk.StringVar(value="Mean temperature")
         ttk.Label(left, text="Initial kT (eV)").pack(side="left", padx=(12, 3))
         self.initial_kt_var = tk.StringVar(value="1")
@@ -2460,7 +2460,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         right.pack(side="right", fill="x", expand=True)
         self.summary_var = tk.StringVar(value="Ready")
         ttk.Label(right, textvariable=self.summary_var, width=38).pack(side="left", padx=(12, 8), fill="x", expand=True)
-        ttk.Button(right, text="Check SA", command=self.master_app.show_sac_check).pack(side="right")
+        ttk.Button(right, text="Check SA", command=self.open_sac_check).pack(side="right")
         cols=("use", "element", "lines", "kT eV", "q", "Z I", "Z II")
         self.tree=ttk.Treeview(self, columns=cols, show="headings")
         for c in cols:
@@ -2786,6 +2786,16 @@ class SahaBoltzmannWindow(tk.Toplevel):
         self.master_app.notify_template_changed(redraw=True)
         self.master_app.status("Point reactivated" if activate else "Point excluded from Saha-Boltzmann fit")
         self.compute()
+
+    def open_cflibs(self):
+        win = self.master_app.show_cflibs()
+        bring_window_to_front(win, self)
+        return win
+
+    def open_sac_check(self):
+        win = self.master_app.show_sac_check()
+        bring_window_to_front(win, self)
+        return win
 
     def _nearest_plot_point(self, event, max_pixels=12.0):
         if not self.plot_points or event.x is None or event.y is None:
