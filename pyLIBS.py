@@ -1119,7 +1119,8 @@ class TraceLinesWindow(tk.Toplevel):
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=6)
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
         self.species_var = tk.StringVar(value="Si")
-        ttk.Entry(top, textvariable=self.species_var, width=10).grid(row=0, column=1, sticky="w", padx=3)
+        species_entry = ttk.Entry(top, textvariable=self.species_var, width=10)
+        species_entry.grid(row=0, column=1, sticky="w", padx=3)
         self.mode_var = tk.StringVar(value="Both")
         ttk.Label(top, text="Mode").grid(row=0, column=2, sticky="w", padx=(8, 2))
         for c, mode in enumerate(("I", "II", "Both", "All"), start=3):
@@ -1138,6 +1139,8 @@ class TraceLinesWindow(tk.Toplevel):
             self.tree.heading(c, text=c); self.tree.column(c, width=72, anchor="center")
         self.tree.pack(fill="both", expand=True)
         tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
+        self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
+        species_entry.bind("<Double-Button-1>", lambda event: self.trace())
         self.refresh()
         center_window(self, master)
 
@@ -1198,6 +1201,20 @@ class TraceLinesWindow(tk.Toplevel):
         n = self.master_app.assign_traced_lines()
         self.refresh()
         self.info_var.set(f"Assign: {n} template lines assigned within Range = {self.master_app.options.search_range} Å.")
+
+    def _on_tree_double_click(self, event=None):
+        item = self.tree.identify_row(event.y) if event else self.tree.focus()
+        if not item:
+            return
+        self.tree.selection_set(item)
+        self.tree.focus(item)
+        values = self.tree.item(item, "values")
+        if not values:
+            return
+        wavelength = safe_float(values[0], None)
+        if wavelength is None:
+            return
+        self.master_app.goto_wavelength(wavelength)
 
     def clear(self):
         self.master_app.trace_markers = []
@@ -4575,7 +4592,7 @@ class RetroTemplateManager(tk.Toplevel):
         "error_inte", "acc"
     )
     display_columns = (
-        "wavelen", "specie", "ion", "asswavelen", "inte", "ei", "wg", "wl",
+        "wavelen", "specie", "ion", "asswavelen", "inte", "wg", "wl", "ei",
         "ek", "aki", "gk", "gi", "fitwavelen", "templint", "error_inte", "acc"
     )
 
