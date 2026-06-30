@@ -2858,7 +2858,21 @@ def _template_line_center(line: TemplateLine) -> float:
 
 
 def _template_line_intensity(line: TemplateLine) -> float:
-    return line.inte if getattr(line, "inte", 0.0) > 0.0 else getattr(line, "templint", 0.0)
+    if _template_line_has_fit_error(line):
+        return 0.0
+    inte = safe_float(getattr(line, "inte", 0.0), 0.0)
+    return inte if inte > 0.0 else safe_float(getattr(line, "templint", 0.0), 0.0)
+
+
+def _is_template_error_value(value) -> bool:
+    return isinstance(value, str) and value.strip().upper() == "ERROR"
+
+
+def _template_line_has_fit_error(line: TemplateLine) -> bool:
+    return any(
+        _is_template_error_value(getattr(line, attr, ""))
+        for attr in ("inte", "wl", "wg", "error_inte", "fitinte")
+    )
 
 
 def _sac_factor_for_line(line: TemplateLine) -> Optional[float]:
@@ -2925,6 +2939,8 @@ def libspp_boltzmann_groups_with_skips(
     """
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
+        if _template_line_has_fit_error(t):
+            continue
         specie = str(getattr(t, "specie", "") or "").strip().capitalize()
         ion = safe_int(getattr(t, "ion", 0), 0)
         aki = safe_float(getattr(t, "aki", 0.0), 0.0)
@@ -2987,6 +3003,9 @@ def libspp_saha_boltzmann_groups(
     skipped = 0
     metadata_cache: dict[str, dict] = {}
     for idx, t in enumerate(app.template_lines, start=1):
+        if _template_line_has_fit_error(t):
+            skipped += 1
+            continue
         specie = str(getattr(t, "specie", "") or "").strip().capitalize()
         ion = safe_int(getattr(t, "ion", 0), 0)
         aki = safe_float(getattr(t, "aki", 0.0), 0.0)
@@ -3264,6 +3283,8 @@ def _bisect_root(func, x1: float, x2: float, xacc: float = 1e-10, max_iter: int 
 
 def _experimental_lorentzian_width(line: TemplateLine, instrumental_width: float) -> float:
     """Unit21 width correction: wtot = sqrt((wl/2)^2 + wg^2) + wl/2; wl = wtot - inst^2/wtot."""
+    if _template_line_has_fit_error(line):
+        return 0.0
     wl = abs(line.wl) if line.wl else 0.0
     wg = abs(line.wg) if line.wg else 0.0
     wtot = math.sqrt((wl / 2.0) ** 2 + wg ** 2) + wl / 2.0
@@ -3292,6 +3313,8 @@ def compute_sac_for_template_lines(app: "MainWindow", kt: float, ne: float, path
     sl2 = 0.832554611
     pi = 3.1415
     for idx, t in enumerate(app.template_lines, start=1):
+        if _template_line_has_fit_error(t):
+            continue
         if not t.specie or not t.ion or not t.aki or t.aki == -1 or not t.gk or not t.gi:
             continue
         wave = t.asswavelen or t.fitwavelen or t.wavelen
@@ -3461,7 +3484,10 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             self.apply_sac_button.config(text="Remove SAC" if state else "Apply SAC")
 
     def _assigned_lines(self):
-        return [line for line in getattr(self.master_app, "template_lines", []) or [] if getattr(line, "specie", "") and getattr(line, "ion", 0)]
+        return [
+            line for line in getattr(self.master_app, "template_lines", []) or []
+            if getattr(line, "specie", "") and getattr(line, "ion", 0) and not _template_line_has_fit_error(line)
+        ]
 
     def _stark_db_path(self):
         return resource_path("Stark.db")
@@ -5082,12 +5108,14 @@ class RetroFitManagerWindow(tk.Toplevel):
             else:
                 lam.set(f"{abs(center):.6g}")
                 flam.set(option_fix_wavelength or center < 0)
-                wg_value = option_fixed_wg if option_fix_wg else (abs(t.wg) if t.wg else option_fixed_wg)
-                wl_value = option_fixed_wl if option_fix_wl else (abs(t.wl) if t.wl else option_fixed_wl)
+                template_wg = safe_float(getattr(t, "wg", 0.0), 0.0)
+                template_wl = safe_float(getattr(t, "wl", 0.0), 0.0)
+                wg_value = option_fixed_wg if option_fix_wg else (abs(template_wg) if template_wg else option_fixed_wg)
+                wl_value = option_fixed_wl if option_fix_wl else (abs(template_wl) if template_wl else option_fixed_wl)
                 wg.set(f"{wg_value:.6g}")
                 wl.set(f"{wl_value:.6g}")
-                fwg.set(option_fix_wg or safe_float(getattr(t, "wg", 0.0), 0.0) < 0)
-                fwl.set(option_fix_wl or safe_float(getattr(t, "wl", 0.0), 0.0) < 0)
+                fwg.set(option_fix_wg or template_wg < 0)
+                fwl.set(option_fix_wl or template_wl < 0)
             self._color_row(r)
         if len(lines) > 10:
             self.msg_var.set("Too many lines for fitting (> 10)")
@@ -5249,10 +5277,15 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def prepare_initial_region(self, preserve_user_values=False):
         if self.automatic:
-            self.manual_fit_lines = self._manual_template_lines_source()
+            sorted_rows = self._get_template_rows_sorted_by_wavelength()
+            self.manual_fit_lines = []
             self.manual_fit_index = 0
-            group, _ = self._group_from_index(0)
+            group = []
+            if sorted_rows:
+                group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, 0, "next")
+                self.manual_fit_current_indices = list(indices)
             if group:
+                self.manual_fit_lines = list(group)
                 self._show_group_region(group, preserve_user_values=preserve_user_values)
             return
         self._set_visible_fit_lines(self._visible_template_lines(), preserve_user_values=preserve_user_values)
@@ -5591,23 +5624,24 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_stop = False
         if self.automatic:
             if not self.manual_fit_lines:
-                self.manual_fit_lines = self._manual_template_lines_source()
-            if not self.manual_fit_lines:
-                self.msg_var.set("No lines for fitting")
-                _showinfo(self, "Fit", "No template lines to fit.")
-                return
+                sorted_rows = self._get_template_rows_sorted_by_wavelength()
+                if not sorted_rows:
+                    self.msg_var.set("No lines for fitting")
+                    _showinfo(self, "Fit", "No template lines to fit.")
+                    return
             self._run_automatic_fit()
             return
         ok, _fit_lines = self._fit_current_visible_window("Manual Fit", allow_previous_visible_fallback=False)
         if ok:
             self.progress["value"] = self._manual_visible_progress()
 
-    def _fit_current_visible_window(self, mode_label, allow_previous_visible_fallback=True):
+    def _fit_current_visible_window(self, mode_label, allow_previous_visible_fallback=True, show_errors=True):
         fit_lines = self._visible_template_lines()
         self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
         if not fit_lines:
             self.msg_var.set(f"{mode_label}: no template lines are visible in the current window")
-            _showinfo(self, mode_label, "No template lines are visible in the current spectrum window.")
+            if show_errors:
+                _showinfo(self, mode_label, "No template lines are visible in the current spectrum window.")
             return False, []
         point_count = self._current_fit_point_count()
         min_points = self._minimum_fit_points(fit_lines)
@@ -5624,7 +5658,8 @@ class RetroFitManagerWindow(tk.Toplevel):
                 elif not allow_previous_visible_fallback:
                     message = "No visible template lines in the current Manual Fit window."
                     self.msg_var.set(f"{report}; {message}")
-                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+                    if show_errors:
+                        _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
                     return False, []
                 self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
                 min_points = self._minimum_fit_points(fit_lines)
@@ -5634,7 +5669,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             if point_count < min_points:
                 message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
                 self.msg_var.set(f"{report}; {message}")
-                _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
+                if show_errors:
+                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
                 return False, fit_lines
         ok, message, results = self._fit_manual_group(fit_lines)
         retries = 0
@@ -5651,7 +5687,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             elif not allow_previous_visible_fallback:
                 message = "No visible template lines in the current Manual Fit window."
                 self.msg_var.set(f"{report}; {message}")
-                _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+                if show_errors:
+                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
                 return False, []
             self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
             point_count = self._current_fit_point_count()
@@ -5661,7 +5698,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             ok, message, results = self._fit_manual_group(fit_lines)
         if not ok:
             self.msg_var.set(f"{report}; Fit failed: {message}")
-            _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
+            if show_errors:
+                _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
             return False, fit_lines
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
         self.populate_results(results)
@@ -5684,17 +5722,51 @@ class RetroFitManagerWindow(tk.Toplevel):
             return 0
         return min(100, int(100 * (max(positions) + 1) / len(sorted_rows)))
 
+    def _mark_fit_error(self, lines):
+        for line in list(lines or []):
+            line.inte = "ERROR"
+            line.wl = "ERROR"
+            line.wg = "ERROR"
+            line.error_inte = "ERROR"
+            try:
+                line.fitinte = "ERROR"
+            except Exception:
+                pass
+        try:
+            self.master_app.notify_template_changed(redraw=False)
+        except Exception:
+            pass
+
     def _run_automatic_fit(self):
-        total = len(self.manual_fit_lines)
+        sorted_rows = self._get_template_rows_sorted_by_wavelength()
+        if not sorted_rows:
+            self.msg_var.set("No lines for fitting")
+            return
+        total = len(sorted_rows)
         self.msg_var.set("Starting Automatic Fit....")
-        while self.manual_fit_index < total and not self.manual_fit_stop:
-            group, next_index = self._group_from_index(self.manual_fit_index)
+        if not self.manual_fit_lines:
+            group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, 0, "next")
             if not group:
-                break
-            if not self._fit_group_once(group, "Automatic Fit"):
+                self.msg_var.set("No lines for fitting")
                 return
-            self.manual_fit_index = next_index
-            self.progress["value"] = min(100, int(100 * self.manual_fit_index / total))
+            self.manual_fit_lines = list(group)
+            self.manual_fit_current_indices = list(indices)
+            self._show_group_region(group, preserve_user_values=True)
+        while not self.manual_fit_stop:
+            visible_lines = self._visible_template_lines()
+            if not visible_lines:
+                break
+            ok, fit_lines = self._fit_current_visible_window(
+                "Automatic Fit",
+                allow_previous_visible_fallback=False,
+                show_errors=False,
+            )
+            if not ok:
+                self._mark_fit_error(fit_lines or visible_lines)
+                self.msg_var.set(f"Automatic Fit: ERROR marked for {len(fit_lines or visible_lines)} line(s)")
+            self.progress["value"] = self._manual_visible_progress()
+            if not self._move_manual_region("next", preserve_user_values=True):
+                break
             self.update_idletasks()
         if self.manual_fit_stop:
             self.msg_var.set("Automatic Fit stopped")
@@ -5865,7 +5937,7 @@ class MainWindow(tk.Tk):
         e=tk.Menu(m,tearoff=False); e.add_command(label="Options",command=self.show_options); m.add_cascade(label="Edit",menu=e)
         u=tk.Menu(m,tearoff=False); u.add_command(label="Instrument response",command=self.show_response_window); u.add_command(label="Apply response now",command=self.apply_response_now); u.add_command(label="Vertical shift",command=lambda:VerticalShiftWindow(self)); u.add_command(label="Smooth main",command=self.smooth_main); u.add_command(label="nm → Å main",command=self.nm_to_a_main); m.add_cascade(label="Utilities",menu=u)
         t=tk.Menu(m,tearoff=False); t.add_command(label="Template Manager",command=self.show_template); t.add_command(label="Line Identification",command=self.show_line_identification); t.add_command(label="Element Locator",command=lambda:ElementLocatorWindow(self)); t.add_command(label="Auto Element Identification",command=lambda:AutoElementIdentificationWindow(self)); m.add_cascade(label="Template",menu=t)
-        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Single Fit",command=self.show_single_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
+        a=tk.Menu(m,tearoff=False); a.add_command(label="Active Spectra",command=self.show_active_spectra); a.add_command(label="Trace Lines",command=self.show_trace_lines); a.add_command(label="Batch / Statistics",command=lambda:BatchStatisticsWindow(self)); a.add_command(label="Manual Fit",command=self.show_retro_fit_manager); a.add_command(label="Auto Fit",command=self.show_auto_fit_manager); a.add_command(label="Ne from H-alpha",command=self.show_ne_halpha); a.add_command(label="SAC factors",command=self.show_sac); a.add_command(label="Saha-Boltzmann",command=self.show_saha); a.add_command(label="CF-LIBS",command=self.show_cflibs); a.add_command(label="Standard correction / OPC",command=self.show_standard_correction); m.add_cascade(label="Analyse",menu=a)
         h=tk.Menu(m,tearoff=False); h.add_command(label="Manual...",command=self.show_manual); h.add_separator(); h.add_command(label="About pyLIBS...",command=self.show_about); m.add_cascade(label="Help",menu=h)
         self.config(menu=m)
 
@@ -6500,7 +6572,6 @@ def build_retro_menu(self):
     analysis_menu.add_separator()
     _add_menu_command(self, analysis_menu, shortcut_items, "Calculate Ne from Ha", self.show_ne_halpha, "", "", "H_alpha.png")
     _add_menu_command(self, analysis_menu, shortcut_items, "Manual Fit", self.show_retro_fit_manager, "", "", "fit_manual.png")
-    _add_menu_command(self, analysis_menu, shortcut_items, "Single Fit", self.show_single_fit_manager, "", "", "fit_single.png")
     _add_menu_command(self, analysis_menu, shortcut_items, "Auto Fit", self.show_auto_fit_manager, "", "", "fit_auto.png")
     _add_menu_command(self, analysis_menu, shortcut_items, "Saha Boltzmann plot", self.show_saha_boltzmann, "", "", "calculator.png")
     _add_menu_command(self, analysis_menu, shortcut_items, "CF LIBS", self.show_cf_libs, "", "", "database.png")
@@ -6519,6 +6590,84 @@ def build_retro_menu(self):
         "Ctrl+O: kept File > Open; Edit > Options uses Ctrl+Alt+O.",
     ]
     _bind_menu_shortcuts(self, shortcut_items)
+
+def build_retro_toolbar(self):
+    """Build original-like toolbar order without exposing Single Fit."""
+    if hasattr(self, "retro_toolbar"):
+        return
+    from pylibs.gui.helpers import ToolbarTooltip
+    from pylibs.gui.icons import load_toolbar_icon
+
+    self.retro_toolbar = ttk.Frame(self)
+    try:
+        self.retro_toolbar.pack(side="top", fill="x", before=self.children.get("!frame"))
+    except Exception:
+        self.retro_toolbar.pack(side="top", fill="x")
+
+    buttons = [
+        ("Open", self.ask_open_spectrum),
+        ("Compare", self.compare_spectrum),
+        ("Append", self.ask_import_multiple),
+        ("Clear", self.clear_all_spectra),
+        ("Active Spectra", self.show_active_spectra),
+        ("Save", self.ask_save_spectrum),
+        ("Print", self.print_plot),
+        ("Full Y", self.full_y),
+        ("Full X", self.full_x),
+        ("Full Scale", self.full_scale),
+        ("Load Template", self.load_template_from_menu),
+        ("Show Template", self.show_template_manager),
+        ("Trace", self.show_trace_lines),
+        ("Ne from H", self.show_ne_halpha),
+        ("Autofit", self.show_auto_fit_manager),
+        ("Manual Fit", self.show_retro_fit_manager),
+        ("Saha Boltzmann", self.show_saha_boltzmann),
+        ("CF LIBS", self.show_cf_libs),
+    ]
+    icon_names = {
+        "Open": "open.png",
+        "Compare": "compare.png",
+        "Append": "append.png",
+        "Clear": "clear.png",
+        "Active Spectra": "fit.png",
+        "Save": "save.png",
+        "Print": "print.png",
+        "Full Y": "full_y.png",
+        "Full X": "full_x.png",
+        "Full Scale": "full_view.png",
+        "Load Template": "load_template.png",
+        "Show Template": "show_template.png",
+        "Trace": "trace.png",
+        "Ne from H": "H_alpha.png",
+        "Autofit": "fit_auto.png",
+        "Manual Fit": "fit_manual.png",
+        "Saha Boltzmann": "calculator.png",
+        "CF LIBS": "database.png",
+    }
+    icon_fallbacks = {
+        "Full Y": "zoom_y_out.png",
+        "Full X": "zoom_x_out.png",
+        "Autofit": "fit.png",
+        "Manual Fit": "fit.png",
+    }
+    tooltip_text = {
+        "Trace": "Trace Lines",
+        "Full Scale": "Full View",
+    }
+    self.toolbar_icons = {}
+    self.toolbar_icon_files = {}
+    self.toolbar_tooltips = []
+    self.toolbar_missing_icons = []
+    for label, cmd in buttons:
+        icon_name = icon_names.get(label)
+        image, icon_name, icon_path = load_toolbar_icon(self, label, icon_name, icon_fallbacks.get(label))
+        if image is not None:
+            button = ttk.Button(self.retro_toolbar, image=image, command=cmd)
+            button.pack(side="left", padx=1, pady=1)
+            self.toolbar_tooltips.append(ToolbarTooltip(button, tooltip_text.get(label, label)))
+        else:
+            self.toolbar_missing_icons.append(label)
+            ttk.Button(self.retro_toolbar, text=label, command=cmd).pack(side="left", padx=1, pady=1)
 
 def install_retro_ui(self):
     self.build_retro_menu()
@@ -7203,6 +7352,8 @@ def _template_field_value(raw, *, integer=False):
     text = "" if raw is None else str(raw).strip()
     if not text or text == "Empty":
         return None
+    if not integer and text.upper() == "ERROR":
+        return "ERROR"
     return safe_int(text, None) if integer else safe_float(text, None)
 
 
