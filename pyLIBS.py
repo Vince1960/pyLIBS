@@ -1644,8 +1644,9 @@ class SpectrumShiftWindow(tk.Toplevel):
             if line.asswavelen:
                 line.asswavelen += shift
             if line.fitwavelen:
-                sign = -1.0 if line.fitwavelen < 0 else 1.0
-                line.fitwavelen = sign * (abs(line.fitwavelen) + shift)
+                fitwavelen = safe_float(getattr(line, "fitwavelen", 0.0), 0.0)
+                sign = -1.0 if fitwavelen < 0 else 1.0
+                line.fitwavelen = sign * (abs(fitwavelen) + shift)
         for markers_name in ("element_markers", "trace_markers"):
             for line in getattr(self.master_app, markers_name, []):
                 line.wavelen += shift
@@ -1976,7 +1977,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             center0 = abs(t.fitwavelen) if t.fitwavelen else t.wavelen
             p0.extend([amp, center0, abs(t.wg) if t.wg else sigma0])
             # fixed parameters are represented as negative in templates.
-            if t.fitwavelen < 0:
+            if safe_float(getattr(t, "fitwavelen", 0.0), 0.0) < 0:
                 bounds_lo.extend([0, center0 - 1e-9, 1e-6])
                 bounds_hi.extend([np.inf, center0 + 1e-9, max(10.0, sigma0*20)])
             else:
@@ -2113,7 +2114,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
             p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
-            row_fix_center = bool(override.get("fix_center", False)) if override else (t.fitwavelen < 0)
+            row_fix_center = bool(override.get("fix_center", False)) if override else (safe_float(getattr(t, "fitwavelen", 0.0), 0.0) < 0)
             sigma_lo = max(abs(dx)*0.05, 1e-9)
             sigma_hi = max(width, sigma0*50.0)
             gamma_lo = max(abs(dx)*0.05, 1e-9)
@@ -4473,6 +4474,8 @@ def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
         splash.geometry(f"{w}x{h}+{x}+{y}")
         splash.lift()
         splash.attributes("-topmost", True)
+        splash.update_idletasks()
+        splash.update()
         splash.after(200, lambda: splash.attributes("-topmost", False))
         splash.after(duration_ms, splash.destroy)
         return splash
@@ -4501,6 +4504,10 @@ class RetroTemplateManager(tk.Toplevel):
         "ek", "aki", "gk", "gi", "ion", "fitwavelen", "templint",
         "error_inte", "acc"
     )
+    display_columns = (
+        "wavelen", "specie", "ion", "asswavelen", "inte", "ei", "wg", "wl",
+        "ek", "aki", "gk", "gi", "fitwavelen", "templint", "error_inte", "acc"
+    )
 
     def __init__(self, master: "MainWindow"):
         super().__init__(master)
@@ -4524,11 +4531,12 @@ class RetroTemplateManager(tk.Toplevel):
         ttk.Button(panel, text="Delete Template", command=self.delete_template).pack(side="left", padx=2)
 
         tree_frame = ttk.Frame(self)
-        self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings", height=18)
-        for c in self.columns:
+        self.tree = ttk.Treeview(tree_frame, columns=self.display_columns, show="headings", height=18)
+        for c in self.display_columns:
             self.tree.heading(c, text=c)
             self.tree.column(c, width=72, anchor="center")
         self.tree.column("specie", width=55)
+        self.tree.column("ion", width=35)
         self.tree.column("wavelen", width=80)
         self.tree.column("fitwavelen", width=80)
         self.tree.pack(fill="both", expand=True)
@@ -4543,7 +4551,7 @@ class RetroTemplateManager(tk.Toplevel):
         self.tree.delete(*self.tree.get_children())
         for i, l in enumerate(self.master_app.template_lines):
             vals = []
-            for c in self.columns:
+            for c in self.display_columns:
                 vals.append(format_template_display_value(getattr(l, c, "")))
             self.tree.insert("", "end", iid=str(i), values=vals)
         children = set(self.tree.get_children())
@@ -4941,8 +4949,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             wg.set(f"{wg_value:.6g}")
             wl.set(f"{wl_value:.6g}")
             flam.set(center < 0)
-            fwg.set(option_fix_wg or t.wg < 0)
-            fwl.set(option_fix_wl or t.wl < 0)
+            fwg.set(option_fix_wg or safe_float(getattr(t, "wg", 0.0), 0.0) < 0)
+            fwl.set(option_fix_wl or safe_float(getattr(t, "wl", 0.0), 0.0) < 0)
             self._color_row(r)
         if len(lines) > 10:
             self.msg_var.set("Too many lines for fitting (> 10)")
@@ -5512,8 +5520,9 @@ def _background_color(value, default="#ffffff"):
 class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
-        configure_retro_style(self)
         self.withdraw()
+        self._startup_splash = show_startup_splash(self, SPLASH_DURATION_MS)
+        configure_retro_style(self)
         self.title(APP_TITLE); self.geometry("1280x720")
         self.options=AppOptions()
         self.loaded_ini_path = load_pylibs_ini(self.options)
@@ -5564,7 +5573,6 @@ class MainWindow(tk.Tk):
             self.protocol("WM_DELETE_WINDOW", self.on_close)
         except Exception:
             pass
-        show_startup_splash(self)
         self.after(SPLASH_DURATION_MS, self.deiconify)
 
     def _build(self):
@@ -6632,7 +6640,17 @@ def add_template_peak_at(self, wavelength, intensity=None, refresh=True):
         intensity = y
     # update existing row if the same line is already present; otherwise append.
     tol = max(1e-6, abs(getattr(self.options, "search_range", 0.2)) * 0.02)
-    line, added = self._merge_template_line(TemplateLine(wavelen=x, inte=float(intensity or 0.0), templint=float(intensity or 0.0)), tolerance=tol)
+    line, added = self._merge_template_line(
+        TemplateLine(
+            wavelen=x,
+            templint=float(intensity or 0.0),
+            inte=None,
+            wg=None,
+            wl=None,
+            fitwavelen=None,
+        ),
+        tolerance=tol,
+    )
     self.notify_template_changed(redraw=False)
     if refresh:
         self.redraw(preserve_view=True)
@@ -7016,7 +7034,4 @@ for _m in _RETRO_METHODS:
 if __name__ == "__main__":
     root = MainWindow()
     root.install_retro_ui()
-    root.withdraw()
-    splash = show_startup_splash(root, SPLASH_SECONDS)
-    root.after(int(SPLASH_SECONDS * 1000), root.deiconify)
     root.mainloop()
