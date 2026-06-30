@@ -4953,6 +4953,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         ttk.Button(top, text="Close", command=self.close_window).pack(side="left", padx=2)
         if not self.automatic and not self.single:
             ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
+            ttk.Button(top, text="Refresh", command=self.refresh_region).pack(side="left", padx=2)
             ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
         if not self.automatic:
             ttk.Button(top, text="Show Residuals", command=self.show_residuals).pack(side="left", padx=8)
@@ -5633,6 +5634,26 @@ class RetroFitManagerWindow(tk.Toplevel):
         if ok:
             self.progress["value"] = self._manual_visible_progress()
 
+    def refresh_region(self):
+        if self.automatic:
+            return
+        visible_lines = self._visible_template_lines()
+        if not visible_lines:
+            self.manual_fit_lines = []
+            self.manual_fit_current_indices = []
+            self.msg_var.set("Manual Fit: no template lines are visible in the current window")
+            _showinfo(self, "Manual Fit", "No template lines are visible in the current spectrum window.")
+            return
+        self._display_manual_group(visible_lines, preserve_user_values=True)
+        self.manual_fit_lines = list(visible_lines)
+        self.manual_fit_index = 0
+        self.manual_fit_failed = False
+        self.populate_results([])
+        self.progress["value"] = self._manual_visible_progress()
+        lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+        self.msg_var.set(f"Manual Fit refreshed: {len(visible_lines)} visible line(s) in {lo:.4f} - {hi:.4f}")
+        self.master_app.status(self.msg_var.get())
+
     def _fit_current_visible_window(self, mode_label, allow_previous_visible_fallback=True, show_errors=True):
         fit_lines = self._visible_template_lines()
         self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
@@ -5873,7 +5894,8 @@ class MainWindow(tk.Tk):
         configure_retro_style(self)
         self.options=AppOptions()
         self.loaded_ini_path = load_pylibs_ini(self.options)
-        self.title(APP_TITLE); self.geometry(_window_geometry_from_positions(getattr(self.options, "window_positions", {}), "Main", "1280x720"))
+        self.use_saved_window_positions = False
+        self.title(APP_TITLE); self.geometry("1280x720")
         self.libs_db=LibsDatabase(self.options.libs_db_file)
         self.spectra: list[Spectrum]=[]
         self.response = None
@@ -6318,6 +6340,7 @@ class MainWindow(tk.Tk):
             "Trace",
             refresh=lambda w: w.refresh(),
             parent=self,
+            center_on_create=True,
         )
 
     def copy_atomic_line_to_template_line(self, template_line, atomic):
@@ -6411,10 +6434,10 @@ class MainWindow(tk.Tk):
             self.ax.set_xlim(wave-width,wave+width); self.canvas.draw_idle()
 
     def show_fit(self): MultiGaussianFitWindow(self)
-    def show_ne_halpha(self): self.ne_halpha_window = show_existing_or_create(self, "ne_halpha_window", lambda: NeHalphaWindow(self), parent=self)
+    def show_ne_halpha(self): self.ne_halpha_window = _show_persistent_window(self, "ne_halpha_window", lambda: NeHalphaWindow(self), "HAlpha", parent=self, center_on_create=True)
     def show_sac(self): self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
-    def show_saha(self): self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self)
-    def show_cflibs(self): self.cflibs_window = _show_persistent_window(self, "cflibs_window", lambda: CFLibsWindow(self), "CFLIBS", parent=self)
+    def show_saha(self): self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self, center_on_create=True)
+    def show_cflibs(self): self.cflibs_window = _show_persistent_window(self, "cflibs_window", lambda: CFLibsWindow(self), "CFLIBS", parent=self, center_on_create=True)
     def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_sac_check(self):
         self.sac_check_window = _show_persistent_window(
@@ -6424,6 +6447,7 @@ class MainWindow(tk.Tk):
             "ShowSA",
             refresh=lambda w: w.refresh(show_message=False),
             parent=self,
+            center_on_create=True,
         )
         try:
             self.sac_check_window.refresh(show_message=False)
@@ -6696,7 +6720,7 @@ def show_template_window(self):
         win = RetroTemplateManager(self)
         self.template_window = win
         _bind_template_window_close(self, win)
-        geometry = _window_geometry_from_positions(getattr(self.options, "window_positions", {}), "Template")
+        geometry = _saved_window_geometry(self, "Template")
         if geometry:
             _set_window_geometry(win, geometry, self)
         else:
@@ -6893,35 +6917,30 @@ def bring_window_to_front(win, parent=None):
 def _show_fit_manager(self, ref_name, automatic=False, single=False):
     key_map = {"manual_fit_window": "ManualFit", "auto_fit_window": "AutoFit"}
     key = key_map.get(ref_name)
-    if key is None:
-        win = getattr(self, ref_name, None)
+    win = getattr(self, ref_name, None)
+    try:
+        exists = win is not None and win.winfo_exists()
+    except Exception:
+        exists = False
+    if exists:
         try:
-            exists = win is not None and win.winfo_exists()
-        except Exception:
-            exists = False
-        if exists:
-            try:
-                win.refresh_content()
-            except Exception:
-                pass
-            bring_window_to_front(win, self)
-            return win
-        try:
-            setattr(self, ref_name, None)
+            win.refresh_content()
         except Exception:
             pass
-        win = RetroFitManagerWindow(self, automatic=automatic, single=single)
-        setattr(self, ref_name, win)
         bring_window_to_front(win, self)
         return win
-    return _show_persistent_window(
-        self,
-        ref_name,
-        lambda: RetroFitManagerWindow(self, automatic=automatic, single=single),
-        key,
-        refresh=lambda w: w.refresh_content(),
-        parent=self,
-    )
+    try:
+        setattr(self, ref_name, None)
+    except Exception:
+        pass
+    win = RetroFitManagerWindow(self, automatic=automatic, single=single)
+    setattr(self, ref_name, win)
+    if key:
+        geometry = _saved_window_geometry(self, key)
+        if geometry:
+            _set_window_geometry(win, geometry, self)
+    bring_window_to_front(win, self)
+    return win
 
 def swap_spectra(self):
     count = len(getattr(self, "spectra", []))
@@ -7200,6 +7219,7 @@ def save_window_positions(self):
 def load_window_positions(self):
     positions = load_window_positions_from_ini("pyLIBS.ini")
     self.options.window_positions = positions
+    self.use_saved_window_positions = True
     updated = 0
     for key, spec in WINDOW_POSITION_SPECS.items():
         attr = spec["attr"]
@@ -7581,6 +7601,7 @@ WINDOW_POSITION_SPECS = {
     "AutoFit": {"attr": "auto_fit_window", "size": (840, 540)},
     "Trace": {"attr": "trace_window", "size": (900, 460)},
     "Template": {"attr": "template_window", "size": (1280, 560)},
+    "HAlpha": {"attr": "ne_halpha_window", "size": (620, 360)},
     "SahaBoltzmann": {"attr": "saha_window", "size": (1050, 700)},
     "ShowSA": {"attr": "sac_check_window", "size": (585, 400)},
     "CFLIBS": {"attr": "cflibs_window", "size": (1100, 720)},
@@ -7668,7 +7689,13 @@ def _set_window_geometry(win, geometry, parent=None):
     return bring_window_to_front(win, parent)
 
 
-def _show_persistent_window(owner, attr_name, factory, key, *, refresh=None, parent=None):
+def _saved_window_geometry(owner, key, fallback=""):
+    if not getattr(owner, "use_saved_window_positions", False):
+        return fallback
+    return _window_geometry_from_positions(getattr(owner.options, "window_positions", {}), key, fallback)
+
+
+def _show_persistent_window(owner, attr_name, factory, key, *, refresh=None, parent=None, center_on_create=True):
     win = getattr(owner, attr_name, None)
     exists = False
     try:
@@ -7694,10 +7721,10 @@ def _show_persistent_window(owner, attr_name, factory, key, *, refresh=None, par
         pass
     win = factory()
     setattr(owner, attr_name, win)
-    geometry = _window_geometry_from_positions(getattr(owner.options, "window_positions", {}), key)
+    geometry = _saved_window_geometry(owner, key)
     if geometry:
         _set_window_geometry(win, geometry, parent or owner)
-    else:
+    elif center_on_create:
         center_window(win, parent or owner)
         bring_window_to_front(win, parent or owner)
     return win
