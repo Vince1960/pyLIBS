@@ -1533,12 +1533,18 @@ class BatchStatisticsWindow(tk.Toplevel):
             ws.append(["Nome del file", "Inte", "wg", "wl"])
             for fn in files:
                 row = results_by_file.get(fn, {}).get(idx, {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"})
-                ws.append([
+                values = [
                     Path(fn).name,
-                    row.get("Inte", "ERROR"),
-                    row.get("wg", "ERROR"),
-                    row.get("wl", "ERROR"),
-                ])
+                    _format_excel_fit_value(row.get("Inte", "")),
+                    _format_excel_fit_value(row.get("wg", "")),
+                    _format_excel_fit_value(row.get("wl", "")),
+                ]
+                ws.append(values)
+                row_num = ws.max_row
+                for col_idx in (2, 3, 4):
+                    cell = ws.cell(row=row_num, column=col_idx)
+                    if isinstance(cell.value, (int, float)):
+                        cell.number_format = "0.###"
             ws.freeze_panes = "A2"
         wb.save(filename)
 
@@ -8243,12 +8249,20 @@ def _clone_template_lines(lines):
 
 
 def _multifit_sheet_base_name(line, index):
+    specie = str(getattr(line, "specie", "") or "").strip()
+    ion = safe_int(getattr(line, "ion", 0), 0)
     asswavelen = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
     wavelen = safe_float(getattr(line, "wavelen", 0.0), 0.0)
-    if asswavelen:
-        return f"Riga_{asswavelen:g}"
-    if wavelen:
-        return f"{wavelen:g}"
+    if specie:
+        parts = [specie]
+        if ion:
+            parts.append(_roman_ion(ion))
+        parts.append(f"{asswavelen or wavelen:.6g}")
+        label = " ".join(part for part in parts if part)
+    else:
+        label = f"{wavelen:.6g}" if wavelen else ""
+    if label:
+        return label
     return f"Row_{index + 1}"
 
 
@@ -8269,6 +8283,28 @@ def _excel_safe_sheet_name(name, used_names):
         suffix += 1
     used_names.add(used_key)
     return text
+
+
+def _format_excel_fit_value(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text.upper() == "ERROR":
+            return "ERROR"
+        try:
+            value = float(text)
+        except Exception:
+            return value
+    try:
+        rounded = round(float(value), 3)
+    except Exception:
+        return value
+    if abs(rounded - round(rounded)) < 1e-12:
+        return int(round(rounded))
+    return rounded
 
 
 def _multifit_group_from_anchor(sorted_rows, anchor_pos, delta_min):
