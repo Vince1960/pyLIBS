@@ -99,6 +99,11 @@ from pylibs.utils.paths import (
 )
 
 try:
+    from openpyxl import Workbook
+except Exception:  # pragma: no cover - optional dependency
+    Workbook = None
+
+try:
     import numpy as np
 except Exception:
     np = None
@@ -1380,6 +1385,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Radiobutton(opts, text="Load all", variable=self.add_mode, value="all").pack(side="left", padx=3)
         ttk.Radiobutton(opts, text="Load odd only", variable=self.add_mode, value="odd").pack(side="left", padx=3)
         ttk.Radiobutton(opts, text="Load even only", variable=self.add_mode, value="even").pack(side="left", padx=3)
+        ttk.Button(top,text="MultiFit",command=self.multi_fit).pack(side="left", padx=3)
         ttk.Button(top,text="Join",command=self.join_pairs).pack(side="left", padx=3)
         ttk.Button(top,text="Average",command=self.average_files).pack(side="left", padx=3)
         self.calculate_sd = tk.BooleanVar(value=False)
@@ -1435,8 +1441,97 @@ class BatchStatisticsWindow(tk.Toplevel):
     def clear_list(self):
         self.listbox.delete(0,"end")
 
+    def _ask_multifit_save_path(self):
+        try:
+            self.lift()
+            self.focus_force()
+            self.attributes("-topmost", True)
+        except Exception:
+            pass
+        try:
+            fn = filedialog.asksaveasfilename(
+                parent=self,
+                title="Save MultiFit Results",
+                initialdir=remembered_initial_dir(self.master_app.options),
+                defaultextension=".xlsx",
+                filetypes=[("Excel workbook", "*.xlsx"), ("All Files", "*.*")],
+            )
+        finally:
+            try:
+                self.attributes("-topmost", False)
+            except Exception:
+                pass
+        return fn
+
     def _load_spectrum(self, filename):
         return self.master_app.load_spectrum_with_corrections(filename)
+
+    def _write_multifit_workbook(self, filename, files, template_lines, results_by_file):
+        if Workbook is None:
+            raise RuntimeError("openpyxl is not available")
+        wb = Workbook()
+        default = wb.active
+        wb.remove(default)
+        used_names = set()
+        for idx, line in enumerate(template_lines):
+            ws = wb.create_sheet(title=_excel_safe_sheet_name(_multifit_sheet_base_name(line, idx), used_names))
+            ws.append(["Nome del file", "Inte", "wg", "wl"])
+            for fn in files:
+                row = results_by_file.get(fn, {}).get(idx, {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"})
+                ws.append([
+                    Path(fn).name,
+                    row.get("Inte", "ERROR"),
+                    row.get("wg", "ERROR"),
+                    row.get("wl", "ERROR"),
+                ])
+            ws.freeze_panes = "A2"
+        wb.save(filename)
+
+    def multi_fit(self):
+        files = self.paths()
+        if len(files) == 0:
+            self.master_app.status("MultiFit: no files loaded")
+            _showinfo(self, "MultiFit", "Load at least one file in Batch Tools.")
+            return
+        template_lines = list(getattr(self.master_app, "template_lines", []) or [])
+        if not template_lines:
+            self.master_app.status("MultiFit: no template lines")
+            _showinfo(self, "MultiFit", "Load a template before running MultiFit.")
+            return
+        if Workbook is None:
+            _showerror(self, "MultiFit", "openpyxl is not available.")
+            return
+
+        results_by_file = {}
+        load_errors = []
+        total = len(files)
+        for i, fn in enumerate(files, start=1):
+            self.master_app.status(f"MultiFit: processing {i}/{total} {Path(fn).name}")
+            self.update_idletasks()
+            try:
+                spectrum = self._load_spectrum(fn)
+                results_by_file[fn] = _multifit_results_for_spectrum(spectrum, template_lines, self.master_app.options)
+            except Exception as e:
+                load_errors.append(f"{Path(fn).name}: {e}")
+                results_by_file[fn] = {
+                    idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+                    for idx in range(len(template_lines))
+                }
+
+        fn = self._ask_multifit_save_path()
+        if not fn:
+            self.master_app.status("MultiFit: save cancelled")
+            return
+        remember_working_dir(self.master_app.options, fn)
+        try:
+            self._write_multifit_workbook(fn, files, template_lines, results_by_file)
+        except Exception as e:
+            _showerror(self, "MultiFit", str(e))
+            return
+
+        self.master_app.status(f"MultiFit: saved {fn}")
+        if load_errors:
+            _showwarning(self, "MultiFit", "\n".join(load_errors[:10]))
 
     def _load_generated_average_outputs(self, outputs):
         loaded = []
@@ -7989,6 +8084,209 @@ def load_template_lines(filename, columns=None):
                     rows.append(TemplateLine(wavelen=float(parts[0])))
                 except Exception:
                     pass
+    return rows
+
+
+def _clone_template_line(line):
+    return TemplateLine(
+        wavelen=getattr(line, "wavelen", 0.0),
+        specie=getattr(line, "specie", ""),
+        ion=getattr(line, "ion", 0),
+        asswavelen=getattr(line, "asswavelen", 0.0),
+        inte=getattr(line, "inte", 0.0),
+        ei=getattr(line, "ei", 0.0),
+        wg=getattr(line, "wg", 0.0),
+        wl=getattr(line, "wl", 0.0),
+        ek=getattr(line, "ek", 0.0),
+        aki=getattr(line, "aki", 0.0),
+        gk=getattr(line, "gk", 0),
+        gi=getattr(line, "gi", 0),
+        fitwavelen=getattr(line, "fitwavelen", 0.0),
+        templint=getattr(line, "templint", 0.0),
+        error_inte=getattr(line, "error_inte", 0.0),
+        acc=getattr(line, "acc", 0),
+    )
+
+
+def _clone_template_lines(lines):
+    return [_clone_template_line(line) for line in list(lines or [])]
+
+
+def _multifit_sheet_base_name(line, index):
+    asswavelen = safe_float(getattr(line, "asswavelen", 0.0), 0.0)
+    wavelen = safe_float(getattr(line, "wavelen", 0.0), 0.0)
+    if asswavelen:
+        return f"Riga_{asswavelen:g}"
+    if wavelen:
+        return f"{wavelen:g}"
+    return f"Row_{index + 1}"
+
+
+def _excel_safe_sheet_name(name, used_names):
+    text = re.sub(r"[\[\]:*?/\\]", "_", str(name or "").strip())
+    text = text.strip("'")
+    if not text:
+        text = "Sheet"
+    text = text[:31]
+    base = text
+    suffix = 1
+    used_key = text.lower()
+    while not text or used_key in used_names:
+        extra = f"_{suffix}"
+        text = f"{base[:31 - len(extra)]}{extra}" if len(base) + len(extra) > 31 else f"{base}{extra}"
+        text = text[:31] or "Sheet"
+        used_key = text.lower()
+        suffix += 1
+    used_names.add(used_key)
+    return text
+
+
+def _multifit_group_from_anchor(sorted_rows, anchor_pos, delta_min):
+    if anchor_pos < 0 or anchor_pos >= len(sorted_rows):
+        return [], anchor_pos + 1
+    positions = [anchor_pos]
+    pos = anchor_pos + 1
+    while pos < len(sorted_rows) and abs(sorted_rows[pos][1] - sorted_rows[pos - 1][1]) < delta_min:
+        positions.append(pos)
+        pos += 1
+    return [sorted_rows[p] for p in positions], pos
+
+
+def _multifit_expand_limits(lo, hi, data_min, data_max):
+    current_width = abs(hi - lo)
+    full_width = data_max - data_min
+    if current_width <= 0 or full_width <= 0:
+        return lo, hi, False
+    center = (lo + hi) / 2.0
+    new_width = min(current_width * 1.5, full_width)
+    new_lo = center - new_width / 2.0
+    new_hi = center + new_width / 2.0
+    if new_lo < data_min:
+        new_lo = data_min
+        new_hi = min(data_max, data_min + new_width)
+    if new_hi > data_max:
+        new_hi = data_max
+        new_lo = max(data_min, data_max - new_width)
+    new_lo, new_hi = sorted((new_lo, new_hi))
+    return new_lo, new_hi, (new_lo, new_hi) != (lo, hi)
+
+
+def _multifit_build_snapshot(spectrum, lines, options, xlim):
+    x_values = list(getattr(spectrum, "x", []) or [])
+    y_values = list(getattr(spectrum, "y", []) or [])
+    return {
+        "spectrum": {"x": x_values, "y": y_values},
+        "xlim": tuple(xlim),
+        "ylim": (0.0, 1.0),
+        "line_overrides": {},
+        "lines": [
+            {
+                "key": id(t),
+                "wavelen": safe_float(getattr(t, "wavelen", 0.0), 0.0),
+                "fitwavelen": safe_float(getattr(t, "fitwavelen", 0.0), 0.0),
+                "wg": safe_float(getattr(t, "wg", 0.0), 0.0),
+                "wl": safe_float(getattr(t, "wl", 0.0), 0.0),
+                "specie": getattr(t, "specie", ""),
+            }
+            for t in list(lines)
+        ],
+        "options": {
+            "fixed_wg": safe_float(getattr(options, "fixed_wg", 0.5), 0.5),
+            "fixed_wl": safe_float(getattr(options, "fixed_wl", 0.5), 0.5),
+            "fix_wg": bool(getattr(options, "fix_wg", False)),
+            "fix_wl": bool(getattr(options, "fix_wl", False)),
+            "fix_wavelength": bool(getattr(options, "fix_wavelength", False)),
+            "iterations": safe_int(getattr(options, "iterations", 20), 20),
+        },
+    }
+
+
+def _multifit_fit_group(spectrum, group_rows, options):
+    if np is None:
+        return False, "numpy not available", None
+    try:
+        from scipy.optimize import curve_fit
+    except Exception:
+        return False, "scipy.optimize not available. Install scipy.", None
+
+    x_values = list(getattr(spectrum, "x", []) or [])
+    y_values = list(getattr(spectrum, "y", []) or [])
+    if len(x_values) < 8 or len(y_values) < 8:
+        return False, "Too few points in the visible window.", None
+
+    delta_min = max(safe_float(getattr(options, "delta_min", 1.0), 1.0), 1e-9)
+    data_min = min(x_values)
+    data_max = max(x_values)
+    lo = group_rows[0][1] - delta_min
+    hi = group_rows[-1][1] + delta_min
+    min_points = max(8, 3 * (2 + 4 * len(group_rows)))
+
+    while True:
+        point_count = sum(1 for x in x_values if lo <= x <= hi)
+        if point_count >= min_points:
+            break
+        new_lo, new_hi, expanded = _multifit_expand_limits(lo, hi, data_min, data_max)
+        if not expanded:
+            return False, f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required.", None
+        lo, hi = new_lo, new_hi
+
+    snapshot = _multifit_build_snapshot(spectrum, [line for _idx, _wave, line in group_rows], options, (lo, hi))
+    try:
+        ok, message, payload = MultiGaussianFitWindow._run_voigt_fit_snapshot(None, snapshot, lambda: False)
+    except Exception as exc:
+        return False, str(exc), None
+    if not ok:
+        return False, message, None
+    by_key = {item.get("key"): item for item in list((payload or {}).get("fit_values") or [])}
+    results = {}
+    for orig_idx, _wave, line in group_rows:
+        item = by_key.get(id(line))
+        if not item:
+            continue
+        results[orig_idx] = {
+            "Inte": float(item.get("integrated_area", 0.0)),
+            "wg": abs(float(item.get("gaussian_width", 0.0))),
+            "wl": abs(float(item.get("lorentzian_width", 0.0))),
+        }
+    return True, message, results
+
+
+def _multifit_results_for_spectrum(spectrum, template_lines, options):
+    rows = {
+        idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+        for idx in range(len(template_lines))
+    }
+    x_values = list(getattr(spectrum, "x", []) or [])
+    y_values = list(getattr(spectrum, "y", []) or [])
+    if len(x_values) < 8 or len(y_values) < 8:
+        return rows
+    indexed_lines = []
+    for idx, line in enumerate(list(template_lines or [])):
+        try:
+            wave = safe_float(getattr(line, "wavelen", 0.0), 0.0)
+        except Exception:
+            wave = 0.0
+        if not wave:
+            continue
+        indexed_lines.append((idx, wave, _clone_template_line(line)))
+    if not indexed_lines:
+        return rows
+    indexed_lines.sort(key=lambda item: item[1])
+    delta_min = max(safe_float(getattr(options, "delta_min", 1.0), 1.0), 1e-9)
+    pos = 0
+    while pos < len(indexed_lines):
+        group, next_pos = _multifit_group_from_anchor(indexed_lines, pos, delta_min)
+        if not group:
+            pos += 1
+            continue
+        ok, _message, group_results = _multifit_fit_group(spectrum, group, options)
+        if ok and group_results:
+            for idx, values in group_results.items():
+                rows[idx] = values
+        else:
+            for idx, _wave, _line in group:
+                rows[idx] = {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+        pos = next_pos if next_pos > pos else pos + 1
     return rows
 
 
