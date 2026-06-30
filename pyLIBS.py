@@ -4580,7 +4580,7 @@ class RetroTemplateManager(tk.Toplevel):
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "1280x560"))
         self.minsize(1180, 420)
         self.configure(bg=RETRO_BG)
-        self.protocol("WM_DELETE_WINDOW", self.on_window_close)
+        self.protocol("WM_DELETE_WINDOW", master.close_template_window)
         self._build()
 
     def _build(self):
@@ -4698,9 +4698,7 @@ class RetroTemplateManager(tk.Toplevel):
             self.on_window_close()
 
     def on_window_close(self):
-        if getattr(self.master_app, "template_window", None) is self:
-            self.master_app.template_window = None
-        self.destroy()
+        self.master_app.close_template_window()
 
     def delete_template(self):
         fn = filedialog.askopenfilename(
@@ -6682,43 +6680,103 @@ def install_retro_ui(self):
         pass
 
 def show_template_window(self):
-    self.template_window = _template_window_reference(self)
-    if self.template_window is None:
-        self.template_window = RetroTemplateManager(self)
-        center_window(self.template_window, self)
+    win = _template_window_reference(self)
+    if win is None:
+        win = RetroTemplateManager(self)
+        self.template_window = win
+        _bind_template_window_close(self, win)
+        center_window(win, self)
     else:
-        self.template_window.refresh()
-    _raise_template_window(self.template_window)
+        self.template_window = win
+        _bind_template_window_close(self, win)
+        try:
+            win.refresh()
+        except Exception:
+            pass
+    _raise_template_window(self)
     return self.template_window
 
 def show_template_manager(self):
     return self.show_template_window()
 
-def _template_window_reference(self):
+def close_template_window(self):
+    win = getattr(self, "template_window", None)
     try:
-        if self.template_window is not None and self.template_window.winfo_exists() and isinstance(self.template_window, (TemplateManager, RetroTemplateManager)):
-            return self.template_window
+        if win is not None and win.winfo_exists():
+            win.destroy()
     except Exception:
         pass
-    try:
-        for cls in (RetroTemplateManager, TemplateManager):
-            for child in self.winfo_children():
-                if isinstance(child, cls) and child.winfo_exists():
-                    return child
-    except Exception:
-        pass
-    return None
+    if getattr(self, "template_window", None) is win:
+        self.template_window = None
 
-def _raise_template_window(win):
+def _existing_template_windows(self):
+    windows = []
+    try:
+        for child in self.winfo_children():
+            try:
+                if child.winfo_exists() and isinstance(child, (RetroTemplateManager, TemplateManager)):
+                    windows.append(child)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return windows
+
+def _template_window_reference(self):
+    current = getattr(self, "template_window", None)
+    valid_current = None
+    try:
+        if current is not None and current.winfo_exists() and isinstance(current, (RetroTemplateManager, TemplateManager)):
+            valid_current = current
+    except Exception:
+        valid_current = None
+    windows = _existing_template_windows(self)
+    if valid_current is not None and valid_current in windows:
+        chosen = valid_current
+    elif windows:
+        chosen = _preferred_template_window(windows)
+    else:
+        self.template_window = None
+        return None
+    for other in windows:
+        if other is chosen:
+            continue
+        try:
+            other.destroy()
+        except Exception:
+            pass
+    self.template_window = chosen
+    _bind_template_window_close(self, chosen)
+    return chosen
+
+def _preferred_template_window(windows):
+    for win in windows:
+        try:
+            if str(win.state()) in {"iconic", "withdrawn"}:
+                return win
+        except Exception:
+            pass
+    return windows[0] if windows else None
+
+def _bind_template_window_close(self, win):
+    try:
+        win.protocol("WM_DELETE_WINDOW", self.close_template_window)
+    except Exception:
+        pass
+
+def _raise_template_window(self):
+    win = getattr(self, "template_window", None)
     try:
         if win is None or not win.winfo_exists():
+            self.template_window = None
             return False
     except Exception:
+        self.template_window = None
         return False
     try:
-        was_iconic = str(win.state()) == "iconic"
+        state = str(win.state())
     except Exception:
-        was_iconic = False
+        state = ""
     try:
         win.deiconify()
     except Exception:
@@ -6731,7 +6789,7 @@ def _raise_template_window(win):
         win.update_idletasks()
     except Exception:
         pass
-    if was_iconic:
+    if state in {"iconic", "withdrawn"}:
         try:
             win.withdraw()
             win.update_idletasks()
@@ -7072,13 +7130,21 @@ def load_template_from_menu(self):
         _showerror(self, "Load Template", str(e))
 
 def template_info_from_menu(self):
-    win = RetroTemplateManager(self)
-    win.template_info()
-    win.destroy()
+    lines = self.template_lines
+    by_species = {}
+    for line in lines:
+        if line.specie:
+            key = f"{line.specie} {_roman_ion(line.ion) if line.ion else ''}".strip()
+            by_species[key] = by_species.get(key, 0) + 1
+    msg = f"Lines: {len(lines)}\nAssigned lines: {sum(1 for line in lines if line.specie)}"
+    if by_species:
+        msg += "\n\n" + "\n".join(f"{key}: {value}" for key, value in sorted(by_species.items()))
+    _showinfo(self, "Template Info", msg)
 
 def close_template_from_menu(self):
     self.template_lines.clear()
     self.notify_template_changed(redraw=False)
+    self.close_template_window()
     self.redraw()
     self.status("Template closed")
 
@@ -7688,7 +7754,7 @@ def goto_wavelength(self, wavelength):
 # the corresponding class methods are migrated in a dedicated pass.
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
-    show_template_window, show_template_manager, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
+    show_template_window, show_template_manager, close_template_window, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_grid, toggle_log,
     toggle_labels, smooth_main_spectrum,
