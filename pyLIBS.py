@@ -4584,6 +4584,18 @@ class RetroTemplateManager(tk.Toplevel):
         self.master_app = master
         self._hide_template_pending = False
         self.title("Template")
+        try:
+            self.transient(master)
+        except Exception:
+            pass
+        try:
+            self.wm_attributes("-toolwindow", True)
+        except Exception:
+            pass
+        try:
+            self.wm_attributes("-type", "dialog")
+        except Exception:
+            pass
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "1280x560"))
         self.minsize(1180, 420)
         self.configure(bg=RETRO_BG)
