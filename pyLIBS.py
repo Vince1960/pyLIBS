@@ -6280,7 +6280,7 @@ def install_retro_ui(self):
 def show_template_manager(self):
     if self.template_window is None or not self.template_window.winfo_exists() or not isinstance(self.template_window, RetroTemplateManager):
         self.template_window = RetroTemplateManager(self)
-        _position_template_window(self.template_window, self)
+        center_window(self.template_window, self)
         restore_lift_focus(self.template_window, self)
     else:
         self.template_window.refresh()
