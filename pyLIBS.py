@@ -19,6 +19,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import threading
 from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field
@@ -1826,6 +1827,11 @@ def multivoigt_model(x, *params):
         area, cen, sigma, gamma = params[i], params[i + 1], params[i + 2], params[i + 3]
         y += area * voigt_profile_unit(x, cen, sigma, gamma)
     return y
+
+
+class FitStoppedError(Exception):
+    """Controlled interruption for Manual/Automatic Fit workers."""
+
 
 def linear_fit(x: list[float], y: list[float]):
     if len(x) < 2:
@@ -4928,6 +4934,9 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_index = 0
         self.manual_fit_failed = False
         self.manual_fit_stop = False
+        self.fit_stop_requested = False
+        self._fit_worker = None
+        self._fit_running = False
         self.region_fit_results = {}
         self.residual_x = []
         self.residual_y = []
@@ -5039,6 +5048,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.update_idletasks()
 
     def close_window(self):
+        self.manual_fit_stop = True
+        self.fit_stop_requested = True
         try:
             if self._auto_fit_after_id is not None:
                 self.after_cancel(self._auto_fit_after_id)
@@ -5407,7 +5418,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             point_count = self._current_fit_point_count()
         return point_count, expanded, retries
 
-    def _line_overrides_from_editor(self, lines):
+    def _line_overrides_from_editor(self, lines, apply_to_template=True):
         overrides = {}
         displayed = list(getattr(self, "displayed_lines", []) or [])
         for r, t in enumerate(displayed[:10]):
@@ -5417,10 +5428,11 @@ class RetroFitManagerWindow(tk.Toplevel):
             center = safe_float(lam.get(), getattr(t, "fitwavelen", 0.0) or getattr(t, "wavelen", 0.0))
             gw = abs(safe_float(wg.get(), getattr(t, "wg", 0.0) or getattr(self.master_app.options, "fixed_wg", 0.5)))
             lw = abs(safe_float(wl.get(), getattr(t, "wl", 0.0) or getattr(self.master_app.options, "fixed_wl", 0.5)))
-            t.fitwavelen = -abs(center) if flam.get() else abs(center)
-            # Keep both widths positive in the template/output, even when fixed.
-            t.wg = abs(gw)
-            t.wl = abs(lw)
+            if apply_to_template:
+                t.fitwavelen = -abs(center) if flam.get() else abs(center)
+                # Keep both widths positive in the template/output, even when fixed.
+                t.wg = abs(gw)
+                t.wl = abs(lw)
             overrides[id(t)] = {
                 "center": abs(center),
                 "fix_center": bool(flam.get()),
@@ -5430,6 +5442,347 @@ class RetroFitManagerWindow(tk.Toplevel):
                 "fix_wl": bool(fwl.get()),
             }
         return overrides
+
+    def _active_spectrum_snapshot(self):
+        sp = None
+        try:
+            aw = getattr(self.master_app, "active_window", None)
+            if aw is not None and aw.winfo_exists():
+                idx = getattr(aw, "selected_index", 0)
+                if 0 <= idx < len(self.master_app.spectra):
+                    sp = self.master_app.spectra[idx]
+        except Exception:
+            sp = None
+        if sp is None and self.master_app.spectra:
+            sp = self.master_app.spectra[0]
+        if sp is None:
+            return None
+        return {
+            "x": list(getattr(sp, "x", []) or []),
+            "y": list(getattr(sp, "y", []) or []),
+        }
+
+    def _build_voigt_fit_snapshot(self, lines):
+        xlim, ylim = self.master_app.current_plot_view()
+        opts = self.master_app.options
+        spectrum = self._active_spectrum_snapshot()
+        return {
+            "spectrum": spectrum,
+            "xlim": tuple(xlim),
+            "ylim": tuple(ylim),
+            "line_overrides": self._line_overrides_from_editor(list(lines), apply_to_template=False),
+            "lines": [
+                {
+                    "key": id(t),
+                    "wavelen": safe_float(getattr(t, "wavelen", 0.0), 0.0),
+                    "fitwavelen": safe_float(getattr(t, "fitwavelen", 0.0), 0.0),
+                    "wg": safe_float(getattr(t, "wg", 0.0), 0.0),
+                    "wl": safe_float(getattr(t, "wl", 0.0), 0.0),
+                    "specie": getattr(t, "specie", ""),
+                }
+                for t in list(lines)
+            ],
+            "options": {
+                "fixed_wg": safe_float(getattr(opts, "fixed_wg", 0.5), 0.5),
+                "fixed_wl": safe_float(getattr(opts, "fixed_wl", 0.5), 0.5),
+                "fix_wg": bool(getattr(opts, "fix_wg", False)),
+                "fix_wl": bool(getattr(opts, "fix_wl", False)),
+                "fix_wavelength": bool(getattr(opts, "fix_wavelength", False)),
+                "iterations": safe_int(getattr(opts, "iterations", 20), 20),
+            },
+        }
+
+    def _run_voigt_fit_snapshot(self, snapshot, stop_requested):
+        if np is None:
+            return False, "numpy not available", None
+        try:
+            from scipy.optimize import curve_fit
+        except Exception:
+            return False, "scipy.optimize not available. Install scipy.", None
+        if stop_requested():
+            raise FitStoppedError()
+        spectrum = snapshot.get("spectrum")
+        if not spectrum or not spectrum.get("x"):
+            return False, "Load a spectrum first.", None
+        x_values = list(spectrum.get("x") or [])
+        y_values = list(spectrum.get("y") or [])
+        lo, hi = sorted(snapshot.get("xlim", (-math.inf, math.inf)))
+        pairs = [(x, y_values[i]) for i, x in enumerate(x_values) if i < len(y_values) and lo <= x <= hi]
+        if not pairs:
+            return False, "Too few points in the visible window.", None
+        xs = np.asarray([x for x, _y in pairs], dtype=float)
+        ys = np.asarray([y for _x, y in pairs], dtype=float)
+        if len(xs) < 8:
+            return False, "Too few points in the visible window.", None
+        lines = list(snapshot.get("lines") or [])
+        if not lines:
+            return False, "No marked line in the visible window. Use search/manual marking before fitting.", None
+        xmin, xmax = float(xs.min()), float(xs.max())
+        width = max(xmax - xmin, 1e-9)
+        baseline = float(np.percentile(ys, 5))
+        slope = 0.0
+        dx = float(np.median(np.diff(np.sort(xs)))) if len(xs) > 2 else width / 100.0
+        options = snapshot.get("options") or {}
+        default_fixed_wg = abs(safe_float(options.get("fixed_wg"), 0.5))
+        default_fixed_wl = abs(safe_float(options.get("fixed_wl"), 0.5))
+        min_sigma0 = max(default_fixed_wg / 2.354820045, abs(dx), 1e-6)
+        min_gamma0 = max(default_fixed_wl / 2.0, abs(dx), 1e-6)
+        sigma0 = max(default_fixed_wg, abs(dx), 1e-6)
+        gamma0 = max(default_fixed_wl / 2.0, abs(dx), 1e-6)
+        p0 = [baseline, slope]
+        bounds_lo = [-np.inf, -np.inf]
+        bounds_hi = [np.inf, np.inf]
+        fixed_mask = [False, False]
+        line_overrides = snapshot.get("line_overrides") or {}
+        half_window = max(width / 20.0, width * 0.02, abs(dx) * 2.0)
+        for line in lines:
+            if stop_requested():
+                raise FitStoppedError()
+            override = line_overrides.get(line["key"], {})
+            if override:
+                center0 = abs(safe_float(override.get("center"), line["fitwavelen"] or line["wavelen"]))
+            else:
+                center0 = line["wavelen"]
+            peak_y = _nearest_y(x_values, y_values, center0)
+            height = max(float(peak_y) - baseline, float(max(ys)) - baseline, 1.0)
+            area0 = max(height * sigma0 * math.sqrt(2.0 * math.pi), 1e-12)
+            if override:
+                row_fix_wg = bool(override.get("fix_wg", False))
+                row_fix_wl = bool(override.get("fix_wl", False))
+                wg_fwhm = abs(safe_float(override.get("wg"), line["wg"] or default_fixed_wg))
+                wl_fwhm = abs(safe_float(override.get("wl"), line["wl"] or default_fixed_wl))
+            else:
+                row_fix_wg = bool(options.get("fix_wg", False)) or line["wg"] < 0
+                row_fix_wl = bool(options.get("fix_wl", False)) or line["wl"] < 0
+                wg_fwhm = default_fixed_wg if bool(options.get("fix_wg", False)) else (abs(line["wg"]) if line["wg"] else default_fixed_wg)
+                wl_fwhm = default_fixed_wl if bool(options.get("fix_wl", False)) else (abs(line["wl"]) if line["wl"] else default_fixed_wl)
+            sig0 = max(wg_fwhm / 2.354820045, 1e-12 if row_fix_wg else min_sigma0)
+            gam0 = max(wl_fwhm / 2.0, 1e-12 if row_fix_wl else min_gamma0)
+            p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
+            c_lo = max(xmin, center0 - half_window)
+            c_hi = min(xmax, center0 + half_window)
+            row_fix_center = bool(override.get("fix_center", False)) if override else (
+                bool(options.get("fix_wavelength", False)) or line["fitwavelen"] < 0
+            )
+            sigma_lo = max(abs(dx) * 0.05, 1e-9)
+            sigma_hi = max(width, sigma0 * 50.0)
+            gamma_lo = max(abs(dx) * 0.05, 1e-9)
+            gamma_hi = max(width, gamma0 * 50.0)
+            bounds_lo.extend([0.0, c_lo, sigma_lo, gamma_lo])
+            bounds_hi.extend([np.inf, c_hi, sigma_hi, gamma_hi])
+            fixed_mask.extend([False, row_fix_center, row_fix_wg, row_fix_wl])
+        p0_full = np.asarray(p0, dtype=float)
+        bounds_lo_full = np.asarray(bounds_lo, dtype=float)
+        bounds_hi_full = np.asarray(bounds_hi, dtype=float)
+        fixed_mask = np.asarray(fixed_mask, dtype=bool)
+        free_mask = ~fixed_mask
+
+        def _expand_fit_parameters(p_free):
+            p_all = p0_full.copy()
+            p_all[free_mask] = np.asarray(p_free, dtype=float)
+            return p_all
+
+        def _multivoigt_model_free(x, *p_free):
+            if stop_requested():
+                raise FitStoppedError()
+            return multivoigt_model(x, *_expand_fit_parameters(p_free))
+
+        popt_free, _pcov = curve_fit(
+            _multivoigt_model_free,
+            xs,
+            ys,
+            p0=p0_full[free_mask],
+            bounds=(bounds_lo_full[free_mask], bounds_hi_full[free_mask]),
+            maxfev=max(2000, safe_int(options.get("iterations"), 20) * 400),
+        )
+        if stop_requested():
+            raise FitStoppedError()
+        popt = _expand_fit_parameters(popt_free)
+        fitted_values = []
+        for idx, line in enumerate(lines):
+            area = float(popt[2 + 4 * idx])
+            cen = float(popt[3 + 4 * idx])
+            sigma = abs(float(popt[4 + 4 * idx]))
+            gamma = abs(float(popt[5 + 4 * idx]))
+            fitted_wg = float(2.354820045 * sigma)
+            fitted_wl = float(2.0 * gamma)
+            peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
+            fitted_values.append({
+                "key": line["key"],
+                "template_wavelength": float(line["wavelen"]),
+                "fit_center": cen,
+                "peak_intensity": peak_height,
+                "lorentzian_width": abs(fitted_wl),
+                "gaussian_width": abs(fitted_wg),
+                "integrated_area": area,
+                "sigma": sigma,
+                "gamma": gamma,
+            })
+        fitted_y = multivoigt_model(xs, *popt)
+        payload = {
+            "fit_values": fitted_values,
+            "overlay": (xs.tolist(), fitted_y.tolist()),
+            "residual_x": xs.tolist(),
+            "residual_y": (ys - fitted_y).tolist(),
+            "xlim": snapshot.get("xlim"),
+            "ylim": snapshot.get("ylim"),
+        }
+        return True, f"Fit Voigt: {len(lines)} line(s)", payload
+
+    def _apply_voigt_fit_payload(self, lines, payload, mode_label):
+        by_key = {item.get("key"): item for item in list(payload.get("fit_values") or [])}
+        results = []
+        for t in list(lines):
+            item = by_key.get(id(t))
+            if not item:
+                continue
+            t.fitwavelen = float(item["fit_center"])
+            t.inte = float(item["integrated_area"])
+            t.wg = abs(float(item["gaussian_width"]))
+            t.wl = abs(float(item["lorentzian_width"]))
+            enriched = False
+            try:
+                enriched = bool(self.master_app.enrich_identified_template_line(
+                    t,
+                    tolerance=max(0.02, self.master_app.options.search_range),
+                ))
+            except Exception:
+                enriched = False
+            result = {
+                "key": id(t),
+                "template_wavelength": float(getattr(t, "wavelen", item["template_wavelength"])),
+                "fit_center": float(item["fit_center"]),
+                "peak_intensity": float(item["peak_intensity"]),
+                "lorentzian_width": float(t.wl),
+                "gaussian_width": float(t.wg),
+                "integrated_area": float(item["integrated_area"]),
+            }
+            if enriched:
+                result["status"] = "Voigt OK + DB"
+            results.append(result)
+        self.master_app.fit_overlay = payload.get("overlay")
+        self.residual_x = list(payload.get("residual_x") or [])
+        self.residual_y = list(payload.get("residual_y") or [])
+        self.master_app.notify_template_changed(redraw=False)
+        self.master_app.redraw(preserve_view=True)
+        self.master_app.restore_plot_view(payload.get("xlim"), payload.get("ylim"))
+        if not self.automatic:
+            self.update_residuals_plot(lift_window=False)
+        self.master_app.status(f"Voigt fit: {len(results)} lines in the visible window")
+        return results
+
+    def _finish_async_fit(self, mode_label, fit_lines, report, result, show_errors, callback):
+        self._fit_running = False
+        self._fit_worker = None
+        status = result.get("status")
+        message = result.get("message", "")
+        if status == "stopped":
+            self.manual_fit_stop = True
+            self.msg_var.set("Fit stopped by user")
+            self.master_app.status("Fit stopped by user")
+            if callback:
+                callback(False, fit_lines, message, stopped=True)
+            return
+        if self.fit_stop_requested:
+            self.manual_fit_stop = True
+            self.msg_var.set("Fit stopped by user")
+            self.master_app.status("Fit stopped by user")
+            if callback:
+                callback(False, fit_lines, "Fit stopped by user", stopped=True)
+            return
+        if status == "error":
+            self.manual_fit_failed = True
+            self.msg_var.set(f"{report}; Fit failed: {message}")
+            if show_errors:
+                lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+                _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
+            if callback:
+                callback(False, fit_lines, message, stopped=False)
+            return
+        results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label)
+        self.region_fit_results[self._group_key(fit_lines)] = list(results)
+        self.populate_results(results)
+        self.msg_var.set(f"{report}; fitted")
+        self.master_app.status(f"{report}; fitted")
+        if callback:
+            callback(True, fit_lines, message, stopped=False)
+
+    def _start_visible_fit_async(self, mode_label, allow_previous_visible_fallback=True, show_errors=True, callback=None, reset_stop=True):
+        if self._fit_running:
+            self.msg_var.set(f"{mode_label}: fit already running")
+            return False
+        if reset_stop:
+            self.manual_fit_stop = False
+            self.fit_stop_requested = False
+        elif self.manual_fit_stop or self.fit_stop_requested:
+            if callback:
+                callback(False, [], "Fit stopped by user", stopped=True)
+            return False
+        fit_lines = self._visible_template_lines()
+        self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
+        if not fit_lines:
+            message = f"{mode_label}: no template lines are visible in the current window"
+            self.msg_var.set(message)
+            if show_errors:
+                _showinfo(self, mode_label, "No template lines are visible in the current spectrum window.")
+            elif callback:
+                callback(False, [], message, stopped=False)
+            return False
+        point_count = self._current_fit_point_count()
+        min_points = self._minimum_fit_points(fit_lines)
+        lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+        report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
+        self.msg_var.set(report)
+        self.master_app.status(report)
+        if point_count < min_points:
+            point_count, expanded, retries = self._expand_manual_window_to_points(fit_lines, min_points)
+            if expanded:
+                updated_lines = self._visible_template_lines()
+                if updated_lines:
+                    fit_lines = updated_lines
+                elif not allow_previous_visible_fallback:
+                    message = "No visible template lines in the current Manual Fit window."
+                    self.msg_var.set(f"{report}; {message}")
+                    if show_errors:
+                        _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+                    elif callback:
+                        callback(False, fit_lines, message, stopped=False)
+                    return False
+                self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
+                min_points = self._minimum_fit_points(fit_lines)
+                report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
+                self.msg_var.set(report)
+                self.master_app.status(report)
+            if point_count < min_points:
+                message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+                self.msg_var.set(f"{report}; {message}")
+                if show_errors:
+                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
+                elif callback:
+                    callback(False, fit_lines, message, stopped=False)
+                return False
+        snapshot = self._build_voigt_fit_snapshot(fit_lines)
+        self._fit_running = True
+
+        def worker():
+            try:
+                ok, message, payload = self._run_voigt_fit_snapshot(
+                    snapshot,
+                    lambda: bool(getattr(self, "fit_stop_requested", False)),
+                )
+                result = {"status": "success" if ok else "error", "message": message, "payload": payload}
+            except FitStoppedError:
+                result = {"status": "stopped", "message": "Fit stopped by user", "payload": None}
+            except Exception as exc:
+                result = {"status": "error", "message": str(exc), "payload": None}
+            try:
+                self.after(0, lambda: self._finish_async_fit(mode_label, fit_lines, report, result, show_errors, callback))
+            except Exception:
+                pass
+
+        self._fit_worker = threading.Thread(target=worker, daemon=True)
+        self._fit_worker.start()
+        return True
 
     def _fit_manual_group(self, lines):
         tmp = None
@@ -5621,6 +5974,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             return
         self.manual_fit_failed = False
         self.manual_fit_stop = False
+        self.fit_stop_requested = False
         if self.automatic:
             if not self.manual_fit_lines:
                 sorted_rows = self._get_template_rows_sorted_by_wavelength()
@@ -5630,9 +5984,17 @@ class RetroFitManagerWindow(tk.Toplevel):
                     return
             self._run_automatic_fit()
             return
-        ok, _fit_lines = self._fit_current_visible_window("Manual Fit", allow_previous_visible_fallback=False)
-        if ok:
-            self.progress["value"] = self._manual_visible_progress()
+
+        def _manual_done(ok, _fit_lines, _message, stopped=False):
+            if ok:
+                self.progress["value"] = self._manual_visible_progress()
+
+        self._start_visible_fit_async(
+            "Manual Fit",
+            allow_previous_visible_fallback=False,
+            show_errors=True,
+            callback=_manual_done,
+        )
 
     def refresh_region(self):
         if self.automatic:
@@ -5761,7 +6123,8 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not sorted_rows:
             self.msg_var.set("No lines for fitting")
             return
-        total = len(sorted_rows)
+        self.manual_fit_stop = False
+        self.fit_stop_requested = False
         self.msg_var.set("Starting Automatic Fit....")
         if not self.manual_fit_lines:
             group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, 0, "next")
@@ -5771,28 +6134,40 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.manual_fit_lines = list(group)
             self.manual_fit_current_indices = list(indices)
             self._show_group_region(group, preserve_user_values=True)
-        while not self.manual_fit_stop:
-            visible_lines = self._visible_template_lines()
-            if not visible_lines:
-                break
-            ok, fit_lines = self._fit_current_visible_window(
+
+        def _auto_done(ok, fit_lines, _message, stopped=False):
+            if stopped or self.manual_fit_stop or self.fit_stop_requested:
+                self.msg_var.set("Automatic Fit stopped")
+                self.master_app.status("Automatic Fit stopped")
+                return
+            if not ok:
+                current_lines = fit_lines or self._visible_template_lines()
+                self._mark_fit_error(current_lines)
+                self.msg_var.set(f"Automatic Fit: ERROR marked for {len(current_lines)} line(s)")
+            self.progress["value"] = self._manual_visible_progress()
+            if not self._move_manual_region("next", preserve_user_values=True):
+                self.progress["value"] = 100
+                self.msg_var.set("Automatic Fit completed")
+                _showinfo(self, "Automatic Fit", "Automatic Fit completed")
+                return
+            self.after(0, lambda: self._start_visible_fit_async(
                 "Automatic Fit",
                 allow_previous_visible_fallback=False,
                 show_errors=False,
-            )
-            if not ok:
-                self._mark_fit_error(fit_lines or visible_lines)
-                self.msg_var.set(f"Automatic Fit: ERROR marked for {len(fit_lines or visible_lines)} line(s)")
-            self.progress["value"] = self._manual_visible_progress()
-            if not self._move_manual_region("next", preserve_user_values=True):
-                break
-            self.update_idletasks()
-        if self.manual_fit_stop:
-            self.msg_var.set("Automatic Fit stopped")
+                callback=_auto_done,
+                reset_stop=False,
+            ))
+
+        if not self._visible_template_lines():
+            self.msg_var.set("No lines for fitting")
             return
-        self.progress["value"] = 100
-        self.msg_var.set("Automatic Fit completed")
-        _showinfo(self, "Automatic Fit", "Automatic Fit completed")
+        self._start_visible_fit_async(
+            "Automatic Fit",
+            allow_previous_visible_fallback=False,
+            show_errors=False,
+            callback=_auto_done,
+            reset_stop=False,
+        )
 
     def populate_results(self, rows=None):
         self.results.delete(*self.results.get_children())
@@ -5808,7 +6183,12 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def stop_fit(self):
         self.manual_fit_stop = True
-        self.msg_var.set("Fit stopped")
+        self.fit_stop_requested = True
+        self.msg_var.set("Stopping fit..." if self._fit_running else "Fit stopped")
+        try:
+            self.master_app.status("Stopping fit..." if self._fit_running else "Fit stopped")
+        except Exception:
+            pass
 
     def _move_manual_region(self, direction, preserve_user_values=True):
         sorted_rows = self._get_template_rows_sorted_by_wavelength()
