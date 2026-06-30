@@ -5129,15 +5129,16 @@ class RetroFitManagerWindow(tk.Toplevel):
         return rows
 
     def _current_template_indices(self):
-        if self.manual_fit_current_indices:
-            return list(self.manual_fit_current_indices)
         indices = []
         all_lines = list(getattr(self.master_app, "template_lines", []) or [])
-        for line in getattr(self, "displayed_lines", []) or []:
+        visible_lines = self._visible_template_lines()
+        source_lines = visible_lines or list(getattr(self, "displayed_lines", []) or [])
+        for line in source_lines:
             try:
                 indices.append(all_lines.index(line))
             except ValueError:
                 pass
+        self.manual_fit_current_indices = list(indices)
         return indices
 
     def _build_manual_fit_group_from_anchor(self, sorted_rows, anchor_pos, direction):
@@ -5204,6 +5205,24 @@ class RetroFitManagerWindow(tk.Toplevel):
             if id(line) in rows_by_line
         ]
 
+    def _set_visible_fit_lines(self, lines, preserve_user_values=True):
+        lines = list(lines or [])
+        self.manual_fit_lines = list(lines)
+        self.manual_fit_index = 0
+        group_key = self._group_key(lines)
+        if self.displayed_group_key != group_key:
+            self.load_from_template(lines, preserve_user_values=preserve_user_values)
+            self.displayed_lines = list(lines)
+            self.displayed_group_key = group_key
+        all_lines = list(getattr(self.master_app, "template_lines", []) or [])
+        indices = []
+        for line in lines:
+            try:
+                indices.append(all_lines.index(line))
+            except ValueError:
+                pass
+        self.manual_fit_current_indices = indices
+
     def _show_group_region(self, group, preserve_user_values=False):
         if not group:
             return 0, False
@@ -5213,6 +5232,10 @@ class RetroFitManagerWindow(tk.Toplevel):
         expanded = False
         if point_count < min_points:
             point_count, expanded, _retries = self._expand_manual_window_to_points(group, min_points)
+        visible_group = self._visible_template_lines()
+        if visible_group and not self.automatic:
+            group = visible_group
+            self._set_visible_fit_lines(group, preserve_user_values=preserve_user_values)
         status = (
             f"Region: {group[0].wavelen:.4f} - {group[-1].wavelen:.4f}; "
             f"{len(group)} line(s), {point_count} point(s)"
@@ -5225,11 +5248,24 @@ class RetroFitManagerWindow(tk.Toplevel):
         return point_count, expanded
 
     def prepare_initial_region(self, preserve_user_values=False):
-        self.manual_fit_lines = self._manual_template_lines_source()
-        self.manual_fit_index = 0
-        group, _ = self._group_from_index(0)
-        if group:
-            self._show_group_region(group, preserve_user_values=preserve_user_values)
+        if self.automatic:
+            self.manual_fit_lines = self._manual_template_lines_source()
+            self.manual_fit_index = 0
+            group, _ = self._group_from_index(0)
+            if group:
+                self._show_group_region(group, preserve_user_values=preserve_user_values)
+            return
+        self._set_visible_fit_lines(self._visible_template_lines(), preserve_user_values=preserve_user_values)
+        if self.manual_fit_lines:
+            lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
+            self.msg_var.set(f"Manual Fit: {len(self.manual_fit_lines)} visible line(s) in {lo:.4f} - {hi:.4f}")
+        else:
+            self.manual_fit_current_indices = []
+            self.manual_fit_lines = []
+            self.displayed_lines = []
+            self.displayed_group_key = None
+            self.load_from_template([], preserve_user_values=preserve_user_values)
+            self.msg_var.set("No visible template lines in the current spectrum window")
 
     def prepare_single_region(self, preserve_user_values=False):
         self.manual_fit_lines = self._visible_template_lines()
@@ -5244,7 +5280,7 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def _current_group(self):
         if not self.manual_fit_lines:
-            self.manual_fit_lines = self._manual_template_lines_source()
+            self.manual_fit_lines = self._manual_template_lines_source() if self.automatic else self._visible_template_lines()
         return self._group_from_index(self.manual_fit_index)
 
     def _current_fit_point_count(self):
@@ -5459,7 +5495,15 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set(f"{report}; {message}")
             _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
             return False
-        fit_lines = self._visible_template_lines() or list(group)
+        fit_lines = self._visible_template_lines()
+        if not fit_lines:
+            if mode_label == "Manual Fit":
+                message = "No visible template lines in the current Manual Fit window."
+                self.manual_fit_failed = True
+                self.msg_var.set(f"{report}; {message}")
+                _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
+                return False
+            fit_lines = list(group)
         expanded_for_visible = False
         extra_retries = 0
         point_count = self._current_fit_point_count()
@@ -5469,7 +5513,15 @@ class RetroFitManagerWindow(tk.Toplevel):
             point_count, expanded, retries_used = self._expand_manual_window_to_points(group, min_points)
             expanded_for_visible = expanded_for_visible or expanded
             extra_retries += max(1, retries_used)
-            fit_lines = self._visible_template_lines() or list(group)
+            fit_lines = self._visible_template_lines()
+            if not fit_lines:
+                if mode_label == "Manual Fit":
+                    message = "No visible template lines in the current Manual Fit window."
+                    self.manual_fit_failed = True
+                    self.msg_var.set(f"{report}; {message}")
+                    _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
+                    return False
+                fit_lines = list(group)
             min_points = self._minimum_fit_points(fit_lines)
             if point_count >= min_points or point_count == old_count:
                 break
@@ -5498,7 +5550,15 @@ class RetroFitManagerWindow(tk.Toplevel):
             extra_retries += 1
             if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
                 break
-            fit_lines = self._visible_template_lines() or list(group)
+            fit_lines = self._visible_template_lines()
+            if not fit_lines:
+                if mode_label == "Manual Fit":
+                    message = "No visible template lines in the current Manual Fit window."
+                    self.manual_fit_failed = True
+                    self.msg_var.set(f"{report}; {message}")
+                    _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
+                    return False
+                fit_lines = list(group)
             point_count = self._current_fit_point_count()
             report = (
                 f"{mode_label}: expanded window, "
@@ -5527,54 +5587,53 @@ class RetroFitManagerWindow(tk.Toplevel):
         if self.single:
             self.run_single_fit()
             return
-        if not self.manual_fit_lines:
-            self.manual_fit_lines = self._manual_template_lines_source()
         self.manual_fit_failed = False
         self.manual_fit_stop = False
-        if not self.manual_fit_lines:
-            self.msg_var.set("No lines for fitting")
-            _showinfo(self, "Fit", "No template lines to fit.")
-            return
         if self.automatic:
+            if not self.manual_fit_lines:
+                self.manual_fit_lines = self._manual_template_lines_source()
+            if not self.manual_fit_lines:
+                self.msg_var.set("No lines for fitting")
+                _showinfo(self, "Fit", "No template lines to fit.")
+                return
             self._run_automatic_fit()
             return
-        group, _ = self._current_group()
-        if not group:
-            self.msg_var.set("No current region")
-            return
-        if self._fit_group_once(group, "Manual Fit"):
-            self.progress["value"] = min(100, int(100 * self.manual_fit_index / max(1, len(self.manual_fit_lines))))
+        self._run_manual_visible_sequence()
 
-    def run_single_fit(self):
+    def _fit_current_visible_window(self, mode_label, allow_previous_visible_fallback=True):
         fit_lines = self._visible_template_lines()
-        self.manual_fit_lines = fit_lines
-        if self.displayed_group_key != self._group_key(fit_lines):
-            self.load_from_template(fit_lines, preserve_user_values=True)
-            self.displayed_lines = list(fit_lines)
-            self.displayed_group_key = self._group_key(fit_lines)
+        self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
         if not fit_lines:
-            self.msg_var.set("Single Fit: no template lines are visible in the current window")
-            _showinfo(self, "Single Fit", "No template lines are visible in the current spectrum window.")
-            return
+            self.msg_var.set(f"{mode_label}: no template lines are visible in the current window")
+            _showinfo(self, mode_label, "No template lines are visible in the current spectrum window.")
+            return False, []
         point_count = self._current_fit_point_count()
         min_points = self._minimum_fit_points(fit_lines)
         lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
-        report = f"Single Fit: fitting {len(fit_lines)} visible line(s) using {point_count} points"
+        report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
         self.msg_var.set(report)
         self.master_app.status(report)
         if point_count < min_points:
             point_count, expanded, retries = self._expand_manual_window_to_points(fit_lines, min_points)
             if expanded:
-                fit_lines = self._visible_template_lines() or fit_lines
+                updated_lines = self._visible_template_lines()
+                if updated_lines:
+                    fit_lines = updated_lines
+                elif not allow_previous_visible_fallback:
+                    message = "No visible template lines in the current Manual Fit window."
+                    self.msg_var.set(f"{report}; {message}")
+                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+                    return False, []
+                self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
                 min_points = self._minimum_fit_points(fit_lines)
-                report = f"Single Fit: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
+                report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
                 self.msg_var.set(report)
                 self.master_app.status(report)
             if point_count < min_points:
                 message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
                 self.msg_var.set(f"{report}; {message}")
-                _showerror(self, "Single Fit", f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
-                return
+                _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
+                return False, fit_lines
         ok, message, results = self._fit_manual_group(fit_lines)
         retries = 0
         while not ok and self._is_too_few_fit_points_error(message) and retries < 20:
@@ -5584,21 +5643,74 @@ class RetroFitManagerWindow(tk.Toplevel):
             retries += 1
             if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
                 break
-            fit_lines = self._visible_template_lines() or fit_lines
+            updated_lines = self._visible_template_lines()
+            if updated_lines:
+                fit_lines = updated_lines
+            elif not allow_previous_visible_fallback:
+                message = "No visible template lines in the current Manual Fit window."
+                self.msg_var.set(f"{report}; {message}")
+                _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
+                return False, []
+            self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
             point_count = self._current_fit_point_count()
-            report = f"Single Fit: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
+            report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
             self.msg_var.set(report)
             self.master_app.status(report)
             ok, message, results = self._fit_manual_group(fit_lines)
         if not ok:
             self.msg_var.set(f"{report}; Fit failed: {message}")
-            _showerror(self, "Single Fit", f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
-            return
+            _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
+            return False, fit_lines
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
         self.populate_results(results)
-        self.progress["value"] = 100
         self.msg_var.set(f"{report}; fitted")
         self.master_app.status(f"{report}; fitted")
+        return True, fit_lines
+
+    def run_single_fit(self):
+        ok, _fit_lines = self._fit_current_visible_window("Single Fit")
+        if ok:
+            self.progress["value"] = 100
+
+    def _manual_visible_progress(self):
+        sorted_rows = self._get_template_rows_sorted_by_wavelength()
+        current_indices = set(self._current_template_indices())
+        if not sorted_rows or not current_indices:
+            return 0
+        positions = [pos for pos, (idx, _w, _line) in enumerate(sorted_rows) if idx in current_indices]
+        if not positions:
+            return 0
+        return min(100, int(100 * (max(positions) + 1) / len(sorted_rows)))
+
+    def _run_manual_visible_sequence(self):
+        self._set_visible_fit_lines(self._visible_template_lines(), preserve_user_values=True)
+        if not self.manual_fit_lines:
+            self.msg_var.set("Manual Fit: no template lines are visible in the current window")
+            _showinfo(self, "Manual Fit", "No template lines are visible in the current spectrum window.")
+            return
+        visited = set()
+        while not self.manual_fit_stop:
+            visible_lines = self._visible_template_lines()
+            if not visible_lines:
+                self.msg_var.set("Manual Fit: no template lines are visible in the current window")
+                return
+            visible_key = self._group_key(visible_lines)
+            if visible_key in visited:
+                break
+            visited.add(visible_key)
+            ok, _fit_lines = self._fit_current_visible_window("Manual Fit", allow_previous_visible_fallback=False)
+            if not ok:
+                return
+            self.progress["value"] = self._manual_visible_progress()
+            if not self._move_manual_region("next", preserve_user_values=True):
+                break
+            self.update_idletasks()
+        if self.manual_fit_stop:
+            self.msg_var.set("Manual Fit stopped")
+            return
+        self.progress["value"] = 100
+        self.msg_var.set("Manual Fit completed")
+        self.master_app.status("Manual Fit completed")
 
     def _run_automatic_fit(self):
         total = len(self.manual_fit_lines)
@@ -5635,48 +5747,39 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.manual_fit_stop = True
         self.msg_var.set("Fit stopped")
 
-    def next_region(self):
+    def _move_manual_region(self, direction, preserve_user_values=True):
         sorted_rows = self._get_template_rows_sorted_by_wavelength()
         current_indices = set(self._current_template_indices())
         if not sorted_rows or not current_indices:
             self.msg_var.set("No lines for fitting")
-            return
+            return False
         current_positions = [pos for pos, (idx, _w, _line) in enumerate(sorted_rows) if idx in current_indices]
         if not current_positions:
             self.msg_var.set("No current region")
-            return
-        anchor_pos = max(current_positions) + 1
-        if anchor_pos >= len(sorted_rows):
-            return
-        group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, anchor_pos, "next")
+            return False
+        if direction == "previous":
+            anchor_pos = min(current_positions) - 1
+            if anchor_pos < 0:
+                return False
+        else:
+            anchor_pos = max(current_positions) + 1
+            if anchor_pos >= len(sorted_rows):
+                return False
+        group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, anchor_pos, direction)
         if not group:
-            return
+            return False
         self.manual_fit_failed = False
         self.manual_fit_lines = list(group)
         self.manual_fit_index = 0
         self.manual_fit_current_indices = list(indices)
-        self._show_group_region(group, preserve_user_values=True)
+        self._show_group_region(group, preserve_user_values=preserve_user_values)
+        return True
+
+    def next_region(self):
+        self._move_manual_region("next", preserve_user_values=True)
 
     def previous_region(self):
-        sorted_rows = self._get_template_rows_sorted_by_wavelength()
-        current_indices = set(self._current_template_indices())
-        if not sorted_rows or not current_indices:
-            self.msg_var.set("No lines for fitting")
-            return
-        current_positions = [pos for pos, (idx, _w, _line) in enumerate(sorted_rows) if idx in current_indices]
-        if not current_positions:
-            self.msg_var.set("No current region")
-            return
-        anchor_pos = min(current_positions) - 1
-        if anchor_pos < 0:
-            return
-        group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, anchor_pos, "previous")
-        if not group:
-            return
-        self.manual_fit_lines = list(group)
-        self.manual_fit_index = 0
-        self.manual_fit_current_indices = list(indices)
-        self._show_group_region(group, preserve_user_values=True)
+        self._move_manual_region("previous", preserve_user_values=True)
 
     def toggle_expand(self):
         if self.winfo_width() > 500:
