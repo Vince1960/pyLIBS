@@ -1,7 +1,7 @@
 # pyLIBS Project State
 
 **Project:** pyLIBS (Python rewrite of LIBS++)
-**Current version:** v1.0.1
+**Current version:** v1.0.2
 **Git branch:** main
 
 ---

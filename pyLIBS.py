@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pyLIBS Python ver. 1.0.1
+pyLIBS Python ver. 1.0.2
 Originally developed as LIBS++ by Vincenzo Palleschi and coworkers,
 © 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution
 
@@ -7459,7 +7459,6 @@ def _template_file_dialog(owner, dialog_func, **kwargs):
             pass
 
 # ---------------------------------------------------------------------------
-# pyLIBS v8.5 compatibility glue
 # ---------------------------------------------------------------------------
 
 def ask_open_spectrum(self):
