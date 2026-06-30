@@ -2915,25 +2915,38 @@ def libspp_boltzmann_groups_with_skips(
     """
     groups: dict[tuple[str, int], list[dict]] = defaultdict(list)
     for idx, t in enumerate(app.template_lines, start=1):
-        if not t.specie or not t.ion or not t.aki or not t.gk or not t.ek:
+        specie = str(getattr(t, "specie", "") or "").strip().capitalize()
+        ion = safe_int(getattr(t, "ion", 0), 0)
+        aki = safe_float(getattr(t, "aki", 0.0), 0.0)
+        gk = safe_float(getattr(t, "gk", 0.0), 0.0)
+        ek = safe_float(getattr(t, "ek", 0.0), 0.0)
+        if not specie or not ion or not aki or not gk or not ek:
             continue
-        inte = _template_line_intensity(t)
+        inte = safe_float(getattr(t, "inte", 0.0), 0.0)
+        if inte <= 0.0:
+            inte = safe_float(getattr(t, "templint", 0.0), 0.0)
         if inte <= 0:
             continue
-        center = _template_line_center(t)
+        fit_center = safe_float(getattr(t, "fitwavelen", 0.0), 0.0)
+        center = abs(fit_center) if fit_center else (
+            safe_float(getattr(t, "asswavelen", 0.0), 0.0)
+            or safe_float(getattr(t, "wavelen", 0.0), 0.0)
+        )
+        if center <= 0.0:
+            continue
         eff = _response_factor(app, center)
         icorr = inte / eff
         if icorr <= 0:
             continue
-        ek_ev = t.ek * 1.23985e-4
-        y = math.log(icorr / abs(t.aki * t.gk))
-        groups[(t.specie.strip().capitalize(), int(t.ion))].append({
+        ek_ev = ek * 1.23985e-4
+        y = math.log(icorr / abs(aki * gk))
+        groups[(specie, ion)].append({
             "x": ek_ev,
             "y": y,
             "line": t,
             "icorr": icorr,
             "eff": eff,
-            "inactive": t.aki < 0.0,
+            "inactive": aki < 0.0,
         })
     skipped = len(app.template_lines) - sum(1 for pts in groups.values() for p in pts if not p.get("inactive"))
     return groups, skipped
@@ -2966,21 +2979,33 @@ def libspp_saha_boltzmann_groups(
     for idx, t in enumerate(app.template_lines, start=1):
         specie = str(getattr(t, "specie", "") or "").strip().capitalize()
         ion = safe_int(getattr(t, "ion", 0), 0)
-        if not specie or ion not in (1, 2) or not t.aki or not t.gk or not t.ek:
+        aki = safe_float(getattr(t, "aki", 0.0), 0.0)
+        gk = safe_float(getattr(t, "gk", 0.0), 0.0)
+        ek = safe_float(getattr(t, "ek", 0.0), 0.0)
+        if not specie or ion not in (1, 2) or not aki or not gk or not ek:
             skipped += 1
             continue
-        inte = _template_line_intensity(t)
+        inte = safe_float(getattr(t, "inte", 0.0), 0.0)
+        if inte <= 0.0:
+            inte = safe_float(getattr(t, "templint", 0.0), 0.0)
         if inte <= 0.0:
             skipped += 1
             continue
-        center = _template_line_center(t)
+        fit_center = safe_float(getattr(t, "fitwavelen", 0.0), 0.0)
+        center = abs(fit_center) if fit_center else (
+            safe_float(getattr(t, "asswavelen", 0.0), 0.0)
+            or safe_float(getattr(t, "wavelen", 0.0), 0.0)
+        )
+        if center <= 0.0:
+            skipped += 1
+            continue
         eff = _response_factor(app, center)
         icorr = inte / eff
         if icorr <= 0.0:
             skipped += 1
             continue
-        ek_ev = t.ek * 1.23985e-4
-        y = math.log(icorr / abs(t.aki * t.gk))
+        ek_ev = ek * 1.23985e-4
+        y = math.log(icorr / abs(aki * gk))
         x = ek_ev
         if ion == 2:
             if ne <= 0.0 or kt <= 0.0:
@@ -3005,7 +3030,7 @@ def libspp_saha_boltzmann_groups(
             "icorr": icorr,
             "eff": eff,
             "center": center,
-            "inactive": t.aki < 0.0,
+            "inactive": aki < 0.0,
         })
     skipped += sum(1 for pts in groups.values() for p in pts if p.get("inactive"))
     return groups, skipped
@@ -4864,6 +4889,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.line_vars = []
         self.displayed_group_key = None
         self.displayed_lines = []
+        self.manual_fit_current_indices = []
         self.manual_fit_lines = []
         self.manual_fit_index = 0
         self.manual_fit_failed = False
@@ -5004,15 +5030,20 @@ class RetroFitManagerWindow(tk.Toplevel):
         option_fix_wl = bool(getattr(opts, "fix_wl", False))
         option_fixed_wg = abs(safe_float(getattr(opts, "fixed_wg", 0.5), 0.5))
         option_fixed_wl = abs(safe_float(getattr(opts, "fixed_wl", 0.5), 0.5))
-        preserved_wavelengths = {}
+        preserved_values = {}
         if preserve_user_values:
             for r, t in enumerate(getattr(self, "displayed_lines", [])[:10]):
                 if r >= len(self.line_vars):
                     break
-                lam, _wg, _wl, flam, *_ = self.line_vars[r]
-                text = lam.get()
-                if safe_float(text, None) is not None:
-                    preserved_wavelengths[id(t)] = (text, bool(flam.get()))
+                lam, wg, wl, flam, fwg, fwl, *_ = self.line_vars[r]
+                preserved_values[id(t)] = {
+                    "lam": lam.get(),
+                    "wg": wg.get(),
+                    "wl": wl.get(),
+                    "flam": bool(flam.get()),
+                    "fwg": bool(fwg.get()),
+                    "fwl": bool(fwl.get()),
+                }
         for r in range(10):
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             # Empty rows are not part of the current fit.  Do not preload
@@ -5030,19 +5061,23 @@ class RetroFitManagerWindow(tk.Toplevel):
                 break
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             center = t.fitwavelen if t.fitwavelen else t.wavelen
-            preserved = preserved_wavelengths.get(id(t))
+            preserved = preserved_values.get(id(t))
             if preserved is not None:
-                lam.set(preserved[0])
-                flam.set(option_fix_wavelength or preserved[1])
+                lam.set(preserved["lam"])
+                wg.set(preserved["wg"])
+                wl.set(preserved["wl"])
+                flam.set(option_fix_wavelength or preserved["flam"])
+                fwg.set(option_fix_wg or preserved["fwg"])
+                fwl.set(option_fix_wl or preserved["fwl"])
             else:
                 lam.set(f"{abs(center):.6g}")
                 flam.set(option_fix_wavelength or center < 0)
-            wg_value = option_fixed_wg if option_fix_wg else (abs(t.wg) if t.wg else option_fixed_wg)
-            wl_value = option_fixed_wl if option_fix_wl else (abs(t.wl) if t.wl else option_fixed_wl)
-            wg.set(f"{wg_value:.6g}")
-            wl.set(f"{wl_value:.6g}")
-            fwg.set(option_fix_wg or safe_float(getattr(t, "wg", 0.0), 0.0) < 0)
-            fwl.set(option_fix_wl or safe_float(getattr(t, "wl", 0.0), 0.0) < 0)
+                wg_value = option_fixed_wg if option_fix_wg else (abs(t.wg) if t.wg else option_fixed_wg)
+                wl_value = option_fixed_wl if option_fix_wl else (abs(t.wl) if t.wl else option_fixed_wl)
+                wg.set(f"{wg_value:.6g}")
+                wl.set(f"{wl_value:.6g}")
+                fwg.set(option_fix_wg or safe_float(getattr(t, "wg", 0.0), 0.0) < 0)
+                fwl.set(option_fix_wl or safe_float(getattr(t, "wl", 0.0), 0.0) < 0)
             self._color_row(r)
         if len(lines) > 10:
             self.msg_var.set("Too many lines for fitting (> 10)")
@@ -5066,6 +5101,51 @@ class RetroFitManagerWindow(tk.Toplevel):
             [t for t in self.master_app.template_lines if getattr(t, "wavelen", 0.0)],
             key=lambda t: t.wavelen,
         )
+
+    def _manual_template_lines_source(self):
+        visible = self._visible_template_lines()
+        return visible if visible else self._sorted_template_lines()
+
+    def _get_template_rows_sorted_by_wavelength(self):
+        rows = []
+        for idx, line in enumerate(getattr(self.master_app, "template_lines", []) or []):
+            try:
+                wavelength = float(getattr(line, "wavelen", 0.0) or 0.0)
+            except Exception:
+                continue
+            if wavelength:
+                rows.append((idx, wavelength, line))
+        rows.sort(key=lambda item: item[1])
+        return rows
+
+    def _current_template_indices(self):
+        if self.manual_fit_current_indices:
+            return list(self.manual_fit_current_indices)
+        indices = []
+        all_lines = list(getattr(self.master_app, "template_lines", []) or [])
+        for line in getattr(self, "displayed_lines", []) or []:
+            try:
+                indices.append(all_lines.index(line))
+            except ValueError:
+                pass
+        return indices
+
+    def _build_manual_fit_group_from_anchor(self, sorted_rows, anchor_pos, direction):
+        if anchor_pos < 0 or anchor_pos >= len(sorted_rows):
+            return [], []
+        delta = self._manual_delta_min()
+        positions = [anchor_pos]
+        if direction == "previous":
+            pos = anchor_pos - 1
+            while pos >= 0 and abs(sorted_rows[pos + 1][1] - sorted_rows[pos][1]) < delta:
+                positions.insert(0, pos)
+                pos -= 1
+        else:
+            pos = anchor_pos + 1
+            while pos < len(sorted_rows) and abs(sorted_rows[pos][1] - sorted_rows[pos - 1][1]) < delta:
+                positions.append(pos)
+                pos += 1
+        return [sorted_rows[pos][2] for pos in positions], [sorted_rows[pos][0] for pos in positions]
 
     def _manual_delta_min(self):
         return max(safe_float(getattr(self.master_app.options, "delta_min", 1.0), 1.0), 1e-9)
@@ -5107,6 +5187,12 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.load_from_template(group, preserve_user_values=preserve_user_values)
         self.displayed_lines = list(group)
         self.displayed_group_key = self._group_key(group)
+        rows_by_line = {id(line): idx for idx, _w, line in self._get_template_rows_sorted_by_wavelength()}
+        self.manual_fit_current_indices = [
+            rows_by_line[id(line)]
+            for line in self.displayed_lines
+            if id(line) in rows_by_line
+        ]
 
     def _show_group_region(self, group, preserve_user_values=False):
         if not group:
@@ -5129,7 +5215,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         return point_count, expanded
 
     def prepare_initial_region(self, preserve_user_values=False):
-        self.manual_fit_lines = self._sorted_template_lines()
+        self.manual_fit_lines = self._manual_template_lines_source()
         self.manual_fit_index = 0
         group, _ = self._group_from_index(0)
         if group:
@@ -5148,7 +5234,7 @@ class RetroFitManagerWindow(tk.Toplevel):
 
     def _current_group(self):
         if not self.manual_fit_lines:
-            self.manual_fit_lines = self._sorted_template_lines()
+            self.manual_fit_lines = self._manual_template_lines_source()
         return self._group_from_index(self.manual_fit_index)
 
     def _current_fit_point_count(self):
@@ -5333,7 +5419,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         # Do not reload the editor rows when the same group is already shown:
         # the user may have changed widths or fixed/free checkboxes before Fit.
         if self.displayed_group_key != self._group_key(group):
-            self._display_manual_group(group)
+            self._display_manual_group(group, preserve_user_values=True)
         self.update_idletasks()
         min_points = self._minimum_fit_points(group)
         point_count = self._current_fit_point_count()
@@ -5432,7 +5518,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.run_single_fit()
             return
         if not self.manual_fit_lines:
-            self.manual_fit_lines = self._sorted_template_lines()
+            self.manual_fit_lines = self._manual_template_lines_source()
         self.manual_fit_failed = False
         self.manual_fit_stop = False
         if not self.manual_fit_lines:
@@ -5453,7 +5539,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         fit_lines = self._visible_template_lines()
         self.manual_fit_lines = fit_lines
         if self.displayed_group_key != self._group_key(fit_lines):
-            self.load_from_template(fit_lines)
+            self.load_from_template(fit_lines, preserve_user_values=True)
             self.displayed_lines = list(fit_lines)
             self.displayed_group_key = self._group_key(fit_lines)
         if not fit_lines:
@@ -5540,32 +5626,47 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.msg_var.set("Fit stopped")
 
     def next_region(self):
-        self.manual_fit_lines = self._sorted_template_lines()
-        self.manual_fit_failed = False
-        if not self.manual_fit_lines:
+        sorted_rows = self._get_template_rows_sorted_by_wavelength()
+        current_indices = set(self._current_template_indices())
+        if not sorted_rows or not current_indices:
             self.msg_var.set("No lines for fitting")
             return
-        group, next_index = self._group_from_index(self.manual_fit_index)
+        current_positions = [pos for pos, (idx, _w, _line) in enumerate(sorted_rows) if idx in current_indices]
+        if not current_positions:
+            self.msg_var.set("No current region")
+            return
+        anchor_pos = max(current_positions) + 1
+        if anchor_pos >= len(sorted_rows):
+            return
+        group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, anchor_pos, "next")
         if not group:
-            self.manual_fit_index = 0
-            group, next_index = self._group_from_index(self.manual_fit_index)
-        else:
-            self.manual_fit_index = next_index if next_index < len(self.manual_fit_lines) else self.manual_fit_index
-            group, _ = self._group_from_index(self.manual_fit_index)
-        self._show_group_region(group)
+            return
+        self.manual_fit_failed = False
+        self.manual_fit_lines = list(group)
+        self.manual_fit_index = 0
+        self.manual_fit_current_indices = list(indices)
+        self._show_group_region(group, preserve_user_values=True)
 
     def previous_region(self):
-        self.manual_fit_lines = self._sorted_template_lines()
-        if not self.manual_fit_lines:
+        sorted_rows = self._get_template_rows_sorted_by_wavelength()
+        current_indices = set(self._current_template_indices())
+        if not sorted_rows or not current_indices:
             self.msg_var.set("No lines for fitting")
             return
-        delta = self._manual_delta_min()
-        target = max(0, self.manual_fit_index - 1)
-        while target > 0 and abs(self.manual_fit_lines[target].wavelen - self.manual_fit_lines[target - 1].wavelen) < delta:
-            target -= 1
-        self.manual_fit_index = target
-        group, next_index = self._group_from_index(self.manual_fit_index)
-        self._show_group_region(group)
+        current_positions = [pos for pos, (idx, _w, _line) in enumerate(sorted_rows) if idx in current_indices]
+        if not current_positions:
+            self.msg_var.set("No current region")
+            return
+        anchor_pos = min(current_positions) - 1
+        if anchor_pos < 0:
+            return
+        group, indices = self._build_manual_fit_group_from_anchor(sorted_rows, anchor_pos, "previous")
+        if not group:
+            return
+        self.manual_fit_lines = list(group)
+        self.manual_fit_index = 0
+        self.manual_fit_current_indices = list(indices)
+        self._show_group_region(group, preserve_user_values=True)
 
     def toggle_expand(self):
         if self.winfo_width() > 500:
