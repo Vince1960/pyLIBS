@@ -4582,12 +4582,44 @@ class RetroTemplateManager(tk.Toplevel):
     def __init__(self, master: "MainWindow"):
         super().__init__(master)
         self.master_app = master
+        self._hide_template_pending = False
         self.title("Template")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "1280x560"))
         self.minsize(1180, 420)
         self.configure(bg=RETRO_BG)
         self.protocol("WM_DELETE_WINDOW", master.close_template_window)
+        self.bind("<Unmap>", self._on_unmap, add="+")
         self._build()
+
+    def _on_unmap(self, event=None):
+        if self._hide_template_pending:
+            return
+        try:
+            if str(self.state()) != "iconic":
+                return
+        except Exception:
+            return
+        self._hide_template_window()
+
+    def _hide_template_window(self):
+        if self._hide_template_pending:
+            return
+        self._hide_template_pending = True
+        try:
+            try:
+                self.master_app.template_window_geometry = self.geometry()
+            except Exception:
+                pass
+            try:
+                if self.winfo_exists():
+                    self.withdraw()
+            except Exception:
+                pass
+        finally:
+            self._hide_template_pending = False
+
+    def hide_template(self):
+        self._hide_template_window()
 
     def _build(self):
         panel = ttk.Frame(self)
@@ -4601,6 +4633,8 @@ class RetroTemplateManager(tk.Toplevel):
         ttk.Button(panel, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=2)
         ttk.Button(panel, text="Delete Template", command=self.delete_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Saha-Boltzmann", command=self.master_app.show_saha_boltzmann).pack(side="left", padx=2)
+        ttk.Frame(panel).pack(side="left", fill="x", expand=True)
+        ttk.Button(panel, text="Hide", command=self.hide_template).pack(side="right", padx=2)
 
         tree_frame = ttk.Frame(self)
         self.tree = ttk.Treeview(tree_frame, columns=self.display_columns, show="headings", height=18)
@@ -6305,6 +6339,7 @@ class MainWindow(tk.Tk):
         self.session_temperature_source: Optional[str] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
+        self.template_window_geometry = ""
         self.manual_fit_window = None
         self.single_fit_window = None
         self.auto_fit_window = None
@@ -7192,31 +7227,25 @@ def _raise_template_window(self):
     except Exception:
         self.template_window = None
         return False
-    try:
-        state = str(win.state())
-    except Exception:
-        state = ""
+    geometry = getattr(self, "template_window_geometry", "")
+    if geometry:
+        try:
+            win.geometry(geometry)
+        except Exception:
+            pass
     try:
         win.deiconify()
     except Exception:
         pass
-    try:
-        win.state("normal")
-    except Exception:
-        pass
+    if geometry:
+        try:
+            win.geometry(geometry)
+        except Exception:
+            pass
     try:
         win.update_idletasks()
     except Exception:
         pass
-    if state in {"iconic", "withdrawn"}:
-        try:
-            win.withdraw()
-            win.update_idletasks()
-            win.deiconify()
-            win.state("normal")
-            win.update_idletasks()
-        except Exception:
-            pass
     try:
         win.attributes("-topmost", True)
     except Exception:
