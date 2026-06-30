@@ -2114,7 +2114,10 @@ class MultiGaussianFitWindow(tk.Toplevel):
             p0.extend([area0, center0, max(sig0, 1e-6), max(gam0, 1e-6)])
             c_lo = max(xmin, center0 - half_window)
             c_hi = min(xmax, center0 + half_window)
-            row_fix_center = bool(override.get("fix_center", False)) if override else (safe_float(getattr(t, "fitwavelen", 0.0), 0.0) < 0)
+            row_fix_center = bool(override.get("fix_center", False)) if override else (
+                bool(getattr(self.master_app.options, "fix_wavelength", False))
+                or safe_float(getattr(t, "fitwavelen", 0.0), 0.0) < 0
+            )
             sigma_lo = max(abs(dx)*0.05, 1e-9)
             sigma_hi = max(width, sigma0*50.0)
             gamma_lo = max(abs(dx)*0.05, 1e-9)
@@ -4516,6 +4519,7 @@ class RetroTemplateManager(tk.Toplevel):
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "template_geometry", ""), "1280x560"))
         self.minsize(1180, 420)
         self.configure(bg=RETRO_BG)
+        self.protocol("WM_DELETE_WINDOW", self.on_window_close)
         self._build()
 
     def _build(self):
@@ -4630,9 +4634,12 @@ class RetroTemplateManager(tk.Toplevel):
         if _askyesno(self, "Template", "This will close the current template. Continue?"):
             self.master_app.template_lines.clear()
             self.master_app.notify_template_changed(redraw=True)
-            if getattr(self.master_app, "template_window", None) is self:
-                self.master_app.template_window = None
-            self.destroy()
+            self.on_window_close()
+
+    def on_window_close(self):
+        if getattr(self.master_app, "template_window", None) is self:
+            self.master_app.template_window = None
+        self.destroy()
 
     def delete_template(self):
         fn = filedialog.askopenfilename(
@@ -4957,11 +4964,10 @@ class RetroFitManagerWindow(tk.Toplevel):
             setattr(self.master_app, ref_name, None)
 
     def refresh_content(self):
-        self.load_from_template()
         if self.single:
-            self.prepare_single_region()
+            self.prepare_single_region(preserve_user_values=True)
         else:
-            self.prepare_initial_region()
+            self.prepare_initial_region(preserve_user_values=True)
         if self.automatic:
             try:
                 if self._auto_fit_after_id is not None:
@@ -4990,13 +4996,23 @@ class RetroFitManagerWindow(tk.Toplevel):
         e2.configure(bg=RETRO_FIXED if fwg.get() else RETRO_FREE)
         e3.configure(bg=RETRO_FIXED if fwl.get() else RETRO_FREE)
 
-    def load_from_template(self, lines=None):
+    def load_from_template(self, lines=None, preserve_user_values=False):
         lines = list(lines if lines is not None else self.master_app.template_lines[:10])
         opts = self.master_app.options
+        option_fix_wavelength = bool(getattr(opts, "fix_wavelength", False))
         option_fix_wg = bool(getattr(opts, "fix_wg", False))
         option_fix_wl = bool(getattr(opts, "fix_wl", False))
         option_fixed_wg = abs(safe_float(getattr(opts, "fixed_wg", 0.5), 0.5))
         option_fixed_wl = abs(safe_float(getattr(opts, "fixed_wl", 0.5), 0.5))
+        preserved_wavelengths = {}
+        if preserve_user_values:
+            for r, t in enumerate(getattr(self, "displayed_lines", [])[:10]):
+                if r >= len(self.line_vars):
+                    break
+                lam, _wg, _wl, flam, *_ = self.line_vars[r]
+                text = lam.get()
+                if safe_float(text, None) is not None:
+                    preserved_wavelengths[id(t)] = (text, bool(flam.get()))
         for r in range(10):
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             # Empty rows are not part of the current fit.  Do not preload
@@ -5014,12 +5030,17 @@ class RetroFitManagerWindow(tk.Toplevel):
                 break
             lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
             center = t.fitwavelen if t.fitwavelen else t.wavelen
-            lam.set(f"{abs(center):.6g}")
+            preserved = preserved_wavelengths.get(id(t))
+            if preserved is not None:
+                lam.set(preserved[0])
+                flam.set(option_fix_wavelength or preserved[1])
+            else:
+                lam.set(f"{abs(center):.6g}")
+                flam.set(option_fix_wavelength or center < 0)
             wg_value = option_fixed_wg if option_fix_wg else (abs(t.wg) if t.wg else option_fixed_wg)
             wl_value = option_fixed_wl if option_fix_wl else (abs(t.wl) if t.wl else option_fixed_wl)
             wg.set(f"{wg_value:.6g}")
             wl.set(f"{wl_value:.6g}")
-            flam.set(center < 0)
             fwg.set(option_fix_wg or safe_float(getattr(t, "wg", 0.0), 0.0) < 0)
             fwl.set(option_fix_wl or safe_float(getattr(t, "wl", 0.0), 0.0) < 0)
             self._color_row(r)
@@ -5072,7 +5093,7 @@ class RetroFitManagerWindow(tk.Toplevel):
     def _group_key(self, group):
         return tuple(id(t) for t in group)
 
-    def _display_manual_group(self, group):
+    def _display_manual_group(self, group, preserve_user_values=False):
         if not group or not getattr(self.master_app, "ax", None):
             return
         delta = self._manual_delta_min()
@@ -5083,14 +5104,14 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app.full_y_main_visible_x()
         self.master_app.canvas.draw_idle()
         self.master_app._update_xscroll()
-        self.load_from_template(group)
+        self.load_from_template(group, preserve_user_values=preserve_user_values)
         self.displayed_lines = list(group)
         self.displayed_group_key = self._group_key(group)
 
-    def _show_group_region(self, group):
+    def _show_group_region(self, group, preserve_user_values=False):
         if not group:
             return 0, False
-        self._display_manual_group(group)
+        self._display_manual_group(group, preserve_user_values=preserve_user_values)
         min_points = self._minimum_fit_points(group)
         point_count = self._current_fit_point_count()
         expanded = False
@@ -5107,17 +5128,17 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.populate_results(self.region_fit_results.get(self._group_key(group), []))
         return point_count, expanded
 
-    def prepare_initial_region(self):
+    def prepare_initial_region(self, preserve_user_values=False):
         self.manual_fit_lines = self._sorted_template_lines()
         self.manual_fit_index = 0
         group, _ = self._group_from_index(0)
         if group:
-            self._show_group_region(group)
+            self._show_group_region(group, preserve_user_values=preserve_user_values)
 
-    def prepare_single_region(self):
+    def prepare_single_region(self, preserve_user_values=False):
         self.manual_fit_lines = self._visible_template_lines()
         self.manual_fit_index = 0
-        self.load_from_template(self.manual_fit_lines)
+        self.load_from_template(self.manual_fit_lines, preserve_user_values=preserve_user_values)
         if self.manual_fit_lines:
             lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
             self.msg_var.set(f"Single Fit: {len(self.manual_fit_lines)} visible line(s) in {lo:.4f} - {hi:.4f}")
@@ -6028,7 +6049,7 @@ class MainWindow(tk.Tk):
         self.response_window = show_existing_or_create(self, "response_window", lambda: ResponseWindow(self), refresh=lambda w: w.redraw(), parent=self)
 
     def show_template(self):
-        return self.show_template_manager()
+        return self.show_template_window()
 
     def show_line_identification(self):
         self.line_window = show_existing_or_create(self, "line_window", lambda: LineIdentificationWindow(self), parent=self)
@@ -6325,24 +6346,101 @@ def install_retro_ui(self):
     except Exception:
         pass
 
-def show_template_manager(self):
-    if self.template_window is None or not self.template_window.winfo_exists() or not isinstance(self.template_window, RetroTemplateManager):
+def show_template_window(self):
+    self.template_window = _template_window_reference(self)
+    if self.template_window is None:
         self.template_window = RetroTemplateManager(self)
         center_window(self.template_window, self)
-        restore_lift_focus(self.template_window, self)
     else:
         self.template_window.refresh()
-        restore_lift_focus(self.template_window, self)
+    _raise_template_window(self.template_window)
     return self.template_window
+
+def show_template_manager(self):
+    return self.show_template_window()
+
+def _template_window_reference(self):
+    try:
+        if self.template_window is not None and self.template_window.winfo_exists() and isinstance(self.template_window, (TemplateManager, RetroTemplateManager)):
+            return self.template_window
+    except Exception:
+        pass
+    try:
+        for cls in (RetroTemplateManager, TemplateManager):
+            for child in self.winfo_children():
+                if isinstance(child, cls) and child.winfo_exists():
+                    return child
+    except Exception:
+        pass
+    return None
+
+def _raise_template_window(win):
+    try:
+        if win is None or not win.winfo_exists():
+            return False
+    except Exception:
+        return False
+    try:
+        was_iconic = str(win.state()) == "iconic"
+    except Exception:
+        was_iconic = False
+    try:
+        win.deiconify()
+    except Exception:
+        pass
+    try:
+        win.state("normal")
+    except Exception:
+        pass
+    try:
+        win.update_idletasks()
+    except Exception:
+        pass
+    if was_iconic:
+        try:
+            win.withdraw()
+            win.update_idletasks()
+            win.deiconify()
+            win.state("normal")
+            win.update_idletasks()
+        except Exception:
+            pass
+    try:
+        win.attributes("-topmost", True)
+    except Exception:
+        pass
+    try:
+        win.lift()
+    except Exception:
+        pass
+    try:
+        win.focus_force()
+    except Exception:
+        try:
+            win.focus_set()
+        except Exception:
+            pass
+    try:
+        win.after(250, lambda w=win: _clear_template_topmost(w))
+    except Exception:
+        pass
+    return True
+
+def _clear_template_topmost(win):
+    try:
+        if win is not None and win.winfo_exists():
+            win.attributes("-topmost", False)
+    except Exception:
+        pass
 
 def show_active_spectra(self):
     if self.active_window is None or not self.active_window.winfo_exists():
         self.active_window = RetroActiveSpectraWindow(self)
         center_window(self.active_window, self)
-        restore_lift_focus(self.active_window, self)
+        bring_window_to_front(self.active_window, self)
     else:
         self.active_window.refresh()
-        restore_lift_focus(self.active_window, self)
+        bring_window_to_front(self.active_window, self)
     return self.active_window
 
 def show_retro_fit_manager(self):
@@ -6353,6 +6451,36 @@ def show_single_fit_manager(self):
 
 def show_auto_fit_manager(self):
     return self._show_fit_manager("auto_fit_window", automatic=True, single=False)
+
+def bring_window_to_front(win, parent=None):
+    try:
+        if win is None or not win.winfo_exists():
+            return False
+    except Exception:
+        return False
+    try:
+        if str(win.state()) == "iconic":
+            win.deiconify()
+    except Exception:
+        try:
+            win.deiconify()
+        except Exception:
+            pass
+    try:
+        if parent is not None and getattr(parent, "winfo_exists", lambda: False)():
+            win.lift(parent)
+        else:
+            win.lift()
+    except Exception:
+        pass
+    try:
+        win.focus_force()
+    except Exception:
+        try:
+            win.focus_set()
+        except Exception:
+            pass
+    return True
 
 def _show_fit_manager(self, ref_name, automatic=False, single=False):
     win = getattr(self, ref_name, None)
@@ -6365,7 +6493,7 @@ def _show_fit_manager(self, ref_name, automatic=False, single=False):
             win.refresh_content()
         except Exception:
             pass
-        restore_lift_focus(win, self)
+        bring_window_to_front(win, self)
         return win
     try:
         setattr(self, ref_name, None)
@@ -6373,7 +6501,7 @@ def _show_fit_manager(self, ref_name, automatic=False, single=False):
         pass
     win = RetroFitManagerWindow(self, automatic=automatic, single=single)
     setattr(self, ref_name, win)
-    restore_lift_focus(win, self)
+    bring_window_to_front(win, self)
     return win
 
 def swap_spectra(self):
@@ -7224,7 +7352,7 @@ def goto_wavelength(self, wavelength):
 # the corresponding class methods are migrated in a dedicated pass.
 _RETRO_METHODS = [
     build_retro_menu, build_retro_toolbar, install_retro_ui,
-    show_template_manager, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
+    show_template_window, show_template_manager, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_grid, toggle_log,
     toggle_labels, smooth_main_spectrum,
