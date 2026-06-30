@@ -1463,6 +1463,61 @@ class BatchStatisticsWindow(tk.Toplevel):
                 pass
         return fn
 
+    def _pump_ui(self):
+        for widget in (self.master_app, self):
+            try:
+                widget.update_idletasks()
+            except Exception:
+                pass
+            try:
+                widget.update()
+            except Exception:
+                pass
+
+    def _fit_multifit_single_row(self, fit_window, template_row):
+        original_template_lines = list(getattr(self.master_app, "template_lines", []) or [])
+        row_clone = _clone_template_line(template_row)
+        try:
+            self.master_app.template_lines = [row_clone]
+            try:
+                self.master_app.notify_template_changed(redraw=False)
+            except Exception:
+                pass
+            wave = safe_float(getattr(row_clone, "fitwavelen", 0.0), 0.0) or safe_float(getattr(row_clone, "wavelen", 0.0), 0.0)
+            if wave:
+                try:
+                    self.master_app.zoom_around(wave)
+                except Exception:
+                    pass
+            self._pump_ui()
+            try:
+                fit_window.refresh_content()
+            except Exception:
+                pass
+            self._pump_ui()
+            ok, _fit_lines = fit_window._fit_current_visible_window(
+                "Single Fit",
+                allow_previous_visible_fallback=False,
+                show_errors=False,
+            )
+            self._pump_ui()
+            if not ok:
+                return {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+            inte = getattr(row_clone, "inte", None)
+            wg = getattr(row_clone, "wg", None)
+            wl = getattr(row_clone, "wl", None)
+            if any(value in (None, "", "ERROR") for value in (inte, wg, wl)):
+                return {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+            return {"Inte": inte, "wg": wg, "wl": wl}
+        except Exception:
+            return {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+        finally:
+            self.master_app.template_lines = original_template_lines
+            try:
+                self.master_app.notify_template_changed(redraw=False)
+            except Exception:
+                pass
+
     def _load_spectrum(self, filename):
         return self.master_app.load_spectrum_with_corrections(filename)
 
@@ -1502,21 +1557,96 @@ class BatchStatisticsWindow(tk.Toplevel):
             _showerror(self, "MultiFit", "openpyxl is not available.")
             return
 
+        fit_window = None
+        original_spectra = list(getattr(self.master_app, "spectra", []) or [])
+        original_fit_overlay = getattr(self.master_app, "fit_overlay", None)
+        original_template_lines = list(getattr(self.master_app, "template_lines", []) or [])
         results_by_file = {}
         load_errors = []
         total = len(files)
-        for i, fn in enumerate(files, start=1):
-            self.master_app.status(f"MultiFit: processing {i}/{total} {Path(fn).name}")
-            self.update_idletasks()
+        try:
             try:
-                spectrum = self._load_spectrum(fn)
-                results_by_file[fn] = _multifit_results_for_spectrum(spectrum, template_lines, self.master_app.options)
-            except Exception as e:
-                load_errors.append(f"{Path(fn).name}: {e}")
-                results_by_file[fn] = {
+                fit_window = RetroFitManagerWindow(self.master_app, single=True)
+                try:
+                    fit_window.withdraw()
+                except Exception:
+                    pass
+            except Exception:
+                fit_window = None
+
+            for file_index, fn in enumerate(files, start=1):
+                self.master_app.status(f"MultiFit: loading {file_index}/{total} {Path(fn).name}")
+                self._pump_ui()
+                try:
+                    spectrum = self._load_spectrum(fn)
+                except Exception as e:
+                    load_errors.append(f"{Path(fn).name}: {e}")
+                    results_by_file[fn] = {
+                        idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+                        for idx in range(len(template_lines))
+                    }
+                    continue
+
+                try:
+                    assign_default_spectrum_color(spectrum, 0)
+                except Exception:
+                    pass
+                self.master_app.spectra = [spectrum]
+                self.master_app.fit_overlay = None
+                try:
+                    self.master_app.redraw(preserve_view=False)
+                except Exception:
+                    pass
+                self._pump_ui()
+
+                file_results = {}
+                for row_index, template_row in enumerate(original_template_lines):
+                    wave = safe_float(getattr(template_row, "fitwavelen", 0.0), 0.0) or safe_float(getattr(template_row, "wavelen", 0.0), 0.0)
+                    self.master_app.status(
+                        f"MultiFit: {Path(fn).name} -> row {row_index + 1}/{len(original_template_lines)}"
+                        + (f" ({wave:.4f})" if wave else "")
+                    )
+                    self._pump_ui()
+                    if fit_window is None:
+                        file_results[row_index] = {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
+                        continue
+                    file_results[row_index] = self._fit_multifit_single_row(fit_window, template_row)
+                    self._pump_ui()
+
+                results_by_file[fn] = file_results or {
                     idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
                     for idx in range(len(template_lines))
                 }
+
+                self.master_app.spectra = []
+                self.master_app.fit_overlay = None
+                try:
+                    self.master_app.clear_fit_artists()
+                except Exception:
+                    pass
+                try:
+                    self.master_app.redraw(preserve_view=False)
+                except Exception:
+                    pass
+                self._pump_ui()
+        finally:
+            if fit_window is not None:
+                try:
+                    fit_window.destroy()
+                except Exception:
+                    pass
+            self.master_app.spectra = original_spectra
+            self.master_app.template_lines = original_template_lines
+            self.master_app.fit_overlay = original_fit_overlay
+            try:
+                self.master_app.notify_template_changed(redraw=False)
+            except Exception:
+                pass
+            try:
+                self.master_app.redraw(preserve_view=False)
+            except Exception:
+                pass
+            self._pump_ui()
 
         fn = self._ask_multifit_save_path()
         if not fn:
