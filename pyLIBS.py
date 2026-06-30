@@ -5598,7 +5598,9 @@ class RetroFitManagerWindow(tk.Toplevel):
                 return
             self._run_automatic_fit()
             return
-        self._run_manual_visible_sequence()
+        ok, _fit_lines = self._fit_current_visible_window("Manual Fit", allow_previous_visible_fallback=False)
+        if ok:
+            self.progress["value"] = self._manual_visible_progress()
 
     def _fit_current_visible_window(self, mode_label, allow_previous_visible_fallback=True):
         fit_lines = self._visible_template_lines()
@@ -5681,36 +5683,6 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not positions:
             return 0
         return min(100, int(100 * (max(positions) + 1) / len(sorted_rows)))
-
-    def _run_manual_visible_sequence(self):
-        self._set_visible_fit_lines(self._visible_template_lines(), preserve_user_values=True)
-        if not self.manual_fit_lines:
-            self.msg_var.set("Manual Fit: no template lines are visible in the current window")
-            _showinfo(self, "Manual Fit", "No template lines are visible in the current spectrum window.")
-            return
-        visited = set()
-        while not self.manual_fit_stop:
-            visible_lines = self._visible_template_lines()
-            if not visible_lines:
-                self.msg_var.set("Manual Fit: no template lines are visible in the current window")
-                return
-            visible_key = self._group_key(visible_lines)
-            if visible_key in visited:
-                break
-            visited.add(visible_key)
-            ok, _fit_lines = self._fit_current_visible_window("Manual Fit", allow_previous_visible_fallback=False)
-            if not ok:
-                return
-            self.progress["value"] = self._manual_visible_progress()
-            if not self._move_manual_region("next", preserve_user_values=True):
-                break
-            self.update_idletasks()
-        if self.manual_fit_stop:
-            self.msg_var.set("Manual Fit stopped")
-            return
-        self.progress["value"] = 100
-        self.msg_var.set("Manual Fit completed")
-        self.master_app.status("Manual Fit completed")
 
     def _run_automatic_fit(self):
         total = len(self.manual_fit_lines)
