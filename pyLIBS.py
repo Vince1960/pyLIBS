@@ -4849,6 +4849,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app = master
         self.automatic = bool(automatic)
         self.single = bool(single)
+        self._auto_fit_after_id = None
         self.title("Automatic Fit" if self.automatic else "Single Fit" if self.single else "Manual Fit")
         self.geometry(legacy_geometry_to_tk(getattr(master.options, "fit_geometry", ""), "840x540"))
         self.minsize(800, 520)
@@ -4865,20 +4866,24 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.residual_y = []
         self.residuals_window = None
         self._build()
+        try:
+            self.protocol("WM_DELETE_WINDOW", self.close_window)
+        except Exception:
+            pass
         self.load_from_template()
         if self.single:
             self.prepare_single_region()
         else:
             self.prepare_initial_region()
         if self.automatic:
-            self.after(100, self.run_fit)
+            self._auto_fit_after_id = self.after(100, self.run_fit)
 
     def _build(self):
         top = ttk.Frame(self)
         top.pack(fill="x", padx=4, pady=3)
         ttk.Button(top, text=("Auto Fit" if self.automatic else "Single Fit" if self.single else "Fit"), command=self.run_fit).pack(side="left", padx=2)
         ttk.Button(top, text="Stop", command=self.stop_fit).pack(side="left", padx=2)
-        ttk.Button(top, text="Close", command=self.destroy).pack(side="left", padx=2)
+        ttk.Button(top, text="Close", command=self.close_window).pack(side="left", padx=2)
         if not self.automatic and not self.single:
             ttk.Button(top, text="Next Region", command=self.next_region).pack(side="left", padx=8)
             ttk.Button(top, text="Previous Region", command=self.previous_region).pack(side="left", padx=2)
@@ -4938,6 +4943,46 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.results.column(c, width=w, anchor="center")
         self.results.pack(fill="both", expand=True)
         results_frame.pack(fill="both", expand=True, padx=5, pady=4)
+
+    def _window_ref_name(self):
+        if self.automatic:
+            return "auto_fit_window"
+        if self.single:
+            return "single_fit_window"
+        return "manual_fit_window"
+
+    def _clear_window_ref(self):
+        ref_name = self._window_ref_name()
+        if getattr(self.master_app, ref_name, None) is self:
+            setattr(self.master_app, ref_name, None)
+
+    def refresh_content(self):
+        self.load_from_template()
+        if self.single:
+            self.prepare_single_region()
+        else:
+            self.prepare_initial_region()
+        if self.automatic:
+            try:
+                if self._auto_fit_after_id is not None:
+                    self.after_cancel(self._auto_fit_after_id)
+            except Exception:
+                pass
+            self._auto_fit_after_id = self.after(100, self.run_fit)
+        self.update_idletasks()
+
+    def close_window(self):
+        try:
+            if self._auto_fit_after_id is not None:
+                self.after_cancel(self._auto_fit_after_id)
+        except Exception:
+            pass
+        self._auto_fit_after_id = None
+        self._clear_window_ref()
+        try:
+            self.destroy()
+        except Exception:
+            pass
 
     def _color_row(self, r):
         lam, wg, wl, flam, fwg, fwl, e1, e2, e3 = self.line_vars[r]
@@ -5581,6 +5626,9 @@ class MainWindow(tk.Tk):
         self.session_temperature_source: Optional[str] = None
         self.wavelength_unit = "angstrom"
         self.template_window=None; self.line_window=None; self.response_window=None; self.active_window=None; self.options_window=None
+        self.manual_fit_window = None
+        self.single_fit_window = None
+        self.auto_fit_window = None
         self.batch_window = None
         self.shift_window = None
         self.offset_window = None
@@ -6298,13 +6346,35 @@ def show_active_spectra(self):
     return self.active_window
 
 def show_retro_fit_manager(self):
-    return RetroFitManagerWindow(self, automatic=False)
+    return self._show_fit_manager("manual_fit_window", automatic=False, single=False)
 
 def show_single_fit_manager(self):
-    return RetroFitManagerWindow(self, automatic=False, single=True)
+    return self._show_fit_manager("single_fit_window", automatic=False, single=True)
 
 def show_auto_fit_manager(self):
-    return RetroFitManagerWindow(self, automatic=True)
+    return self._show_fit_manager("auto_fit_window", automatic=True, single=False)
+
+def _show_fit_manager(self, ref_name, automatic=False, single=False):
+    win = getattr(self, ref_name, None)
+    try:
+        exists = win is not None and win.winfo_exists()
+    except Exception:
+        exists = False
+    if exists:
+        try:
+            win.refresh_content()
+        except Exception:
+            pass
+        restore_lift_focus(win, self)
+        return win
+    try:
+        setattr(self, ref_name, None)
+    except Exception:
+        pass
+    win = RetroFitManagerWindow(self, automatic=automatic, single=single)
+    setattr(self, ref_name, win)
+    restore_lift_focus(win, self)
+    return win
 
 def swap_spectra(self):
     count = len(getattr(self, "spectra", []))
@@ -7164,7 +7234,7 @@ _RETRO_METHODS = [
     full_y_main_visible_x,
     expand_x_50, full_scale, show_options, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
-    show_sac_window, load_template_file, save_template_file,
+    show_sac_window, load_template_file, save_template_file, _show_fit_manager,
     _full_x_limits, _update_xscroll, _xscroll_changed, _zoom_out_from_box, _release,
     goto_wavelength, show_goto_dialog,
 ]
