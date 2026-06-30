@@ -5400,6 +5400,22 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.geometry("760x520")
 
 
+def _view_bool(value, default=False):
+    """Return a real bool for view options read from pyLIBS.ini or Tk variables."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return bool(default)
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
 class MainWindow(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -5419,8 +5435,8 @@ class MainWindow(tk.Tk):
         self.trace_window=None
         # View menu state: independent X/Y grids,
         # independent logarithmic axes and spectrum-area background colour.
-        self.view_grid_x = bool(getattr(self.options, "view_grid_x", True))
-        self.view_grid_y = bool(getattr(self.options, "view_grid_y", True))
+        self.view_grid_x = _view_bool(getattr(self.options, "view_grid_x", True), True)
+        self.view_grid_y = _view_bool(getattr(self.options, "view_grid_y", True), True)
         self.view_log_x = bool(getattr(self.options, "view_log_x", False))
         self.view_log_y = bool(getattr(self.options, "view_log_y", False))
         self.plot_background = getattr(self.options, "background_color", "white") or "white"
@@ -5749,8 +5765,20 @@ class MainWindow(tk.Tk):
         for spine in self.ax.spines.values():
             spine.set_linewidth(1.2)
         self.ax.tick_params(direction="in", length=5, width=1.0)
-        self.ax.grid(bool(getattr(self, "view_grid_x", True)), axis="x", linestyle="--", linewidth=0.5, alpha=0.5)
-        self.ax.grid(bool(getattr(self, "view_grid_y", True)), axis="y", linestyle="--", linewidth=0.5, alpha=0.5)
+        self.ax.xaxis.grid(
+            _view_bool(getattr(self, "view_grid_x", True), True),
+            which="major",
+            linestyle="--",
+            linewidth=0.5,
+            alpha=0.5
+        )
+        self.ax.yaxis.grid(
+            _view_bool(getattr(self, "view_grid_y", True), True),
+            which="major",
+            linestyle="--",
+            linewidth=0.5,
+            alpha=0.5
+        )
         label_bbox = dict(facecolor="white", edgecolor="none", alpha=0.75, pad=1)
         for sp in self.spectra:
             if sp.visible and sp.x:
@@ -6053,8 +6081,8 @@ def build_retro_menu(self):
     menu.add_cascade(label="View", menu=view_menu)
     _add_menu_command(self, view_menu, shortcut_items, "Change Background", self.change_background, "Ctrl+B", "<Control-b>", "background.png")
     view_menu.add_separator()
-    self.view_grid_x_var = tk.BooleanVar(value=getattr(self, "view_grid_x", True))
-    self.view_grid_y_var = tk.BooleanVar(value=getattr(self, "view_grid_y", True))
+    self.view_grid_x_var = tk.BooleanVar(value=_view_bool(getattr(self, "view_grid_x", True), True))
+    self.view_grid_y_var = tk.BooleanVar(value=_view_bool(getattr(self, "view_grid_y", True), True))
     self.view_log_x_var = tk.BooleanVar(value=getattr(self, "view_log_x", False))
     self.view_log_y_var = tk.BooleanVar(value=getattr(self, "view_log_y", False))
     _add_menu_checkbutton(self, view_menu, shortcut_items, "GridX", lambda: self.toggle_grid(axis="x"), self.view_grid_x_var, "Ctrl+Alt+X", "<Control-Alt-x>", "grid.png")
@@ -6308,18 +6336,32 @@ def change_background(self):
         self.status(f"Spectrum background: {color}")
 
 def toggle_grid(self, axis="both"):
+    def _update_one(attr, var_name, default=True):
+        current = _view_bool(getattr(self, attr, default), default)
+        var = getattr(self, var_name, None)
+        if var is None:
+            new_value = not current
+        else:
+            try:
+                var_value = _view_bool(var.get(), default)
+            except Exception:
+                var_value = current
+            # From the View menu, Tk has already changed the BooleanVar.
+            # From the keyboard shortcut, it has not: in that case toggle it here.
+            new_value = (not current) if var_value == current else var_value
+            try:
+                var.set(new_value)
+            except Exception:
+                pass
+        setattr(self, attr, new_value)
+        return new_value
+
     if axis in ("x", "both"):
-        if hasattr(self, "view_grid_x_var"):
-            self.view_grid_x = bool(self.view_grid_x_var.get())
-        else:
-            self.view_grid_x = not getattr(self, "view_grid_x", True)
+        self.options.view_grid_x = _update_one("view_grid_x", "view_grid_x_var", True)
+
     if axis in ("y", "both"):
-        if hasattr(self, "view_grid_y_var"):
-            self.view_grid_y = bool(self.view_grid_y_var.get())
-        else:
-            self.view_grid_y = not getattr(self, "view_grid_y", True)
-    self.options.view_grid_x = bool(getattr(self, "view_grid_x", True))
-    self.options.view_grid_y = bool(getattr(self, "view_grid_y", True))
+        self.options.view_grid_y = _update_one("view_grid_y", "view_grid_y_var", True)
+
     self.redraw(preserve_view=True)
 
 def toggle_log(self, axis="y"):
@@ -6625,8 +6667,8 @@ def find_peaks_basic(self):
 
 def on_close(self):
     try:
-        self.options.view_grid_x = bool(getattr(self, "view_grid_x", True))
-        self.options.view_grid_y = bool(getattr(self, "view_grid_y", True))
+        self.options.view_grid_x = _view_bool(getattr(self, "view_grid_x", True), True)
+        self.options.view_grid_y = _view_bool(getattr(self, "view_grid_y", True), True)
         self.options.view_log_x = bool(getattr(self, "view_log_x", False))
         self.options.view_log_y = bool(getattr(self, "view_log_y", False))
         self.options.background_color = getattr(self, "plot_background", "white") or "white"
