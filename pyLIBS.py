@@ -54,7 +54,7 @@ from pylibs.io.report_io import (
     write_report_content as _write_report_content,
     write_temp_cflibs_report as _write_temp_cflibs_report,
 )
-from pylibs.io.template_io import load_template_lines, save_template_lines
+from pylibs.io.template_io import save_template_lines
 from pylibs.io.spectrum_io import (
     SPECTRUM_FILETYPES,
     load_spectrum_for_open as _load_spectrum_for_open,
@@ -4524,11 +4524,12 @@ class RetroTemplateManager(tk.Toplevel):
         ttk.Button(panel, text="Load Template", command=self.load_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Save Template As", command=self.save_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Template Info", command=self.template_info).pack(side="left", padx=2)
-        ttk.Button(panel, text="Show Boltzmann", command=self.master_app.show_saha_boltzmann).pack(side="left", padx=2)
+        ttk.Button(panel, text="Clear fit", command=self.clear_fit).pack(side="left", padx=2)
         ttk.Button(panel, text="Clear Template", command=self.clear_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Close Template", command=self.close_template).pack(side="left", padx=2)
         ttk.Button(panel, text="Delete Row", command=self.delete_selected_row).pack(side="left", padx=2)
         ttk.Button(panel, text="Delete Template", command=self.delete_template).pack(side="left", padx=2)
+        ttk.Button(panel, text="Saha-Boltzmann", command=self.master_app.show_saha_boltzmann).pack(side="left", padx=2)
 
         tree_frame = ttk.Frame(self)
         self.tree = ttk.Treeview(tree_frame, columns=self.display_columns, show="headings", height=18)
@@ -4563,7 +4564,9 @@ class RetroTemplateManager(tk.Toplevel):
             self.tree.see(focus)
 
     def load_template(self):
-        fn = filedialog.askopenfilename(
+        fn = _template_file_dialog(
+            self,
+            filedialog.askopenfilename,
             title="Load Template",
             initialdir=remembered_initial_dir(self.master_app.options),
             filetypes=[("Templates / CSV", "*.csv *.db *.DB *.txt"), ("All", "*.*")]
@@ -4578,7 +4581,9 @@ class RetroTemplateManager(tk.Toplevel):
         self.master_app.notify_template_changed(redraw=True)
 
     def save_template(self):
-        fn = filedialog.asksaveasfilename(
+        fn = _template_file_dialog(
+            self,
+            filedialog.asksaveasfilename,
             title="Save Template",
             initialdir=remembered_initial_dir(self.master_app.options),
             defaultextension=".csv",
@@ -4610,6 +4615,16 @@ class RetroTemplateManager(tk.Toplevel):
             self.master_app.template_lines.clear()
             self.master_app.clear_element_markers()
             self.master_app.notify_template_changed(redraw=True)
+
+    def clear_fit(self):
+        if not self.master_app.template_lines:
+            return
+        for line in self.master_app.template_lines:
+            line.inte = None
+            line.wl = None
+            line.wg = None
+            line.fitwavelen = None
+        self.master_app.notify_template_changed(redraw=False)
 
     def close_template(self):
         if _askyesno(self, "Template", "This will close the current template. Continue?"):
@@ -4654,13 +4669,24 @@ class RetroTemplateManager(tk.Toplevel):
             pass
 
     def delete_selected_row(self):
-        item = self.tree.focus()
-        if item == "":
+        selected = list(self.tree.selection())
+        if not selected:
+            item = self.tree.focus()
+            if item == "":
+                return
+            selected = [item]
+        indices = []
+        for item in selected:
+            try:
+                indices.append(int(item))
+            except Exception:
+                pass
+        if not indices:
             return
-        idx = int(item)
-        if 0 <= idx < len(self.master_app.template_lines):
-            self.master_app.template_lines.pop(idx)
-            self.master_app.notify_template_changed(redraw=True)
+        for idx in sorted(set(indices), reverse=True):
+            if 0 <= idx < len(self.master_app.template_lines):
+                self.master_app.template_lines.pop(idx)
+        self.master_app.notify_template_changed(redraw=True)
 
 
 class RetroActiveSpectraWindow(tk.Toplevel):
@@ -6254,7 +6280,7 @@ def install_retro_ui(self):
 def show_template_manager(self):
     if self.template_window is None or not self.template_window.winfo_exists() or not isinstance(self.template_window, RetroTemplateManager):
         self.template_window = RetroTemplateManager(self)
-        center_window(self.template_window, self)
+        _position_template_window(self.template_window, self)
         restore_lift_focus(self.template_window, self)
     else:
         self.template_window.refresh()
@@ -6495,7 +6521,9 @@ def convert_nm_to_angstrom(self):
     self.redraw()
 
 def load_template_from_menu(self):
-    fn = filedialog.askopenfilename(
+    fn = _template_file_dialog(
+        self,
+        filedialog.askopenfilename,
         title="Load Template",
         initialdir=remembered_initial_dir(self.options),
         filetypes=[("Templates", "*.csv *.db *.DB *.txt"), ("All", "*.*")]
@@ -6782,6 +6810,118 @@ def on_close(self):
     except Exception as e:
         logging.warning("Could not save pyLIBS.ini on close: %s", e, exc_info=True)
     self.destroy()
+
+# ---------------------------------------------------------------------------
+# Template dialog / file helpers
+# ---------------------------------------------------------------------------
+
+def _template_field_value(raw, *, integer=False):
+    text = "" if raw is None else str(raw).strip()
+    if not text or text == "Empty":
+        return None
+    return safe_int(text, None) if integer else safe_float(text, None)
+
+
+def load_template_lines(filename, columns=None):
+    cols = list(columns if columns is not None else RetroTemplateManager.columns)
+    rows = []
+    with open(filename, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        sample = f.read(4096)
+        f.seek(0)
+        dialect = csv.Sniffer().sniff(sample, delimiters=",;\t ") if sample.strip() else csv.excel
+        reader = csv.DictReader(f, dialect=dialect)
+        if reader.fieldnames and any(name in reader.fieldnames for name in cols):
+            for r in reader:
+                kw = {}
+                for c in cols:
+                    v = (r.get(c) or "").strip()
+                    if c == "specie":
+                        kw[c] = "" if v == "Empty" else v
+                    elif c in ("ion", "gk", "gi", "acc"):
+                        kw[c] = _template_field_value(v, integer=True)
+                    else:
+                        kw[c] = _template_field_value(v)
+                if kw.get("wavelen") not in (None, "", 0, 0.0):
+                    rows.append(TemplateLine(**kw))
+        else:
+            f.seek(0)
+            for line in f:
+                parts = line.replace(",", ".").split()
+                if not parts:
+                    continue
+                try:
+                    rows.append(TemplateLine(wavelen=float(parts[0])))
+                except Exception:
+                    pass
+    return rows
+
+
+def _template_window_geometry(template_win, master_win):
+    try:
+        template_win.update_idletasks()
+        if master_win is not None and getattr(master_win, "winfo_exists", lambda: False)():
+            master_win.update_idletasks()
+            parent_x = master_win.winfo_rootx()
+            parent_y = master_win.winfo_rooty()
+            parent_w = max(1, master_win.winfo_width() or master_win.winfo_reqwidth())
+            parent_h = max(1, master_win.winfo_height() or master_win.winfo_reqheight())
+            screen_w = max(1, master_win.winfo_screenwidth())
+            screen_h = max(1, master_win.winfo_screenheight())
+        else:
+            parent_x = 0
+            parent_y = 0
+            parent_w = 0
+            parent_h = 0
+            screen_w = max(1, template_win.winfo_screenwidth())
+            screen_h = max(1, template_win.winfo_screenheight())
+        width = max(1, template_win.winfo_width() or template_win.winfo_reqwidth())
+        height = max(1, template_win.winfo_height() or template_win.winfo_reqheight())
+        margin = 16
+        x = parent_x + parent_w + margin
+        y = parent_y
+        if x + width > screen_w:
+            left_x = parent_x - width - margin
+            if left_x >= 0:
+                x = left_x
+            else:
+                x = max(0, min(parent_x, screen_w - width))
+        if y + height > screen_h:
+            y = max(0, screen_h - height)
+        template_win.geometry(f"+{x}+{y}")
+        return True
+    except Exception:
+        return False
+
+
+def _position_template_window(template_win, master_win):
+    return _template_window_geometry(template_win, master_win)
+
+
+def _template_file_dialog(owner, dialog_func, **kwargs):
+    kwargs.setdefault("parent", owner)
+    parent = getattr(owner, "master_app", None) or owner
+    try:
+        restore_lift_focus(owner, parent)
+    except Exception:
+        pass
+    topmost_enabled = False
+    try:
+        owner.attributes("-topmost", True)
+        topmost_enabled = True
+    except Exception:
+        pass
+    try:
+        return dialog_func(**kwargs)
+    finally:
+        if topmost_enabled:
+            try:
+                owner.attributes("-topmost", False)
+            except Exception:
+                pass
+        try:
+            restore_lift_focus(owner, parent)
+        except Exception:
+            pass
 
 # ---------------------------------------------------------------------------
 # pyLIBS v8.5 compatibility glue
