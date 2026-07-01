@@ -34,7 +34,6 @@ PYLIBS_INI_ORDER = [
     ("ne_high", float),
     ("kt_low", float),
     ("kt_high", float),
-    ("show_progress", bool),
     ("fix_wavelength", bool),
     ("convert_to_angstrom", bool),
     ("iterations", int),
@@ -53,6 +52,10 @@ PYLIBS_INI_ORDER = [
     ("view_log_y", bool),
     ("background_color", str),
 ]
+
+# Legacy pyLIBS.ini files may still contain the removed positional slot.
+# Skip that value so the remaining parameters keep their original alignment.
+_LEGACY_SHOW_PROGRESS_INDEX = 29
 
 
 WINDOW_POSITION_SECTION = "WindowPositions"
@@ -84,6 +87,7 @@ def _ini_cast(value: str, typ):
 
 def _read_pylibs_ini(path):
     legacy_values = []
+    legacy_comments = []
     window_positions = {}
     in_window_positions = False
     for raw_line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -104,7 +108,8 @@ def _read_pylibs_ini(path):
                 window_positions[key] = value
             continue
         legacy_values.append(parse_legacy_ini_value(raw_line))
-    return legacy_values, window_positions
+        legacy_comments.append(raw_line.split("//", 1)[1].strip() if "//" in raw_line else "")
+    return legacy_values, legacy_comments, window_positions
 
 
 def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
@@ -116,7 +121,12 @@ def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
             path = old
         else:
             return False
-    values, window_positions = _read_pylibs_ini(path)
+    values, comments, window_positions = _read_pylibs_ini(path)
+    legacy_index = next((i for i, comment in enumerate(comments) if comment.lower() == "show progress"), None)
+    if legacy_index is not None and len(values) > legacy_index:
+        values = values[:legacy_index] + values[legacy_index + 1:]
+    elif len(values) == len(PYLIBS_INI_ORDER) + 1 and len(values) > _LEGACY_SHOW_PROGRESS_INDEX:
+        values = values[:_LEGACY_SHOW_PROGRESS_INDEX] + values[_LEGACY_SHOW_PROGRESS_INDEX + 1:]
     for (attr, typ), value in zip(PYLIBS_INI_ORDER, values):
         if hasattr(options, attr):
             setattr(options, attr, _ini_cast(value, typ))
@@ -142,7 +152,7 @@ def load_window_positions(filename: str = "pyLIBS.ini"):
             path = old
         else:
             return {}
-    _values, window_positions = _read_pylibs_ini(path)
+    _values, _comments, window_positions = _read_pylibs_ini(path)
     return window_positions
 
 
@@ -154,7 +164,7 @@ def save_pylibs_ini(options, filename: str = "pyLIBS.ini"):
         "KappaT", "Thresh.", "Delta min.", "Range", "Apply normalization",
         "Apply before", "Apply after", "Normalization", "Echelle", "Single file",
         "Instr. width", "Fix wg", "Fixed wg", "Fix wl", "Fixed wl", "Aki thres.",
-        "Ne low", "Ne high", "kT low", "kT high", "Show progress", "Fix wavel.",
+        "Ne low", "Ne high", "kT low", "kT high", "Fix wavel.",
         "Convert to A", "Iterations", "Auto Offset", "Auto Shift", "Main",
         "Template", "Fit", "CF", "Options", "Ident", "InDir",
         "GridX", "GridY", "LogX", "LogY", "BackgroundColor",

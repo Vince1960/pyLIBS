@@ -153,7 +153,6 @@ class AppOptions:
     ne_high: float = 1e18
     kt_low: float = 0.5
     kt_high: float = 3.0
-    show_progress: bool = True
     fix_wavelength: bool = False
     convert_to_angstrom: bool = False
     iterations: int = 20
