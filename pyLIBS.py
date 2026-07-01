@@ -80,6 +80,7 @@ from pylibs.gui.simple_dialogs import (
     show_about,
     show_goto_dialog,
     show_manual,
+    _population_statistics,
     show_statistics,
 )
 from pylibs.utils.constants import (
@@ -1530,21 +1531,30 @@ class BatchStatisticsWindow(tk.Toplevel):
         used_names = set()
         for idx, line in enumerate(template_lines):
             ws = wb.create_sheet(title=_excel_safe_sheet_name(_multifit_sheet_base_name(line, idx), used_names))
-            ws.append(["Nome del file", "Inte", "wg", "wl"])
+            ws.append(["Nome del file", "Inte", "wg", "wl", "Mean(X)*Mean(Y)", "Inte/(Mean(X)*Mean(Y))"])
             for fn in files:
-                row = results_by_file.get(fn, {}).get(idx, {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"})
+                file_results = results_by_file.get(fn, {})
+                row = file_results.get(idx, {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"})
+                spectrum_integral = file_results.get("spectrum_integral", "ERROR")
+                normalized_inte = _multifit_normalized_inte(row.get("Inte", ""), spectrum_integral)
+                normalized_cell_value = normalized_inte if isinstance(normalized_inte, (int, float)) else normalized_inte
                 values = [
                     Path(fn).name,
                     _format_excel_fit_value(row.get("Inte", "")),
                     _format_excel_fit_value(row.get("wg", "")),
                     _format_excel_fit_value(row.get("wl", "")),
+                    _format_excel_fit_value(spectrum_integral),
+                    normalized_cell_value,
                 ]
                 ws.append(values)
                 row_num = ws.max_row
-                for col_idx in (2, 3, 4):
+                for col_idx in (2, 3, 4, 5):
                     cell = ws.cell(row=row_num, column=col_idx)
                     if isinstance(cell.value, (int, float)):
                         cell.number_format = "0.###"
+                norm_cell = ws.cell(row=row_num, column=6)
+                if isinstance(norm_cell.value, (int, float)):
+                    norm_cell.number_format = "0.000E+00"
             ws.freeze_panes = "A2"
         wb.save(filename)
 
@@ -1569,6 +1579,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         original_template_lines = list(getattr(self.master_app, "template_lines", []) or [])
         results_by_file = {}
         load_errors = []
+        spectrum_integrals_by_file = {}
         total = len(files)
         try:
             try:
@@ -1587,6 +1598,7 @@ class BatchStatisticsWindow(tk.Toplevel):
                     spectrum = self._load_spectrum(fn)
                 except Exception as e:
                     load_errors.append(f"{Path(fn).name}: {e}")
+                    spectrum_integrals_by_file[fn] = "ERROR"
                     results_by_file[fn] = {
                         idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
                         for idx in range(len(template_lines))
@@ -1604,6 +1616,8 @@ class BatchStatisticsWindow(tk.Toplevel):
                 except Exception:
                     pass
                 self._pump_ui()
+
+                spectrum_integrals_by_file[fn] = _multifit_spectrum_integral(spectrum)
 
                 file_results = {}
                 for row_index, template_row in enumerate(original_template_lines):
@@ -1623,6 +1637,7 @@ class BatchStatisticsWindow(tk.Toplevel):
                     idx: {"Inte": "ERROR", "wg": "ERROR", "wl": "ERROR"}
                     for idx in range(len(template_lines))
                 }
+                results_by_file[fn]["spectrum_integral"] = spectrum_integrals_by_file.get(fn, "ERROR")
 
                 self.master_app.spectra = []
                 self.master_app.fit_overlay = None
@@ -8305,6 +8320,65 @@ def _format_excel_fit_value(value):
     if abs(rounded - round(rounded)) < 1e-12:
         return int(round(rounded))
     return rounded
+
+
+def _multifit_spectrum_integral(spectrum):
+    try:
+        x_values = getattr(spectrum, "x", None)
+        y_values = getattr(spectrum, "y", None)
+        if x_values is None or y_values is None:
+            return "ERROR"
+        n = min(len(x_values), len(y_values))
+        if n <= 0:
+            return "ERROR"
+        xstats = _population_statistics(list(x_values[:n]))
+        ystats = _population_statistics(list(y_values[:n]))
+        avg_x = xstats.get("Average")
+        avg_y = ystats.get("Average")
+        if avg_x is None or avg_y is None:
+            return "ERROR"
+        product = float(avg_x) * float(avg_y)
+        if not math.isfinite(product):
+            return "ERROR"
+        return product
+    except Exception:
+        return "ERROR"
+
+
+def _multifit_normalized_inte(inte_value, spectrum_integral):
+    if inte_value is None:
+        return ""
+    if isinstance(inte_value, str):
+        text = inte_value.strip()
+        if not text:
+            return ""
+        if text.upper() == "ERROR":
+            return "ERROR"
+        try:
+            inte_value = float(text)
+        except Exception:
+            return "ERROR"
+    if isinstance(spectrum_integral, str):
+        text = spectrum_integral.strip()
+        if not text:
+            return "ERROR"
+        if text.upper() == "ERROR":
+            return "ERROR"
+        try:
+            spectrum_integral = float(text)
+        except Exception:
+            return "ERROR"
+    try:
+        numerator = float(inte_value)
+        denominator = float(spectrum_integral)
+    except Exception:
+        return "ERROR"
+    if not math.isfinite(numerator) or not math.isfinite(denominator) or denominator == 0.0:
+        return "ERROR"
+    normalized = numerator / denominator
+    if not math.isfinite(normalized):
+        return "ERROR"
+    return normalized
 
 
 def _multifit_group_from_anchor(sorted_rows, anchor_pos, delta_min):
