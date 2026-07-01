@@ -6732,8 +6732,15 @@ class MainWindow(tk.Tk):
         sp = load_spectrum_for_open(filename, self.options)
         if self.options.apply_response and self.options.apply_before and self.response is not None:
             sp.apply_response(self.response)
+        self.apply_autoshift_if_enabled(sp)
         self.apply_auto_offset_if_enabled(sp)
         return sp
+
+    def apply_autoshift_if_enabled(self, spectrum):
+        shift = safe_float(getattr(self.options, "auto_shift", 0.0), 0.0)
+        if shift:
+            spectrum.x = [x + shift for x in spectrum.x]
+        return spectrum
 
     def apply_auto_offset_if_enabled(self, spectrum):
         if not _view_bool(getattr(self.options, "auto_offset", False), False):
@@ -6765,7 +6772,6 @@ class MainWindow(tk.Tk):
         first_fn=fns[0]
         try:
             sp=self.load_spectrum_with_corrections(first_fn)
-            if self.options.auto_shift: sp.x=[x+self.options.auto_shift for x in sp.x]
             assign_default_spectrum_color(sp, 0)
             self.spectra=[sp]
             self.wavelength_unit = self.infer_wavelength_unit()
