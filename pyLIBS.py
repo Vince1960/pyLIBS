@@ -6732,7 +6732,30 @@ class MainWindow(tk.Tk):
         sp = load_spectrum_for_open(filename, self.options)
         if self.options.apply_response and self.options.apply_before and self.response is not None:
             sp.apply_response(self.response)
+        self.apply_auto_offset_if_enabled(sp)
         return sp
+
+    def apply_auto_offset_if_enabled(self, spectrum):
+        if not _view_bool(getattr(self.options, "auto_offset", False), False):
+            return spectrum
+        y_values = getattr(spectrum, "y", None)
+        try:
+            if y_values is None or len(y_values) == 0:
+                return spectrum
+        except TypeError:
+            return spectrum
+        try:
+            numeric_y = [float(y) for y in y_values]
+            finite_y = [y for y in numeric_y if math.isfinite(y)]
+        except (TypeError, ValueError):
+            return spectrum
+        if not finite_y:
+            return spectrum
+        offset = min(finite_y)
+        if offset == 0:
+            return spectrum
+        spectrum.y = [y - offset for y in numeric_y]
+        return spectrum
 
     def open_spectrum(self):
         fns=filedialog.askopenfilenames(initialdir=remembered_initial_dir(self.options), filetypes=SPECTRUM_FILETYPES)
