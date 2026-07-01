@@ -643,10 +643,9 @@ class OptionsWindow(tk.Toplevel):
         self.check(g_fit, "fix_wavelength", "Fix wavelength", 2, 0, colspan=2)
         ttk.Label(g_fit, text="Iterations").grid(row=3, column=0, padx=4, sticky="w")
         self.entry(g_fit, "iterations", 3, 1, width=7)
-        self.check(g_fit, "show_progress", "Show Progress", 4, 0, colspan=2)
-        ttk.Label(g_fit, text="Instr. width").grid(row=5, column=0, padx=4, sticky="w")
-        self.entry(g_fit, "instrumental_width", 5, 1, width=7)
-        self.check(g_fit, "echelle", "Echelle", 6, 0, colspan=2)
+        ttk.Label(g_fit, text="Instr. width").grid(row=4, column=0, padx=4, sticky="w")
+        self.entry(g_fit, "instrumental_width", 4, 1, width=7)
+        self.check(g_fit, "echelle", "Echelle", 5, 0, colspan=2)
 
         g_aki = self.group(right, "Aki Threshold", 1, 0)
         self.entry(g_aki, "aki_threshold", 0, 0, width=8)
