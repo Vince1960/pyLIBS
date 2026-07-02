@@ -10,7 +10,7 @@ Originally developed as LIBS++ by Vincenzo Palleschi and coworkers,
 from __future__ import annotations
 
 import csv
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from datetime import datetime
 import logging
 import math
@@ -5765,50 +5765,57 @@ class RetroFitManagerWindow(tk.Toplevel):
         eps = tol * span
         return lo <= data_min + eps and hi >= data_max - eps
 
-    def _expand_current_window_50(self):
+    def _expanded_window_for_min_points(self, min_points):
         data_limits = self._data_x_limits()
         if not data_limits or not getattr(self.master_app, "ax", None):
-            return False
-        if self._at_full_x_range():
-            return False
-        data_min, data_max = data_limits
-        xmin, xmax = self.master_app.ax.get_xlim()
-        old_limits = tuple(sorted((xmin, xmax)))
-        current_width = abs(xmax - xmin)
-        full_width = data_max - data_min
-        if current_width <= 0 or full_width <= 0:
-            return False
-        center = (xmin + xmax) / 2.0
-        new_width = min(current_width * 1.5, full_width)
-        new_xmin = center - new_width / 2.0
-        new_xmax = center + new_width / 2.0
-        if new_xmin < data_min:
-            new_xmin = data_min
-            new_xmax = min(data_max, data_min + new_width)
-        if new_xmax > data_max:
-            new_xmax = data_max
-            new_xmin = max(data_min, data_max - new_width)
-        new_limits = tuple(sorted((new_xmin, new_xmax)))
-        if new_limits == old_limits:
-            return False
+            return None
+        spectrum = self.master_app.spectra[0]
+        xs = sorted(float(x) for x in list(getattr(spectrum, "x", []) or []) if x is not None)
+        if len(xs) < min_points or not xs:
+            return None
+        lo, hi = sorted(self.master_app.ax.get_xlim())
+        current_count = bisect_right(xs, hi) - bisect_left(xs, lo)
+        if current_count >= min_points:
+            return (lo, hi)
+        current_center = (lo + hi) / 2.0
+        best_limits = None
+        best_key = None
+        last_start = len(xs) - min_points
+        for start in range(last_start + 1):
+            end = start + min_points - 1
+            new_lo = min(lo, xs[start])
+            new_hi = max(hi, xs[end])
+            left_ext = lo - new_lo
+            right_ext = new_hi - hi
+            key = (
+                new_hi - new_lo,
+                abs(((new_lo + new_hi) / 2.0) - current_center),
+                abs(left_ext - right_ext),
+                left_ext + right_ext,
+            )
+            if best_key is None or key < best_key:
+                best_key = key
+                best_limits = (new_lo, new_hi)
+        return best_limits
+
+    def _expand_manual_window_to_points(self, group, min_points, max_retries=20):
+        point_count = self._current_fit_point_count()
+        if point_count >= min_points:
+            return point_count, False, 0
+        new_limits = self._expanded_window_for_min_points(min_points)
+        if not new_limits:
+            return point_count, False, 0
+        old_limits = tuple(sorted(self.master_app.ax.get_xlim())) if getattr(self.master_app, "ax", None) else None
+        new_lo, new_hi = new_limits
+        if old_limits == (new_lo, new_hi):
+            return point_count, False, 0
         self.master_app.clear_fit_artists()
-        self.master_app.ax.set_xlim(new_xmin, new_xmax)
+        self.master_app.ax.set_xlim(new_lo, new_hi)
         self.master_app.full_y_main_visible_x()
         self.master_app.canvas.draw_idle()
         self.master_app._update_xscroll()
-        return True
-
-    def _expand_manual_window_to_points(self, group, min_points, max_retries=20):
-        expanded = False
-        retries = 0
         point_count = self._current_fit_point_count()
-        while point_count < min_points and retries < max_retries:
-            if not self._expand_current_window_50():
-                break
-            expanded = True
-            retries += 1
-            point_count = self._current_fit_point_count()
-        return point_count, expanded, retries
+        return point_count, True, 1
 
     def _line_overrides_from_editor(self, lines, apply_to_template=True):
         overrides = {}
@@ -6114,13 +6121,16 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.master_app.status("Fit stopped by user")
             if callback:
                 callback(False, fit_lines, message, stopped=True)
+            self._clear_maxfev_overlay_backup()
             return
         if status == "maxfev":
             if self.automatic:
                 if callback:
                     callback(False, fit_lines, message, stopped=False, fit_result=result)
                 return
-            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            self._ensure_maxfev_overlay_backup()
+            preview_drawn = self._preview_voigt_fit_overlay(result)
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free")) and preview_drawn
             choice = self._fit_maxfev_dialog(
                 "The fit stopped because the maximum number of function evaluations was reached.\n\n"
                 "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
@@ -6144,7 +6154,9 @@ class RetroFitManagerWindow(tk.Toplevel):
                 self.region_fit_results[self._group_key(fit_lines)] = list(results)
                 if callback:
                     callback(True, fit_lines, message, stopped=False, fit_result=result)
+                self._clear_maxfev_overlay_backup()
                 return
+            self._restore_maxfev_overlay_backup()
             self.msg_var.set("Fit canceled")
             self.master_app.status("Fit canceled")
             if callback:
@@ -6165,11 +6177,13 @@ class RetroFitManagerWindow(tk.Toplevel):
                 _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
             if callback:
                 callback(False, fit_lines, message, stopped=False, fit_result=result)
+            self._clear_maxfev_overlay_backup()
             return
         results = self._apply_voigt_fit_result(fit_lines, result, mode_label)
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
         if callback:
             callback(True, fit_lines, message, stopped=False, fit_result=result)
+        self._clear_maxfev_overlay_backup()
 
     def _start_visible_fit_async(self, mode_label, allow_previous_visible_fallback=True, show_errors=True, callback=None, reset_stop=True, max_nfev=None, initial_free=None):
         if self._fit_running:
@@ -6223,7 +6237,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                 if show_errors:
                     _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
                 elif callback:
-                    callback(False, fit_lines, message, stopped=False)
+                    callback(False, fit_lines, message, stopped=False, fit_result={"status": "error", "message": message})
                 return False
         snapshot = self._build_voigt_fit_snapshot(
             fit_lines,
@@ -6300,6 +6314,29 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.master_app.status(f"{mode_label}: fitted")
         return results
 
+    def _preview_voigt_fit_overlay(self, result):
+        payload = result.get("payload") or {}
+        overlay = payload.get("overlay")
+        if not overlay:
+            return False
+        self.master_app.fit_overlay = overlay
+        self.master_app.redraw(preserve_view=True)
+        return True
+
+    def _ensure_maxfev_overlay_backup(self):
+        if not hasattr(self, "_maxfev_overlay_backup"):
+            self._maxfev_overlay_backup = getattr(self.master_app, "fit_overlay", None)
+        return getattr(self, "_maxfev_overlay_backup", None)
+
+    def _restore_maxfev_overlay_backup(self):
+        self.master_app.fit_overlay = getattr(self, "_maxfev_overlay_backup", None)
+        self.master_app.redraw(preserve_view=True)
+        self._clear_maxfev_overlay_backup()
+
+    def _clear_maxfev_overlay_backup(self):
+        if hasattr(self, "_maxfev_overlay_backup"):
+            delattr(self, "_maxfev_overlay_backup")
+
     def _retry_voigt_fit_after_maxfev(self, fit_lines, result):
         best_free = result.get("best_free")
         initial_free = result.get("initial_free")
@@ -6354,7 +6391,6 @@ class RetroFitManagerWindow(tk.Toplevel):
         point_count = self._current_fit_point_count()
         if point_count < min_points:
             point_count, expanded, retries = self._expand_manual_window_to_points(group, min_points)
-            self.update_idletasks()
         else:
             expanded = False
             retries = 0
@@ -6387,38 +6423,20 @@ class RetroFitManagerWindow(tk.Toplevel):
                 _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
                 return False
             fit_lines = list(group)
-        expanded_for_visible = False
-        extra_retries = 0
         point_count = self._current_fit_point_count()
         min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
-        while point_count < min_points and extra_retries < 20:
-            old_count = point_count
-            point_count, expanded, retries_used = self._expand_manual_window_to_points(group, min_points)
-            expanded_for_visible = expanded_for_visible or expanded
-            extra_retries += max(1, retries_used)
-            fit_lines = self._visible_template_lines()
-            if not fit_lines:
-                if mode_label == "Manual Fit":
-                    message = "No visible template lines in the current Manual Fit window."
-                    self.manual_fit_failed = True
-                    self.msg_var.set(f"{report}; {message}")
-                    _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
-                    return False
-                fit_lines = list(group)
-            min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
-            if point_count >= min_points or point_count == old_count:
-                break
+        expanded_for_visible = False
         if point_count < min_points:
-            message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
-            self.manual_fit_failed = True
-            self.msg_var.set(f"{report}; {message}")
-            _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
-            return False
-        if expanded_for_visible:
-            report = (
-                f"{mode_label}: expanded window, "
-                f"fitting {len(fit_lines)} line(s) using {point_count} points"
-            )
+            point_count, expanded_for_visible, retries = self._expand_manual_window_to_points(fit_lines, min_points)
+            if point_count < min_points:
+                message = f"Too few spectrum points for Voigt fit: {point_count} found, {min_points} required."
+                self.manual_fit_failed = True
+                self.msg_var.set(f"{report}; {message}")
+                _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}\nExpansion retries: {retries}")
+                return False
+            fit_lines = self._visible_template_lines() or list(fit_lines)
+            min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
+            report = f"{mode_label}: expanded window, fitting {len(fit_lines)} line(s) using {point_count} points"
             self.msg_var.set(report)
             self.master_app.status(report)
         elif len(fit_lines) != len(group):
@@ -6427,7 +6445,9 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.master_app.status(report)
         result = self._fit_manual_group(fit_lines)
         while result.get("status") == "maxfev":
-            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            self._ensure_maxfev_overlay_backup()
+            preview_drawn = self._preview_voigt_fit_overlay(result)
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free")) and preview_drawn
             choice = self._fit_maxfev_dialog(
                 "The fit stopped because the maximum number of function evaluations was reached.\n\n"
                 "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
@@ -6444,48 +6464,25 @@ class RetroFitManagerWindow(tk.Toplevel):
                 self.msg_var.set(f"{report}; fitted")
                 self.master_app.status(f"{report}; fitted")
                 self.update_idletasks()
+                self._clear_maxfev_overlay_backup()
                 return True
+            self._restore_maxfev_overlay_backup()
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit canceled")
             return False
         ok = result.get("status") == "success"
         message = result.get("message", "")
         results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
-        while not ok and self._is_too_few_fit_points_error(message) and extra_retries < 20:
-            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
-            if not self._expand_current_window_50():
-                break
-            extra_retries += 1
-            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
-                break
-            fit_lines = self._visible_template_lines()
-            if not fit_lines:
-                if mode_label == "Manual Fit":
-                    message = "No visible template lines in the current Manual Fit window."
-                    self.manual_fit_failed = True
-                    self.msg_var.set(f"{report}; {message}")
-                    _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
-                    return False
-                fit_lines = list(group)
-            point_count = self._current_fit_point_count()
-            report = (
-                f"{mode_label}: expanded window, "
-                f"fitting {len(fit_lines)} line(s) using {point_count} points"
-            )
-            self.msg_var.set(report)
-            self.master_app.status(report)
-            result = self._fit_manual_group(fit_lines)
-            ok = result.get("status") == "success"
-            message = result.get("message", "")
-            results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         if not ok:
             if result.get("status") == "maxfev":
                 self.manual_fit_failed = True
                 self.msg_var.set(f"{report}; Fit stopped by maximum evaluations")
+                self._clear_maxfev_overlay_backup()
                 return False
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit failed: {message}")
             _showerror(self, mode_label, f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
+            self._clear_maxfev_overlay_backup()
             return False
         self.region_fit_results[self._group_key(group)] = list(results)
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
@@ -6493,6 +6490,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.msg_var.set(f"{report}; fitted")
         self.master_app.status(f"{report}; fitted")
         self.update_idletasks()
+        self._clear_maxfev_overlay_backup()
         return True
 
     def run_fit(self):
@@ -6536,12 +6534,10 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.msg_var.set("Manual Fit: no template lines are visible in the current window")
             _showinfo(self, "Manual Fit", "No template lines are visible in the current spectrum window.")
             return
-        self._display_manual_group(visible_lines, preserve_user_values=True)
-        self.manual_fit_lines = list(visible_lines)
+        self._set_visible_fit_lines(visible_lines, preserve_user_values=True)
+        self.displayed_lines = list(visible_lines)
+        self.displayed_group_key = self._group_key(visible_lines)
         self.manual_fit_index = 0
-        self.manual_fit_failed = False
-        self.populate_results([])
-        self.progress["value"] = self._manual_visible_progress()
         lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
         self.msg_var.set(f"Manual Fit refreshed: {len(visible_lines)} visible line(s) in {lo:.4f} - {hi:.4f}")
         self.master_app.status(self.msg_var.get())
@@ -6586,7 +6582,9 @@ class RetroFitManagerWindow(tk.Toplevel):
         result = self._fit_manual_group(fit_lines)
         retries = 0
         while result.get("status") == "maxfev":
-            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            self._ensure_maxfev_overlay_backup()
+            preview_drawn = self._preview_voigt_fit_overlay(result)
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free")) and preview_drawn
             choice = self._fit_maxfev_dialog(
                 "The fit stopped because the maximum number of function evaluations was reached.\n\n"
                 "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
@@ -6602,50 +6600,33 @@ class RetroFitManagerWindow(tk.Toplevel):
                 self.msg_var.set(f"{report}; fitted")
                 self.master_app.status(f"{report}; fitted")
                 return True, fit_lines
+            self._restore_maxfev_overlay_backup()
             self.msg_var.set(f"{report}; Fit canceled")
             return False, fit_lines
         ok = result.get("status") == "success"
         message = result.get("message", "")
         results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
-        while not ok and self._is_too_few_fit_points_error(message) and retries < 20:
-            old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
-            if not self._expand_current_window_50():
-                break
-            retries += 1
-            if tuple(sorted(self.master_app.ax.get_xlim())) == old_limits:
-                break
-            updated_lines = self._visible_template_lines()
-            if updated_lines:
-                fit_lines = updated_lines
-            elif not allow_previous_visible_fallback:
-                message = "No visible template lines in the current Manual Fit window."
-                self.msg_var.set(f"{report}; {message}")
-                if show_errors:
-                    _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
-                return False, []
-            self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
-            point_count = self._current_fit_point_count()
-            report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
-            self.msg_var.set(report)
-            self.master_app.status(report)
-            result = self._fit_manual_group(fit_lines)
-            ok = result.get("status") == "success"
-            message = result.get("message", "")
-            results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         if not ok:
             if result.get("status") == "maxfev":
                 self.msg_var.set(f"{report}; Fit stopped by maximum evaluations")
                 if show_errors:
                     _showerror(self, mode_label, f"Fit stopped by maximum evaluations for current window {lo:.4f} - {hi:.4f}.")
+                elif callback:
+                    callback(False, fit_lines, message, stopped=False, fit_result=result)
+                self._clear_maxfev_overlay_backup()
                 return False, fit_lines
             self.msg_var.set(f"{report}; Fit failed: {message}")
             if show_errors:
                 _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
+            elif callback:
+                callback(False, fit_lines, message, stopped=False, fit_result=result)
+            self._clear_maxfev_overlay_backup()
             return False, fit_lines
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
         self.populate_results(results)
         self.msg_var.set(f"{report}; fitted")
         self.master_app.status(f"{report}; fitted")
+        self._clear_maxfev_overlay_backup()
         return True, fit_lines
 
     def run_single_fit(self):
