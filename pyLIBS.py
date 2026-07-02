@@ -2090,6 +2090,40 @@ def multivoigt_model(x, *params):
     return y
 
 
+def _voigt_free_parameter_count(lines, options=None, line_overrides=None):
+    """Count the free parameters implied by the current Voigt fit setup."""
+    count = 2  # baseline + slope
+    overrides = line_overrides or {}
+    for line in list(lines or []):
+        if isinstance(line, dict):
+            key = line.get("key")
+            fitwavelen = safe_float(line.get("fitwavelen", 0.0), 0.0)
+            wg = safe_float(line.get("wg", 0.0), 0.0)
+            wl = safe_float(line.get("wl", 0.0), 0.0)
+        else:
+            key = id(line)
+            fitwavelen = safe_float(getattr(line, "fitwavelen", 0.0), 0.0)
+            wg = safe_float(getattr(line, "wg", 0.0), 0.0)
+            wl = safe_float(getattr(line, "wl", 0.0), 0.0)
+        override = overrides.get(key, {})
+        if override:
+            fix_center = bool(override.get("fix_center", False))
+            fix_wg = bool(override.get("fix_wg", False))
+            fix_wl = bool(override.get("fix_wl", False))
+        else:
+            fix_center = bool(getattr(options, "fix_wavelength", False)) or fitwavelen < 0
+            fix_wg = bool(getattr(options, "fix_wg", False)) or wg < 0
+            fix_wl = bool(getattr(options, "fix_wl", False)) or wl < 0
+        count += 1
+        if not fix_center:
+            count += 1
+        if not fix_wg:
+            count += 1
+        if not fix_wl:
+            count += 1
+    return count
+
+
 class FitStoppedError(Exception):
     """Controlled interruption for Manual/Automatic Fit workers."""
 
@@ -2228,10 +2262,11 @@ class MultiGaussianFitWindow(tk.Toplevel):
         rg = safe_float(self.range_var.get(), 2.0)
         lo = min(t.wavelen for t in lines) - rg
         hi = max(t.wavelen for t in lines) + rg
+        min_points = 2 + 3 * len(lines)
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i,x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
-        if len(xs) < 6:
-            _showinfo(self, "Fit", "Too few points in the selected range.")
+        if len(xs) < min_points:
+            _showinfo(self, "Fit", f"Too few spectrum points for fit: {len(xs)} found, {min_points} required.")
             return
         baseline = float(np.percentile(ys, 5))
         slope = 0.0
@@ -2313,17 +2348,18 @@ class MultiGaussianFitWindow(tk.Toplevel):
         lo, hi = sorted(xlim)
         xs = np.asarray([x for x in sp.x if lo <= x <= hi], dtype=float)
         ys = np.asarray([sp.y[i] for i, x in enumerate(sp.x) if lo <= x <= hi], dtype=float)
-        if len(xs) < 8:
-            msg = "Too few points in the visible window."
-            if show_messages:
-                _showinfo(self, "Fit Voigt", msg)
-            return False, msg, []
         if lines is None:
             lines = [t for t in self.master_app.template_lines if lo <= t.wavelen <= hi]
         else:
             lines = list(lines)
         if not lines:
             msg = "No marked line in the visible window. Use search/manual marking before fitting."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg, []
+        min_points = _voigt_free_parameter_count(lines, options=self.master_app.options, line_overrides=line_overrides)
+        if len(xs) < min_points:
+            msg = f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required."
             if show_messages:
                 _showinfo(self, "Fit Voigt", msg)
             return False, msg, []
@@ -5572,7 +5608,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not group:
             return 0, False
         self._display_manual_group(group, preserve_user_values=preserve_user_values)
-        min_points = self._minimum_fit_points(group)
+        min_points = self._minimum_fit_points(group, line_overrides=self._line_overrides_from_editor(group, apply_to_template=False))
         point_count = self._current_fit_point_count()
         expanded = False
         if point_count < min_points:
@@ -5649,9 +5685,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             key=lambda t: t.wavelen,
         )
 
-    def _minimum_fit_points(self, group):
-        nparams = 2 + 4 * len(group)
-        return max(8, 3 * nparams)
+    def _minimum_fit_points(self, group, line_overrides=None):
+        return _voigt_free_parameter_count(group, options=getattr(self.master_app, "options", None), line_overrides=line_overrides)
 
     def _data_x_limits(self):
         if not self.master_app.spectra:
@@ -5814,22 +5849,22 @@ class RetroFitManagerWindow(tk.Toplevel):
         x_values = list(spectrum.get("x") or [])
         y_values = list(spectrum.get("y") or [])
         lo, hi = sorted(snapshot.get("xlim", (-math.inf, math.inf)))
-        pairs = [(x, y_values[i]) for i, x in enumerate(x_values) if i < len(y_values) and lo <= x <= hi]
-        if not pairs:
-            return False, "Too few points in the visible window.", None
-        xs = np.asarray([x for x, _y in pairs], dtype=float)
-        ys = np.asarray([y for _x, y in pairs], dtype=float)
-        if len(xs) < 8:
-            return False, "Too few points in the visible window.", None
         lines = list(snapshot.get("lines") or [])
         if not lines:
             return False, "No marked line in the visible window. Use search/manual marking before fitting.", None
+        options = snapshot.get("options") or {}
+        line_overrides = snapshot.get("line_overrides") or {}
+        min_points = _voigt_free_parameter_count(lines, options=options, line_overrides=line_overrides)
+        pairs = [(x, y_values[i]) for i, x in enumerate(x_values) if i < len(y_values) and lo <= x <= hi]
+        xs = np.asarray([x for x, _y in pairs], dtype=float)
+        ys = np.asarray([y for _x, y in pairs], dtype=float)
+        if len(xs) < min_points:
+            return False, f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required.", None
         xmin, xmax = float(xs.min()), float(xs.max())
         width = max(xmax - xmin, 1e-9)
         baseline = float(np.percentile(ys, 5))
         slope = 0.0
         dx = float(np.median(np.diff(np.sort(xs)))) if len(xs) > 2 else width / 100.0
-        options = snapshot.get("options") or {}
         default_fixed_wg = abs(safe_float(options.get("fixed_wg"), 0.5))
         default_fixed_wl = abs(safe_float(options.get("fixed_wl"), 0.5))
         min_sigma0 = max(default_fixed_wg / 2.354820045, abs(dx), 1e-6)
@@ -5840,7 +5875,6 @@ class RetroFitManagerWindow(tk.Toplevel):
         bounds_lo = [-np.inf, -np.inf]
         bounds_hi = [np.inf, np.inf]
         fixed_mask = [False, False]
-        line_overrides = snapshot.get("line_overrides") or {}
         half_window = max(width / 20.0, width * 0.02, abs(dx) * 2.0)
         for line in lines:
             if stop_requested():
@@ -5883,6 +5917,12 @@ class RetroFitManagerWindow(tk.Toplevel):
         bounds_hi_full = np.asarray(bounds_hi, dtype=float)
         fixed_mask = np.asarray(fixed_mask, dtype=bool)
         free_mask = ~fixed_mask
+        min_points = int(np.count_nonzero(free_mask))
+        if len(xs) < min_points:
+            msg = f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required."
+            if show_messages:
+                _showinfo(self, "Fit Voigt", msg)
+            return False, msg, []
 
         def _expand_fit_parameters(p_free):
             p_all = p0_full.copy()
@@ -6036,7 +6076,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                 callback(False, [], message, stopped=False)
             return False
         point_count = self._current_fit_point_count()
-        min_points = self._minimum_fit_points(fit_lines)
+        min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
         lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
         report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
         self.msg_var.set(report)
@@ -6056,7 +6096,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                         callback(False, fit_lines, message, stopped=False)
                     return False
                 self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
-                min_points = self._minimum_fit_points(fit_lines)
+                min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
                 report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
                 self.msg_var.set(report)
                 self.master_app.status(report)
@@ -6159,7 +6199,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         if self.displayed_group_key != self._group_key(group):
             self._display_manual_group(group, preserve_user_values=True)
         self.update_idletasks()
-        min_points = self._minimum_fit_points(group)
+        min_points = self._minimum_fit_points(group, line_overrides=self._line_overrides_from_editor(group, apply_to_template=False))
         point_count = self._current_fit_point_count()
         if point_count < min_points:
             point_count, expanded, retries = self._expand_manual_window_to_points(group, min_points)
@@ -6199,7 +6239,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         expanded_for_visible = False
         extra_retries = 0
         point_count = self._current_fit_point_count()
-        min_points = self._minimum_fit_points(fit_lines)
+        min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
         while point_count < min_points and extra_retries < 20:
             old_count = point_count
             point_count, expanded, retries_used = self._expand_manual_window_to_points(group, min_points)
@@ -6214,7 +6254,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                     _showerror(self, mode_label, f"{message}\nRegion: {first:.4f} - {last:.4f}")
                     return False
                 fit_lines = list(group)
-            min_points = self._minimum_fit_points(fit_lines)
+            min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
             if point_count >= min_points or point_count == old_count:
                 break
         if point_count < min_points:
@@ -6332,7 +6372,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                 _showinfo(self, mode_label, "No template lines are visible in the current spectrum window.")
             return False, []
         point_count = self._current_fit_point_count()
-        min_points = self._minimum_fit_points(fit_lines)
+        min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
         lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
         report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
         self.msg_var.set(report)
@@ -6350,7 +6390,7 @@ class RetroFitManagerWindow(tk.Toplevel):
                         _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}")
                     return False, []
                 self._set_visible_fit_lines(fit_lines, preserve_user_values=True)
-                min_points = self._minimum_fit_points(fit_lines)
+                min_points = self._minimum_fit_points(fit_lines, line_overrides=self._line_overrides_from_editor(fit_lines, apply_to_template=False))
                 report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
                 self.msg_var.set(report)
                 self.master_app.status(report)
@@ -8478,15 +8518,15 @@ def _multifit_fit_group(spectrum, group_rows, options):
 
     x_values = list(getattr(spectrum, "x", []) or [])
     y_values = list(getattr(spectrum, "y", []) or [])
-    if len(x_values) < 8 or len(y_values) < 8:
-        return False, "Too few points in the visible window.", None
+    if not x_values or not y_values:
+        return False, "Load a spectrum first.", None
 
     delta_min = max(safe_float(getattr(options, "delta_min", 1.0), 1.0), 1e-9)
     data_min = min(x_values)
     data_max = max(x_values)
     lo = group_rows[0][1] - delta_min
     hi = group_rows[-1][1] + delta_min
-    min_points = max(8, 3 * (2 + 4 * len(group_rows)))
+    min_points = _voigt_free_parameter_count([line for _idx, _wave, line in group_rows], options=options)
 
     while True:
         point_count = sum(1 for x in x_values if lo <= x <= hi)

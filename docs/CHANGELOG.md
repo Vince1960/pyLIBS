@@ -6,6 +6,7 @@
 
 ### Changed
 
+- Voigt line fitting now requires exactly as many spectrum points as free model parameters, and it keeps expanding the current X window by 50% until that condition is met.
 - Added View menu commands to save and load window positions for the main window, fit windows, Trace, Template, Saha-Boltzmann, Show SA, and CF-LIBS.
 - Saha-Boltzmann now builds and plots fitted template-line points with session electron-density input, Unit27 temperature iteration, and safe Apply After response correction.
 - Saha-Boltzmann mean temperature can exclude/include individual elements without changing their fitted temperatures.
