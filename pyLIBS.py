@@ -2315,7 +2315,7 @@ class MultiGaussianFitWindow(tk.Toplevel):
 
     def fit_voigt_visible(self):
         """Fit marked automatic/manual lines with Voigt profiles in current visible window."""
-        self.fit_voigt_lines()
+        self._fit_current_visible_window("Fit Voigt")
 
     def fit_voigt_lines(self, lines=None, preserve_view=True, show_messages=True, line_overrides=None):
         """Fit explicit template lines with the existing visible-window Voigt model.
@@ -2545,6 +2545,55 @@ class ResidualsWindow(tk.Toplevel):
         self.ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.6)
         self.fig.tight_layout(pad=1.0)
         self.canvas.draw_idle()
+
+
+class FitMaxfevDialog(tk.Toplevel):
+    """Modal choice dialog for a fit stopped by the maxfev limit."""
+
+    def __init__(self, master, message, can_accept=True):
+        super().__init__(master)
+        self.master_app = master
+        self.choice = None
+        self.title("Fit limit reached")
+        self.resizable(False, False)
+        self.transient(master)
+        self.protocol("WM_DELETE_WINDOW", self.cancel)
+
+        outer = ttk.Frame(self, padding=10)
+        outer.pack(fill="both", expand=True)
+        ttk.Label(
+            outer,
+            text=message,
+            justify="left",
+            wraplength=420,
+        ).pack(fill="x", pady=(0, 10))
+
+        buttons = ttk.Frame(outer)
+        buttons.pack(fill="x")
+        ttk.Button(buttons, text="Continue fit", command=self.continue_fit).pack(side="left", padx=(0, 6))
+        accept_state = "normal" if can_accept else "disabled"
+        ttk.Button(buttons, text="Stop and accept", command=self.accept_fit, state=accept_state).pack(side="left", padx=6)
+        ttk.Button(buttons, text="Cancel fit", command=self.cancel).pack(side="right")
+
+        self.grab_set()
+        center_window(self, master)
+
+    def _finish(self, choice):
+        self.choice = choice
+        try:
+            self.grab_release()
+        except Exception:
+            pass
+        self.destroy()
+
+    def continue_fit(self):
+        self._finish("continue")
+
+    def accept_fit(self):
+        self._finish("accept")
+
+    def cancel(self):
+        self._finish("cancel")
 
 
 class NeHalphaWindow(tk.Toplevel):
@@ -5284,6 +5333,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         self.residual_x = []
         self.residual_y = []
         self.residuals_window = None
+        self.last_fit_result = None
         self._build()
         try:
             self.protocol("WM_DELETE_WINDOW", self.close_window)
@@ -5804,7 +5854,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             "y": list(getattr(sp, "y", []) or []),
         }
 
-    def _build_voigt_fit_snapshot(self, lines):
+    def _build_voigt_fit_snapshot(self, lines, line_overrides=None, preserve_view=True, max_nfev=None, initial_free=None):
         xlim, ylim = self.master_app.current_plot_view()
         opts = self.master_app.options
         spectrum = self._active_spectrum_snapshot()
@@ -5812,7 +5862,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             "spectrum": spectrum,
             "xlim": tuple(xlim),
             "ylim": tuple(ylim),
-            "line_overrides": self._line_overrides_from_editor(list(lines), apply_to_template=False),
+            "preserve_view": bool(preserve_view),
+            "line_overrides": self._line_overrides_from_editor(list(lines), apply_to_template=False) if line_overrides is None else dict(line_overrides),
             "lines": [
                 {
                     "key": id(t),
@@ -5832,26 +5883,68 @@ class RetroFitManagerWindow(tk.Toplevel):
                 "fix_wavelength": bool(getattr(opts, "fix_wavelength", False)),
                 "iterations": safe_int(getattr(opts, "iterations", 20), 20),
             },
+            "max_nfev": max_nfev,
+            "initial_free": list(initial_free) if initial_free is not None else None,
+        }
+
+    @staticmethod
+    def _is_maxfev_result(result):
+        try:
+            status = int(getattr(result, "status", -1))
+        except Exception:
+            status = -1
+        message = str(getattr(result, "message", "")).lower()
+        return status == 0 and "maximum number of function evaluations" in message
+
+    def _voigt_fit_payload_from_params(self, lines, popt, xs, ys, snapshot):
+        fit_values = []
+        for idx, line in enumerate(lines):
+            area = float(popt[2 + 4 * idx])
+            cen = float(popt[3 + 4 * idx])
+            sigma = abs(float(popt[4 + 4 * idx]))
+            gamma = abs(float(popt[5 + 4 * idx]))
+            fitted_wg = float(2.354820045 * sigma)
+            fitted_wl = float(2.0 * gamma)
+            peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
+            fit_values.append({
+                "key": line["key"],
+                "template_wavelength": float(line["wavelen"]),
+                "fit_center": cen,
+                "peak_intensity": peak_height,
+                "lorentzian_width": abs(fitted_wl),
+                "gaussian_width": abs(fitted_wg),
+                "integrated_area": area,
+                "sigma": sigma,
+                "gamma": gamma,
+            })
+        fitted_y = multivoigt_model(xs, *popt)
+        return {
+            "fit_values": fit_values,
+            "overlay": (xs.tolist(), fitted_y.tolist()),
+            "residual_x": xs.tolist(),
+            "residual_y": (ys - fitted_y).tolist(),
+            "xlim": snapshot.get("xlim"),
+            "ylim": snapshot.get("ylim"),
         }
 
     def _run_voigt_fit_snapshot(self, snapshot, stop_requested):
         if np is None:
-            return False, "numpy not available", None
+            return {"status": "error", "message": "numpy not available", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
         try:
-            from scipy.optimize import curve_fit
+            from scipy.optimize import least_squares
         except Exception:
-            return False, "scipy.optimize not available. Install scipy.", None
+            return {"status": "error", "message": "scipy.optimize not available. Install scipy.", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
         if stop_requested():
             raise FitStoppedError()
         spectrum = snapshot.get("spectrum")
         if not spectrum or not spectrum.get("x"):
-            return False, "Load a spectrum first.", None
+            return {"status": "error", "message": "Load a spectrum first.", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
         x_values = list(spectrum.get("x") or [])
         y_values = list(spectrum.get("y") or [])
         lo, hi = sorted(snapshot.get("xlim", (-math.inf, math.inf)))
         lines = list(snapshot.get("lines") or [])
         if not lines:
-            return False, "No marked line in the visible window. Use search/manual marking before fitting.", None
+            return {"status": "error", "message": "No marked line in the visible window. Use search/manual marking before fitting.", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
         options = snapshot.get("options") or {}
         line_overrides = snapshot.get("line_overrides") or {}
         min_points = _voigt_free_parameter_count(lines, options=options, line_overrides=line_overrides)
@@ -5859,7 +5952,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         xs = np.asarray([x for x, _y in pairs], dtype=float)
         ys = np.asarray([y for _x, y in pairs], dtype=float)
         if len(xs) < min_points:
-            return False, f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required.", None
+            return {"status": "error", "message": f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required.", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
         xmin, xmax = float(xs.min()), float(xs.max())
         width = max(xmax - xmin, 1e-9)
         baseline = float(np.percentile(ys, 5))
@@ -5917,64 +6010,56 @@ class RetroFitManagerWindow(tk.Toplevel):
         bounds_hi_full = np.asarray(bounds_hi, dtype=float)
         fixed_mask = np.asarray(fixed_mask, dtype=bool)
         free_mask = ~fixed_mask
-        min_points = int(np.count_nonzero(free_mask))
-        if len(xs) < min_points:
-            msg = f"Too few spectrum points for Voigt fit: {len(xs)} found, {min_points} required."
-            if show_messages:
-                _showinfo(self, "Fit Voigt", msg)
-            return False, msg, []
 
         def _expand_fit_parameters(p_free):
             p_all = p0_full.copy()
             p_all[free_mask] = np.asarray(p_free, dtype=float)
             return p_all
 
-        def _multivoigt_model_free(x, *p_free):
+        def _multivoigt_residuals(p_free):
             if stop_requested():
                 raise FitStoppedError()
-            return multivoigt_model(x, *_expand_fit_parameters(p_free))
+            return multivoigt_model(xs, *_expand_fit_parameters(p_free)) - ys
 
-        popt_free, _pcov = curve_fit(
-            _multivoigt_model_free,
-            xs,
-            ys,
-            p0=p0_full[free_mask],
-            bounds=(bounds_lo_full[free_mask], bounds_hi_full[free_mask]),
-            maxfev=max(2000, safe_int(options.get("iterations"), 20) * 400),
-        )
+        max_nfev = snapshot.get("max_nfev")
+        if max_nfev is None:
+            max_nfev = max(2000, safe_int(options.get("iterations"), 20) * 400)
+        initial_free = snapshot.get("initial_free")
+        if initial_free is None:
+            initial_free = p0_full[free_mask]
+        else:
+            initial_free = np.asarray(initial_free, dtype=float)
+            if initial_free.shape != p0_full[free_mask].shape:
+                initial_free = p0_full[free_mask]
+        try:
+            result = least_squares(
+                _multivoigt_residuals,
+                np.asarray(initial_free, dtype=float),
+                bounds=(bounds_lo_full[free_mask], bounds_hi_full[free_mask]),
+                method="trf",
+                jac="2-point",
+                max_nfev=int(max_nfev),
+            )
+        except FitStoppedError:
+            raise
+        except Exception as exc:
+            return {"status": "error", "message": str(exc), "payload": None, "best_free": None, "initial_free": np.asarray(initial_free, dtype=float).tolist(), "max_nfev": int(max_nfev)}
         if stop_requested():
             raise FitStoppedError()
-        popt = _expand_fit_parameters(popt_free)
-        fitted_values = []
-        for idx, line in enumerate(lines):
-            area = float(popt[2 + 4 * idx])
-            cen = float(popt[3 + 4 * idx])
-            sigma = abs(float(popt[4 + 4 * idx]))
-            gamma = abs(float(popt[5 + 4 * idx]))
-            fitted_wg = float(2.354820045 * sigma)
-            fitted_wl = float(2.0 * gamma)
-            peak_height = float(area * voigt_profile_unit(np.asarray([cen], dtype=float), cen, sigma, gamma)[0])
-            fitted_values.append({
-                "key": line["key"],
-                "template_wavelength": float(line["wavelen"]),
-                "fit_center": cen,
-                "peak_intensity": peak_height,
-                "lorentzian_width": abs(fitted_wl),
-                "gaussian_width": abs(fitted_wg),
-                "integrated_area": area,
-                "sigma": sigma,
-                "gamma": gamma,
-            })
-        fitted_y = multivoigt_model(xs, *popt)
-        payload = {
-            "fit_values": fitted_values,
-            "overlay": (xs.tolist(), fitted_y.tolist()),
-            "residual_x": xs.tolist(),
-            "residual_y": (ys - fitted_y).tolist(),
-            "xlim": snapshot.get("xlim"),
-            "ylim": snapshot.get("ylim"),
+        popt = _expand_fit_parameters(result.x)
+        payload = self._voigt_fit_payload_from_params(lines, popt, xs, ys, snapshot)
+        status = "success" if result.success else ("maxfev" if self._is_maxfev_result(result) else "error")
+        message = f"Fit Voigt: {len(lines)} line(s)" if status == "success" else str(getattr(result, "message", "Fit failed"))
+        fit_result = {
+            "status": status,
+            "message": message,
+            "payload": payload,
+            "best_free": np.asarray(result.x, dtype=float).tolist(),
+            "initial_free": np.asarray(initial_free, dtype=float).tolist(),
+            "max_nfev": int(max_nfev),
         }
-        return True, f"Fit Voigt: {len(lines)} line(s)", payload
+        self.last_fit_result = fit_result
+        return fit_result
 
     def _apply_voigt_fit_payload(self, lines, payload, mode_label):
         by_key = {item.get("key"): item for item in list(payload.get("fit_values") or [])}
@@ -6030,6 +6115,41 @@ class RetroFitManagerWindow(tk.Toplevel):
             if callback:
                 callback(False, fit_lines, message, stopped=True)
             return
+        if status == "maxfev":
+            if self.automatic:
+                if callback:
+                    callback(False, fit_lines, message, stopped=False, fit_result=result)
+                return
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            choice = self._fit_maxfev_dialog(
+                "The fit stopped because the maximum number of function evaluations was reached.\n\n"
+                "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
+                can_accept=can_accept,
+            )
+            if choice == "continue":
+                next_limit = int(result.get("max_nfev") or 0) + 2000
+                best_free = result.get("best_free") or result.get("initial_free")
+                self._start_visible_fit_async(
+                    mode_label,
+                    allow_previous_visible_fallback=False,
+                    show_errors=show_errors,
+                    callback=callback,
+                    reset_stop=False,
+                    max_nfev=next_limit,
+                    initial_free=best_free,
+                )
+                return
+            if choice == "accept" and can_accept:
+                results = self._apply_voigt_fit_result(fit_lines, result, mode_label)
+                self.region_fit_results[self._group_key(fit_lines)] = list(results)
+                if callback:
+                    callback(True, fit_lines, message, stopped=False, fit_result=result)
+                return
+            self.msg_var.set("Fit canceled")
+            self.master_app.status("Fit canceled")
+            if callback:
+                callback(False, fit_lines, "Fit canceled", stopped=False, fit_result=result)
+            return
         if self.fit_stop_requested:
             self.manual_fit_stop = True
             self.msg_var.set("Fit stopped by user")
@@ -6044,17 +6164,14 @@ class RetroFitManagerWindow(tk.Toplevel):
                 lo, hi = sorted(self.master_app.ax.get_xlim()) if getattr(self.master_app, "ax", None) else (0.0, 0.0)
                 _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
             if callback:
-                callback(False, fit_lines, message, stopped=False)
+                callback(False, fit_lines, message, stopped=False, fit_result=result)
             return
-        results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label)
+        results = self._apply_voigt_fit_result(fit_lines, result, mode_label)
         self.region_fit_results[self._group_key(fit_lines)] = list(results)
-        self.populate_results(results)
-        self.msg_var.set(f"{report}; fitted")
-        self.master_app.status(f"{report}; fitted")
         if callback:
-            callback(True, fit_lines, message, stopped=False)
+            callback(True, fit_lines, message, stopped=False, fit_result=result)
 
-    def _start_visible_fit_async(self, mode_label, allow_previous_visible_fallback=True, show_errors=True, callback=None, reset_stop=True):
+    def _start_visible_fit_async(self, mode_label, allow_previous_visible_fallback=True, show_errors=True, callback=None, reset_stop=True, max_nfev=None, initial_free=None):
         if self._fit_running:
             self.msg_var.set(f"{mode_label}: fit already running")
             return False
@@ -6108,20 +6225,24 @@ class RetroFitManagerWindow(tk.Toplevel):
                 elif callback:
                     callback(False, fit_lines, message, stopped=False)
                 return False
-        snapshot = self._build_voigt_fit_snapshot(fit_lines)
+        snapshot = self._build_voigt_fit_snapshot(
+            fit_lines,
+            preserve_view=True,
+            max_nfev=max_nfev,
+            initial_free=initial_free,
+        )
         self._fit_running = True
 
         def worker():
             try:
-                ok, message, payload = self._run_voigt_fit_snapshot(
+                result = self._run_voigt_fit_snapshot(
                     snapshot,
                     lambda: bool(getattr(self, "fit_stop_requested", False)),
                 )
-                result = {"status": "success" if ok else "error", "message": message, "payload": payload}
             except FitStoppedError:
-                result = {"status": "stopped", "message": "Fit stopped by user", "payload": None}
+                result = {"status": "stopped", "message": "Fit stopped by user", "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
             except Exception as exc:
-                result = {"status": "error", "message": str(exc), "payload": None}
+                result = {"status": "error", "message": str(exc), "payload": None, "best_free": None, "initial_free": None, "max_nfev": None}
             try:
                 self.after(0, lambda: self._finish_async_fit(mode_label, fit_lines, report, result, show_errors, callback))
             except Exception:
@@ -6131,31 +6252,61 @@ class RetroFitManagerWindow(tk.Toplevel):
         self._fit_worker.start()
         return True
 
-    def _fit_manual_group(self, lines):
+    def _fit_manual_group(self, lines, max_nfev=None, initial_free=None):
         tmp = None
         try:
             tmp = MultiGaussianFitWindow(self.master_app)
             tmp.withdraw()
             overrides = self._line_overrides_from_editor(list(lines))
-            ok, message, results = tmp.fit_voigt_lines(
-                lines=lines,
-                preserve_view=True,
-                show_messages=False,
+            snapshot = tmp._build_voigt_fit_snapshot(
+                lines,
                 line_overrides=overrides,
+                preserve_view=True,
+                max_nfev=max_nfev,
+                initial_free=initial_free,
             )
-            if ok and not self.automatic:
-                self.residual_x = list(getattr(tmp, "last_residual_x", []) or [])
-                self.residual_y = list(getattr(tmp, "last_residual_y", []) or [])
-                self.update_residuals_plot(lift_window=False)
+            result = tmp._run_voigt_fit_snapshot(snapshot, lambda: False)
         except Exception as e:
-            ok, message, results = False, str(e), []
+            result = {
+                "status": "error",
+                "message": str(e),
+                "payload": None,
+                "best_free": None,
+                "initial_free": None,
+                "max_nfev": max_nfev,
+            }
         finally:
             try:
                 if tmp is not None:
                     tmp.destroy()
             except Exception:
                 pass
-        return ok, message, results
+        return result
+
+    def _fit_maxfev_dialog(self, message, can_accept):
+        dlg = FitMaxfevDialog(self, message, can_accept=can_accept)
+        try:
+            self.wait_window(dlg)
+        except Exception:
+            return "cancel"
+        return dlg.choice or "cancel"
+
+    def _apply_voigt_fit_result(self, fit_lines, result, mode_label):
+        payload = result.get("payload") or {}
+        results = self._apply_voigt_fit_payload(fit_lines, payload, mode_label)
+        self.region_fit_results[self._group_key(fit_lines)] = list(results)
+        self.populate_results(results)
+        self.msg_var.set(f"{mode_label}: fitted")
+        self.master_app.status(f"{mode_label}: fitted")
+        return results
+
+    def _retry_voigt_fit_after_maxfev(self, fit_lines, result):
+        best_free = result.get("best_free")
+        initial_free = result.get("initial_free")
+        next_limit = int(result.get("max_nfev") or 0) + 2000
+        if best_free is not None:
+            return self._fit_manual_group(fit_lines, max_nfev=next_limit, initial_free=best_free)
+        return self._fit_manual_group(fit_lines, max_nfev=next_limit, initial_free=initial_free)
 
     def _residuals_window_exists(self):
         try:
@@ -6274,7 +6425,32 @@ class RetroFitManagerWindow(tk.Toplevel):
             report = f"{mode_label}: fitting {len(fit_lines)} visible line(s) using {point_count} points"
             self.msg_var.set(report)
             self.master_app.status(report)
-        ok, message, results = self._fit_manual_group(fit_lines)
+        result = self._fit_manual_group(fit_lines)
+        while result.get("status") == "maxfev":
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            choice = self._fit_maxfev_dialog(
+                "The fit stopped because the maximum number of function evaluations was reached.\n\n"
+                "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
+                can_accept=can_accept,
+            )
+            if choice == "continue":
+                result = self._retry_voigt_fit_after_maxfev(fit_lines, result)
+                continue
+            if choice == "accept" and can_accept:
+                results = self._apply_voigt_fit_result(fit_lines, result, mode_label)
+                self.region_fit_results[self._group_key(group)] = list(results)
+                self.region_fit_results[self._group_key(fit_lines)] = list(results)
+                self.populate_results(results)
+                self.msg_var.set(f"{report}; fitted")
+                self.master_app.status(f"{report}; fitted")
+                self.update_idletasks()
+                return True
+            self.manual_fit_failed = True
+            self.msg_var.set(f"{report}; Fit canceled")
+            return False
+        ok = result.get("status") == "success"
+        message = result.get("message", "")
+        results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         while not ok and self._is_too_few_fit_points_error(message) and extra_retries < 20:
             old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
             if not self._expand_current_window_50():
@@ -6298,8 +6474,15 @@ class RetroFitManagerWindow(tk.Toplevel):
             )
             self.msg_var.set(report)
             self.master_app.status(report)
-            ok, message, results = self._fit_manual_group(fit_lines)
+            result = self._fit_manual_group(fit_lines)
+            ok = result.get("status") == "success"
+            message = result.get("message", "")
+            results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         if not ok:
+            if result.get("status") == "maxfev":
+                self.manual_fit_failed = True
+                self.msg_var.set(f"{report}; Fit stopped by maximum evaluations")
+                return False
             self.manual_fit_failed = True
             self.msg_var.set(f"{report}; Fit failed: {message}")
             _showerror(self, mode_label, f"Fit failed for {first:.4f} - {last:.4f}:\n{message}")
@@ -6332,7 +6515,7 @@ class RetroFitManagerWindow(tk.Toplevel):
             self._run_automatic_fit()
             return
 
-        def _manual_done(ok, _fit_lines, _message, stopped=False):
+        def _manual_done(ok, _fit_lines, _message, stopped=False, fit_result=None):
             if ok:
                 self.progress["value"] = self._manual_visible_progress()
 
@@ -6400,8 +6583,30 @@ class RetroFitManagerWindow(tk.Toplevel):
                 if show_errors:
                     _showerror(self, mode_label, f"{message}\nCurrent window: {lo:.4f} - {hi:.4f}\nExpansion retries: {retries}")
                 return False, fit_lines
-        ok, message, results = self._fit_manual_group(fit_lines)
+        result = self._fit_manual_group(fit_lines)
         retries = 0
+        while result.get("status") == "maxfev":
+            can_accept = bool(result.get("payload")) and bool(result.get("best_free"))
+            choice = self._fit_maxfev_dialog(
+                "The fit stopped because the maximum number of function evaluations was reached.\n\n"
+                "Continue fit increases the limit by 2000 and retries from the best parameters found so far.",
+                can_accept=can_accept,
+            )
+            if choice == "continue":
+                result = self._retry_voigt_fit_after_maxfev(fit_lines, result)
+                continue
+            if choice == "accept" and can_accept:
+                results = self._apply_voigt_fit_result(fit_lines, result, mode_label)
+                self.region_fit_results[self._group_key(fit_lines)] = list(results)
+                self.populate_results(results)
+                self.msg_var.set(f"{report}; fitted")
+                self.master_app.status(f"{report}; fitted")
+                return True, fit_lines
+            self.msg_var.set(f"{report}; Fit canceled")
+            return False, fit_lines
+        ok = result.get("status") == "success"
+        message = result.get("message", "")
+        results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         while not ok and self._is_too_few_fit_points_error(message) and retries < 20:
             old_limits = tuple(sorted(self.master_app.ax.get_xlim()))
             if not self._expand_current_window_50():
@@ -6423,8 +6628,16 @@ class RetroFitManagerWindow(tk.Toplevel):
             report = f"{mode_label}: expanded window, fitting {len(fit_lines)} visible line(s) using {point_count} points"
             self.msg_var.set(report)
             self.master_app.status(report)
-            ok, message, results = self._fit_manual_group(fit_lines)
+            result = self._fit_manual_group(fit_lines)
+            ok = result.get("status") == "success"
+            message = result.get("message", "")
+            results = self._apply_voigt_fit_payload(fit_lines, result.get("payload") or {}, mode_label) if ok else []
         if not ok:
+            if result.get("status") == "maxfev":
+                self.msg_var.set(f"{report}; Fit stopped by maximum evaluations")
+                if show_errors:
+                    _showerror(self, mode_label, f"Fit stopped by maximum evaluations for current window {lo:.4f} - {hi:.4f}.")
+                return False, fit_lines
             self.msg_var.set(f"{report}; Fit failed: {message}")
             if show_errors:
                 _showerror(self, mode_label, f"Fit failed for current window {lo:.4f} - {hi:.4f}:\n{message}")
@@ -6482,15 +6695,35 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.manual_fit_current_indices = list(indices)
             self._show_group_region(group, preserve_user_values=True)
 
-        def _auto_done(ok, fit_lines, _message, stopped=False):
+        def _auto_done(ok, fit_lines, _message, stopped=False, fit_result=None):
             if stopped or self.manual_fit_stop or self.fit_stop_requested:
                 self.msg_var.set("Automatic Fit stopped")
                 self.master_app.status("Automatic Fit stopped")
                 return
-            if not ok:
+            if fit_result and fit_result.get("status") == "maxfev":
+                retry_count = getattr(self, "_auto_maxfev_retry_count", 0)
+                if retry_count < 1:
+                    self._auto_maxfev_retry_count = retry_count + 1
+                    next_limit = int(fit_result.get("max_nfev") or 0) + 2000
+                    best_free = fit_result.get("best_free") or fit_result.get("initial_free")
+                    self.after(0, lambda: self._start_visible_fit_async(
+                        "Automatic Fit",
+                        allow_previous_visible_fallback=False,
+                        show_errors=False,
+                        callback=_auto_done,
+                        reset_stop=False,
+                        max_nfev=next_limit,
+                        initial_free=best_free,
+                    ))
+                    return
                 current_lines = fit_lines or self._visible_template_lines()
                 self._mark_fit_error(current_lines)
                 self.msg_var.set(f"Automatic Fit: ERROR marked for {len(current_lines)} line(s)")
+            elif not ok:
+                current_lines = fit_lines or self._visible_template_lines()
+                self._mark_fit_error(current_lines)
+                self.msg_var.set(f"Automatic Fit: ERROR marked for {len(current_lines)} line(s)")
+            self._auto_maxfev_retry_count = 0
             self.progress["value"] = self._manual_visible_progress()
             if not self._move_manual_region("next", preserve_user_values=True):
                 self.progress["value"] = 100
@@ -6508,6 +6741,7 @@ class RetroFitManagerWindow(tk.Toplevel):
         if not self._visible_template_lines():
             self.msg_var.set("No lines for fitting")
             return
+        self._auto_maxfev_retry_count = 0
         self._start_visible_fit_async(
             "Automatic Fit",
             allow_previous_visible_fallback=False,
