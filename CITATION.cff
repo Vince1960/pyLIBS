@@ -3,9 +3,8 @@ message: "If you use pyLIBS in scientific research, please cite this software."
 title: "pyLIBS"
 type: software
 version: "1.0.3"
-date-released: 2026-07-13
+date-released: "2026-07-13"
 authors:
-  - family-names: Palleschi
-    given-names: Vincenzo
+  - family-names: "Palleschi"
+    given-names: "Vincenzo"
     affiliation: "ICCOM-CNR, Pisa, Italy"
-license: "pyLIBS Academic Non-Commercial License (ANCL) v1.0"
