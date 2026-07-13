@@ -54,7 +54,7 @@
 - GridY persistence
 - LogX persistence
 - LogY persistence
-- background colour persistence
+- background color persistence
 
 ### Internal
 

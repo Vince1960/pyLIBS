@@ -1,0 +1,43 @@
+pyLIBS Academic Non-Commercial License (ANCL) v1.0
+
+Copyright © 2026 Vincenzo Palleschi. Developed at ICCOM-CNR, Pisa, Italy.
+
+1. Grant of Rights
+
+Permission is granted, free of charge, to any person obtaining a copy of
+pyLIBS and its associated documentation files (the "Software"), to use the
+Software for scientific research, teaching, and other non-commercial
+purposes, subject to the terms of this License.
+
+You may study, inspect, and modify the source code of the Software for such
+non-commercial purposes.
+
+2. Redistribution
+
+Redistribution of the Software, in source or binary form, is permitted only
+if the copyright notice, this License, and the original attribution to
+Vincenzo Palleschi are retained in all copies and substantial portions of the
+Software.
+
+3. Attribution and Citation
+
+Any use of the Software in scientific publications must include an explicit
+citation of pyLIBS.
+
+The original author attribution must be preserved in the Software and in any
+redistribution.
+
+4. Commercial Use
+
+Commercial use of the Software is prohibited unless prior written
+authorization is obtained from the author.
+
+5. Warranty Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR OR COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING
+FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.

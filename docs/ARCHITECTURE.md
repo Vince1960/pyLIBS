@@ -4,10 +4,10 @@
 
 pyLIBS is the Python rewrite of the historical LIBS++ software.
 
-The objective is to reproduce the behaviour of the original application while
-keeping the code maintainable and progressively modernising the implementation.
+The objective is to reproduce the behavior of the original application while
+keeping the code maintainable and progressively modernizing the implementation.
 
-The current implementation is intentionally organised around the same workflow
+The current implementation is intentionally organized around the same workflow
 used in LIBS++.
 
 ------------------------------------------------------------
@@ -94,7 +94,7 @@ Current items include:
 - GridY
 - LogX
 - LogY
-- background colour
+- background color
 
 Compatibility with the historical positional format must be preserved.
 
@@ -111,7 +111,7 @@ Contains
 - wavelength
 - intensity
 - visibility
-- colour
+- color
 - scaling
 - response correction
 
@@ -170,7 +170,7 @@ Responsible for
 
 ------------------------------------------------------------
 
-Current implemented analyses
+Current implemented analysis features
 
 ✓ Find Peaks
 
@@ -204,7 +204,7 @@ The program still contains:
 
 - a single Python file (~15000 lines)
 
-These should be addressed only after behavioural compatibility has been verified.
+These should be addressed only after behavioral compatibility has been verified.
 
 ------------------------------------------------------------
 
@@ -244,12 +244,12 @@ Development principles
 
 Always preserve:
 
-- historical behaviour
+- historical behavior
 - database compatibility
 - template compatibility
 - INI compatibility
 
-Never introduce behavioural changes unless explicitly requested.
+Never introduce behavioral changes unless explicitly requested.
 
 Small commits.
 
