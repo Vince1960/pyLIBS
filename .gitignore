@@ -14,3 +14,9 @@ pyLIBS.ini
 # Files not distributed publicly
 vildo.dat
 docs/LIBS++_Manual.pdf
+
+# Internal development documentation
+AGENTS.md
+docs/PROJECT_STATE.md
+docs/DECISIONS.md
+docs/TODO.md
