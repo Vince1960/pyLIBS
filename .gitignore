@@ -4,3 +4,13 @@ __pycache__/
 *.pyd
 *.bak
 *.tmp
+
+# Local user configuration
+pyLIBS.ini
+
+# Local user configuration
+pyLIBS.ini
+
+# Files not distributed publicly
+vildo.dat
+docs/LIBS++_Manual.pdf

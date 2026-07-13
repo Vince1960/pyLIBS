@@ -20,7 +20,7 @@ docs/DECISIONS.md
 
 docs/CHANGELOG.md
 
-docs/LIBS++_Manual.pdf
+docs/pyLIBS_Manual.pdf
 
 ## Development
 

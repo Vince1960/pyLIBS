@@ -24,7 +24,7 @@ def docs_dir() -> Path:
 
 
 def manual_path() -> Path:
-    return docs_dir() / "LIBS++_Manual.pdf"
+    return docs_dir() / "pyLIBS_Manual.pdf"
 
 
 def icon_dirs() -> list[Path]:

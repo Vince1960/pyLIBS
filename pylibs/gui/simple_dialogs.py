@@ -98,18 +98,40 @@ def show_statistics(master):
 
 def show_manual(master):
     manual = manual_path()
-    if not manual.exists():
-        _showinfo(master, "Manual", f"Manual not found:\n{manual}")
+    if not manual.is_file():
+        _showerror(master, "Manual", f"The user manual was not found:\n{manual}")
         return
     try:
-        if sys.platform.startswith("win"):
-            os.startfile(str(manual))
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(manual)])
-        else:
-            subprocess.Popen(["xdg-open", str(manual)])
+        if _open_manual_with_qt(manual):
+            return
+        _open_manual_with_system_launcher(manual)
     except Exception as exc:
-        _showerror(master, "Manual", f"Could not open the manual:\n{exc}")
+        _showerror(master, "Manual", f"The user manual could not be opened:\n{manual}\n\n{exc}")
+
+
+def _open_manual_with_qt(manual):
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+    except Exception:
+        try:
+            from PyQt5.QtCore import QUrl
+            from PyQt5.QtGui import QDesktopServices
+        except Exception:
+            return False
+    try:
+        return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(manual))))
+    except Exception:
+        return False
+
+
+def _open_manual_with_system_launcher(manual):
+    if sys.platform.startswith("win"):
+        os.startfile(str(manual))
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(manual)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(["xdg-open", str(manual)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def show_about(master):

@@ -51,7 +51,7 @@ Never modify unrelated code.
 
 ## Manual and documentation
 
-- The historical LIBS++ manual is stored in docs/LIBS++_Manual.pdf.
+- The manual file is stored in docs/pyLIBS_Manual.pdf.
 - Treat the manual as the historical functional specification.
 - The current pyLIBS implementation may include newer behaviour not documented in the manual.
 - When the manual and current code differ, report the discrepancy.
