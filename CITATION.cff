@@ -4,6 +4,7 @@ title: "pyLIBS"
 type: software
 version: "1.0.3"
 date-released: "2026-07-13"
+doi: "10.5281/zenodo.21342458"
 authors:
   - family-names: "Palleschi"
     given-names: "Vincenzo"

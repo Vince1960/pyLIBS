@@ -1,4 +1,5 @@
 ## pyLIBS
+[![DOI](https://zenodo.org/badge/1299179791.svg)](https://doi.org/10.5281/zenodo.21342457)
 
 Python software for visualization, spectral processing, plasma diagnostics and quantitative analysis of Laser-Induced Breakdown Spectroscopy (LIBS) data.
 
@@ -125,9 +126,11 @@ A comprehensive user manual is under preparation and will be expanded in future 
 
 ## Citation
 
-If pyLIBS contributes to results published in scientific journals, conference proceedings, theses, dissertations, or other scholarly works, please cite the software using the information provided in CITATION.cff.
+If you use pyLIBS in scientific work, please cite the software using its Zenodo DOI:
 
-Citation information will also be available directly from the GitHub repository.
+**https://doi.org/10.5281/zenodo.21342458**
+
+The DOI always resolves to the latest public release of pyLIBS.
 
 ## License
 
