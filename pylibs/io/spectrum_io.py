@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import struct
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -27,28 +28,85 @@ SPECTRUM_FILETYPES = [
 ]
 
 
-def read_ascii_spectrum(filename: str, convert_nm_to_a: bool = False) -> tuple[list[float], list[float]]:
-    xs, ys = [], []
+def read_ascii_metadata(filename: str) -> dict[str, str]:
+    """Read pyLIBS metadata comments placed before the numeric spectrum."""
+    metadata: dict[str, str] = {}
+    with open(filename, "r", encoding="utf-8-sig", errors="ignore") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            if not line.startswith("#"):
+                break
+            content = line[1:].strip()
+            key, separator, value = content.partition("=")
+            key = key.strip().lower()
+            if separator and key.startswith("pylibs_"):
+                metadata[key] = value.strip()
+    return metadata
+
+
+def _numeric_ascii_row(line: str) -> list[float]:
+    """Parse whitespace/tab/semicolon data while preserving decimal commas."""
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return []
+    if ";" in text:
+        tokens = [token.strip().replace(",", ".") for token in text.split(";")]
+    elif "\t" in text:
+        tokens = [token.strip().replace(",", ".") for token in text.split("\t")]
+    elif len(text.split()) > 1:
+        tokens = [token.replace(",", ".") for token in text.split()]
+    else:
+        # A comma is treated as a delimiter only when no whitespace exists.
+        # A lone decimal-comma value is not a valid spectrum row anyway.
+        tokens = [token.strip() for token in text.split(",")]
+    values = []
+    for token in tokens:
+        if token == "":
+            continue
+        try:
+            values.append(float(token))
+        except ValueError:
+            # The repository OPC format appends element/species labels after
+            # its two numeric columns. Preserve the numeric prefix exactly as
+            # the original ASCII reader did.
+            return values if len(values) >= 2 else []
+    return values
+
+
+def read_ascii_spectrum_columns(
+    filename: str,
+    convert_nm_to_a: bool = False,
+) -> tuple[list[float], list[list[float]]]:
+    """Read wavelength plus one or more intensity columns."""
+    rows = []
     with open(filename, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
-            line = line.strip().replace(",", ".")
-            if not line or line.startswith("#"):
-                continue
-            p = line.split()
-            if len(p) < 2:
-                continue
-            try:
-                wave = float(p[0])
-                inten = float(p[1])
-            except Exception:
-                continue
-            if convert_nm_to_a and wave < 1500:
-                wave *= 10.0
-            xs.append(wave)
-            ys.append(inten)
-    if not xs:
+            values = _numeric_ascii_row(line)
+            if len(values) >= 2:
+                rows.append(values)
+    if not rows:
         raise ValueError("Il file non contiene dati numerici a due colonne.")
-    return xs, ys
+    # Use the most common row width so an occasional footer cannot silently
+    # change the number of detector traces.
+    width = Counter(len(row) for row in rows).most_common(1)[0][0]
+    rows = [row[:width] for row in rows if len(row) >= width]
+    xs = []
+    columns = [[] for _ in range(width - 1)]
+    for row in rows:
+        wave = row[0]
+        if convert_nm_to_a and wave < 1500:
+            wave *= 10.0
+        xs.append(wave)
+        for index, value in enumerate(row[1:]):
+            columns[index].append(value)
+    return xs, columns
+
+
+def read_ascii_spectrum(filename: str, convert_nm_to_a: bool = False) -> tuple[list[float], list[float]]:
+    xs, columns = read_ascii_spectrum_columns(filename, convert_nm_to_a)
+    return xs, columns[0]
 
 
 def read_roh_spectrum(

@@ -25,6 +25,7 @@ def build_retro_toolbar(self):
         ("Append", self.ask_import_multiple),
         ("Clear", self.clear_all_spectra),
         ("Active Spectra", self.show_active_spectra),
+        ("Response", self.show_response_window),
         ("Save", self.ask_save_spectrum),
         ("Print", self.print_plot),
         ("Full Y", self.full_y),
@@ -46,6 +47,7 @@ def build_retro_toolbar(self):
         "Append": "append.png",
         "Clear": "clear.png",
         "Active Spectra": "fit.png",
+        "Response": "calibration.png",
         "Save": "save.png",
         "Print": "print.png",
         "Full Y": "full_y.png",
@@ -71,6 +73,7 @@ def build_retro_toolbar(self):
     tooltip_text = {
         "Trace": "Trace Lines",
         "Full Scale": "Full View",
+        "Response": "Instrument Response",
     }
     self.toolbar_icons = {}
     self.toolbar_icon_files = {}

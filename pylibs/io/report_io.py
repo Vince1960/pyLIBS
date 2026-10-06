@@ -31,6 +31,12 @@ def _fmt(value):
 
 
 def _fmt3(value):
+    try:
+        number = float(value)
+    except Exception:
+        number = None
+    if number is not None and math.isfinite(number) and number != 0.0 and abs(number) < 1.0e-3:
+        return f"{number:.3e}"
     text = format_template_display_value(value)
     return text if text != "" else "N/A"
 
@@ -59,9 +65,7 @@ def _ne_source(owner, ne):
     h_ne = safe_float(halpha.get("ne", 0.0), 0.0)
     if h_ne and abs(h_ne - ne) <= max(abs(ne) * 1e-6, 1e-6):
         return "H-alpha"
-    if abs(ne - 1.0e17) <= 1.0:
-        return "default"
-    return "user input"
+    return "manual CF-LIBS entry"
 
 
 def _finite_values(values):
@@ -99,6 +103,9 @@ def spectrum_info(owner):
         "Number of spectrum points": str(len(getattr(sp, "x", []) or [])),
         "Wavelength range": f"{_fmt(min(xs))} - {_fmt(max(xs))}" if xs else "N/A",
         "Intensity range": f"{_fmt(min(ys))} - {_fmt(max(ys))}" if ys else "N/A",
+        "Dark correction": getattr(sp, "dark_source", "disabled") or "disabled",
+        "Signal intensity column": str(getattr(sp, "signal_column", 1)),
+        "Dark intensity columns": ", ".join(str(value) for value in getattr(sp, "dark_columns", ()) or ()) or "N/A",
     }
 
 
@@ -122,12 +129,31 @@ def response_info(owner):
         cf_state = "Corrected during CF-LIBS analysis"
     else:
         cf_state = "Uncorrected"
+    response_paths = []
+    library = getattr(owner.master_app, "response_library", None)
+    if library is not None:
+        response_paths = list(getattr(library, "paths", []) or [])
+    if not response_paths:
+        legacy_path = str(getattr(opts, "response_file", "") or "").strip()
+        if legacy_path:
+            response_paths = [legacy_path]
+    try:
+        database_name = owner.master_app.libs_db.display_name()
+    except Exception:
+        database_name = "Unknown"
     return {
         "Response normalization used": "Yes" if already_corrected or owner.last_response_used else "No",
         "Normalization mode": mode,
-        "Response file": str(getattr(opts, "response_file", "") or "N/A"),
+        "Response file(s)": "; ".join(response_paths) or "N/A",
         "Correction convention": "divide by response",
+        "Instrumental FWHM (global, reference H-alpha 656 nm)": (
+            _fmt(getattr(opts, "instrumental_width", ""))
+            if float(getattr(opts, "instrumental_width", 0.0) or 0.0) > 0.0
+            else "Not configured; no width deconvolution"
+        ),
         "CF-LIBS intensity correction state": cf_state,
+        "Atomic library": database_name,
+        "Atomic library file": str(getattr(opts, "libs_db_file", "") or "N/A"),
     }
 
 
@@ -152,6 +178,13 @@ def template_rows(owner):
             _fmt3(getattr(line, "templint", "")),
             _fmt3(getattr(line, "error_inte", "")),
             _fmt3(getattr(line, "acc", "")),
+            str(getattr(line, "sa_method", "") or ""),
+            _fmt3(getattr(line, "sa_sac", "")),
+            _fmt3(getattr(line, "sa_reference", "")),
+            _fmt3(getattr(line, "fit_snr", "")),
+            str(getattr(line, "sa_diagnostic_status", "") or ""),
+            str(getattr(line, "sa_diagnostic_reason", "") or ""),
+            "Yes" if bool(getattr(line, "sa_use", False)) else "No",
         ])
     return rows
 
@@ -170,12 +203,29 @@ def saha_rows(owner):
 
 
 def plasma_parameter_rows(owner):
-    return [
+    rows = [
         ["Temperature used", f"{_fmt(owner.last_kt)} eV"],
         ["Temperature source", owner.last_temperature_source],
         ["Electron density used", f"{_fmt(owner.last_ne)} e/cm3"],
         ["Electron density source", owner.last_ne_source],
     ]
+    workflow = getattr(owner.master_app, "last_self_absorption_result", None)
+    if isinstance(workflow, dict):
+        rows.extend([
+            [
+                "Self-absorption assessment",
+                workflow.get("assessment_status", "Not assessed"),
+            ],
+            [
+                "Self-absorption decision",
+                workflow.get("assessment_message", ""),
+            ],
+            [
+                "Correction applied",
+                "Yes" if workflow.get("applied") else "No",
+            ],
+        ])
+    return rows
 
 
 def result_rows(rows):
@@ -183,6 +233,7 @@ def result_rows(rows):
         [
             r.get("element", ""),
             _fmt3(r.get("ionized_neutral_ratio")),
+            _fmt3(r.get("neutral_ratio")),
             _fmt3(r.get("number_percent")),
             _fmt3(r.get("mass_percent")),
         ]
@@ -214,10 +265,15 @@ def halpha_section_html(owner):
         ["H-alpha fitted center", _fmt(result.get("center"))],
         ["H-alpha Lorentzian/Stark width", _fmt(result.get("corrected_lorentzian_width"))],
         ["H-alpha measured Lorentzian width", _fmt(result.get("lorentzian_width"))],
+        ["H-alpha width standard error", _fmt(result.get("lorentzian_width_std"))],
         ["H-alpha Gaussian width", _fmt(result.get("gaussian_width"))],
+        ["H-alpha fit R2", _fmt(result.get("r_squared"))],
+        ["H-alpha peak S/N", _fmt(result.get("peak_prominence_to_noise"))],
         ["H-alpha intensity", _fmt(result.get("intensity"))],
         ["H-alpha integral", _fmt(result.get("integral"))],
         ["Electron density from H-alpha", f"{_fmt(result.get('ne'))} e/cm3"],
+        ["kT used to evaluate Ne", f"{_fmt(result.get('ne_evaluation_kt'))} eV"],
+        ["Relative Ne uncertainty", _fmt(result.get("ne_relative_uncertainty"))],
     ]
     return html_table(["Field", "Value"], rows)
 
@@ -227,6 +283,8 @@ def saha_section_html(owner):
     low, high = saha.get("temperature_range", ("N/A", "N/A"))
     rows = [
         ["Allowed temperature range", f"{_fmt(low)} - {_fmt(high)} eV"],
+        ["Boltzmann intensity convention", saha.get("intensity_mode", "energy")],
+        ["Boltzmann ordinate", saha.get("ordinate_formula", "N/A")],
         ["Mean temperature", f"{_fmt(saha.get('mean_temperature'))} eV"],
         ["Selected representative temperature mode", saha.get("representative_mode", "default value")],
         ["Selected element", saha.get("selected_element") or "N/A"],
@@ -236,6 +294,95 @@ def saha_section_html(owner):
         ["Element", "Temperature (eV)", "Valid lines", "Included in mean"],
         saha_rows(owner),
     )
+
+
+def cflibs_line_audit_rows(owner):
+    rows = []
+    for element, audit in sorted(
+        (getattr(owner, "last_line_audit", {}) or {}).items()
+    ):
+        rows.append([
+            element,
+            audit.get("active_count", 0),
+            ", ".join(audit.get("active_lines", [])) or "None",
+            ", ".join(audit.get("excluded_lines", [])) or "None",
+            ", ".join(audit.get("omitted_lines", [])) or "None",
+            audit.get("q_display", ""),
+            _fmt(audit.get("q_span")),
+            _fmt(audit.get("population_factor")),
+            audit.get("status", "Insufficient"),
+        ])
+    return rows
+
+
+def cflibs_line_audit_detail_rows(owner):
+    rows = []
+    for element, audit in sorted(
+        (getattr(owner, "last_line_audit", {}) or {}).items()
+    ):
+        for stage in audit.get("stages", []):
+            for line in stage.get("lines", []):
+                rows.append([
+                    element,
+                    line.get("ion"),
+                    _fmt(line.get("wavelength")),
+                    _fmt(line.get("upper_energy_cm")),
+                    _fmt(line.get("q_contribution")),
+                    _fmt(line.get("q_residual")),
+                    _fmt(line.get("snr")),
+                ])
+    return rows
+
+
+def cflibs_robustness_rows(owner):
+    robustness = (
+        getattr(owner, "last_robustness", None)
+        or getattr(owner.master_app, "last_cflibs_robustness", None)
+        or {}
+    )
+    rows = []
+    for element, item in sorted((robustness.get("elements") or {}).items()):
+        rows.append([
+            element,
+            item.get("active_lines", 0),
+            _fmt(item.get("baseline_number_percent")),
+            _fmt(item.get("baseline_mass_percent")),
+            _fmt(item.get("loo_number_min")),
+            _fmt(item.get("loo_number_max")),
+            _fmt(item.get("loo_mass_min")),
+            _fmt(item.get("loo_mass_max")),
+            _fmt(item.get("loo_max_relative_change")),
+            item.get("loo_worst_line", ""),
+            _fmt(item.get("replicate_number_cv")),
+            _fmt(item.get("replicate_mass_cv")),
+            _fmt(item.get("parameter_max_relative_change")),
+        ])
+    return rows
+
+
+def cflibs_quality_rows(owner):
+    quality = (
+        getattr(owner, "last_quality", None)
+        or getattr(owner.master_app, "last_cflibs_quality", None)
+        or {}
+    )
+    return [
+        [
+            "PASS" if check.get("passed") else "FAIL",
+            check.get("name", ""),
+            check.get("detail", ""),
+        ]
+        for check in quality.get("checks", []) or []
+    ]
+
+
+def cflibs_quality_status(owner):
+    quality = (
+        getattr(owner, "last_quality", None)
+        or getattr(owner.master_app, "last_cflibs_quality", None)
+        or {}
+    )
+    return str(quality.get("status", "Not run")), list(quality.get("warnings", []) or [])
 
 
 def build_cflibs_report_html(owner, rows, image_info, report_path: Optional[Path] = None):
@@ -252,6 +399,15 @@ def build_cflibs_report_html(owner, rows, image_info, report_path: Optional[Path
                 src = str(image_path)
         image_block = f"<p>PNG file: {html.escape(str(image_path))}</p><img src=\"{html.escape(src)}\" alt=\"Current spectrum plot\">"
     template_note = "pyLIBS stores the fitted line integral in the template intensity field used for CF-LIBS."
+    quality_status, quality_warnings = cflibs_quality_status(owner)
+    quality_warning_html = (
+        "<ul>" + "".join(
+            f"<li>{html.escape(str(warning))}</li>"
+            for warning in quality_warnings
+        ) + "</ul>"
+        if quality_warnings
+        else "<p>None recorded.</p>"
+    )
     style = """
 body { font-family: Arial, sans-serif; margin: 24px; color: #222; }
 h1 { margin-bottom: 0.2em; }
@@ -288,7 +444,9 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
 {html_table(
     ["#", "Wavelength", "Identification / species", "Fitted center", "Fitted intensity",
      "Lorentzian width", "Gaussian width", "Integral", "Aki", "gki", "Ek", "Ei",
-     "gi", "Assigned wavelength", "Template intensity", "Intensity error", "Accuracy"],
+     "gi", "Assigned wavelength", "Template intensity", "Intensity error", "Accuracy",
+     "SA method", "SA intensity factor", "IRSAC reference", "Voigt S/N",
+     "Independent SA check", "SA diagnostic reason", "Use correction"],
     template_rows(owner),
 )}
 
@@ -301,10 +459,38 @@ Date/time: {html.escape(datetime.now().isoformat(timespec='seconds'))}</p>
 <h2>Plasma parameters used for CF-LIBS</h2>
 {html_table(["Parameter", "Value"], plasma_parameter_rows(owner))}
 
+<h2>Quantitative quality gate</h2>
+<p><strong>Status: {html.escape(quality_status)}</strong></p>
+{html_table(["Check", "Criterion", "Detail"], cflibs_quality_rows(owner))}
+<p class="muted">Explicit limitations that remain after the numerical checks:</p>
+{quality_warning_html}
+
 <h2>CF-LIBS results</h2>
 <p>Skipped/incomplete template lines: {html.escape(str(owner.last_skipped))}</p>
-{html_table(["Element", "Ionized / Neutral ratio", "Number %", "Mass %"], result_rows(rows))}
+{html_table(["Element", "Ionized / Neutral ratio", "Neutral fraction", "Number %", "Mass %"], result_rows(rows))}
 <p class="muted">Atomic masses are read from LIBS.db table Elementi, field m_atomica. Incomplete template lines are skipped before concentration calculation.</p>
+
+<h2>Multielement robustness</h2>
+<p class="muted">LOO recomputes the complete composition after omitting each analytical line. Replicate CV uses the individually fitted Voigt areas at fixed T and Ne. T/Ne sensitivity uses the measured uncertainty intervals and does not use the nominal composition.</p>
+{html_table(
+    ["Element", "Lines", "Base number %", "Base mass %", "LOO number min", "LOO number max",
+     "LOO mass min", "LOO mass max", "LOO max relative", "Worst omitted line",
+     "Replicate number CV", "Replicate mass CV", "T/Ne max relative"],
+    cflibs_robustness_rows(owner),
+)}
+
+<h2>Analytical-line audit</h2>
+<p class="muted">This diagnostic reports the lines that actually determine each fixed-slope intercept. The q spread factor is exp(max(q line) - min(q line)); it is not an automatic outlier-removal rule. Stable is at most 1.5, Review is at most 3, and Poor is above 3.</p>
+{html_table(
+    ["Element", "Used", "Active lines", "Explicitly excluded", "Omitted", "q at T",
+     "q span", "Population factor", "Check"],
+    cflibs_line_audit_rows(owner),
+)}
+{html_table(
+    ["Element", "Ion", "Wavelength (nm)", "Ek (cm-1)", "Line q",
+     "q residual", "Voigt S/N"],
+    cflibs_line_audit_detail_rows(owner),
+)}
 </body>
 </html>
 """
@@ -329,13 +515,18 @@ def build_cflibs_report_text(owner, rows, image_info):
     for key, value in response_info(owner).items():
         data.append(f"{key}: {value}")
     data.extend(["", "Template contents"])
-    data.append("Index\tWavelength\tSpecies\tFitted center\tFitted intensity\tLorentzian width\tGaussian width\tIntegral\tAki\tgki\tEk\tEi\tgi\tAssigned wavelength\tTemplate intensity\tIntensity error\tAccuracy")
+    data.append("Index\tWavelength\tSpecies\tFitted center\tFitted intensity\tLorentzian width\tGaussian width\tIntegral\tAki\tgki\tEk\tEi\tgi\tAssigned wavelength\tTemplate intensity\tIntensity error\tAccuracy\tSA method\tSA intensity factor\tIRSAC reference\tVoigt S/N\tIndependent SA check\tSA diagnostic reason\tUse correction")
     for row in template_rows(owner):
         data.append("\t".join(str(v) for v in row))
     data.extend(["", "Hydrogen Stark broadening"])
     halpha = getattr(owner.master_app, "last_halpha_result", None) or {}
     if halpha and halpha.get("available"):
-        for key in ("center", "corrected_lorentzian_width", "lorentzian_width", "gaussian_width", "intensity", "integral", "ne"):
+        for key in (
+            "center", "corrected_lorentzian_width", "lorentzian_width",
+            "lorentzian_width_std", "gaussian_width", "r_squared",
+            "peak_prominence_to_noise", "intensity", "integral", "ne",
+            "ne_evaluation_kt", "ne_relative_uncertainty",
+        ):
             data.append(f"{key}: {_fmt(halpha.get(key))}")
     else:
         data.append("Not available")
@@ -343,6 +534,8 @@ def build_cflibs_report_text(owner, rows, image_info):
     saha = getattr(owner.master_app, "last_saha_boltzmann", None) or {}
     low, high = saha.get("temperature_range", ("N/A", "N/A"))
     data.append(f"Allowed temperature range: {_fmt(low)} - {_fmt(high)} eV")
+    data.append(f"Boltzmann intensity convention: {saha.get('intensity_mode', 'energy')}")
+    data.append(f"Boltzmann ordinate: {saha.get('ordinate_formula', 'N/A')}")
     data.append(f"Mean temperature: {_fmt(saha.get('mean_temperature'))} eV")
     data.append(f"Selected representative temperature mode: {saha.get('representative_mode', 'default value')}")
     data.append(f"Representative temperature used for CF-LIBS: {_fmt(owner.last_kt)} eV")
@@ -352,10 +545,41 @@ def build_cflibs_report_text(owner, rows, image_info):
     data.extend(["", "Plasma parameters used for CF-LIBS"])
     for row in plasma_parameter_rows(owner):
         data.append(f"{row[0]}: {row[1]}")
+    quality_status, quality_warnings = cflibs_quality_status(owner)
+    data.extend(["", "Quantitative quality gate", f"Status: {quality_status}"])
+    data.append("Check\tCriterion\tDetail")
+    for row in cflibs_quality_rows(owner):
+        data.append("\t".join(str(value) for value in row))
+    if quality_warnings:
+        data.append("Explicit limitations:")
+        data.extend(f"- {warning}" for warning in quality_warnings)
     data.extend(["", "CF-LIBS results"])
     data.append(f"Skipped/incomplete template lines: {owner.last_skipped}")
-    data.append("Element\tIonized / Neutral ratio\tNumber %\tMass %")
+    data.append("Element\tIonized / Neutral ratio\tNeutral fraction\tNumber %\tMass %")
     for row in result_rows(rows):
+        data.append("\t".join(str(v) for v in row))
+    data.extend(["", "Multielement robustness"])
+    data.append(
+        "Element\tLines\tBase number %\tBase mass %\tLOO number min\t"
+        "LOO number max\tLOO mass min\tLOO mass max\tLOO max relative\t"
+        "Worst omitted line\tReplicate number CV\tReplicate mass CV\t"
+        "T/Ne max relative"
+    )
+    for row in cflibs_robustness_rows(owner):
+        data.append("\t".join(str(v) for v in row))
+    data.extend(["", "Analytical-line audit"])
+    data.append(
+        "Element\tUsed\tActive lines\tExplicitly excluded\tOmitted\t"
+        "q at T\tq span\tPopulation factor\tCheck"
+    )
+    for row in cflibs_line_audit_rows(owner):
+        data.append("\t".join(str(v) for v in row))
+    data.append("")
+    data.append(
+        "Element\tIon\tWavelength (nm)\tEk (cm-1)\tLine q\t"
+        "q residual\tVoigt S/N"
+    )
+    for row in cflibs_line_audit_detail_rows(owner):
         data.append("\t".join(str(v) for v in row))
     return "\n".join(data) + "\n"
 
@@ -424,7 +648,8 @@ def write_report_content(owner, filename: str, content: str):
 
 
 def _fit_values_already_response_corrected(app):
-    return bool(getattr(app, "fit_values_already_response_corrected", False))
+    spectra = list(getattr(app, "spectra", []) or [])
+    return bool(spectra) and all(getattr(sp, "response_corrected", False) for sp in spectra)
 
 
 def _roman_ion(ion: int) -> str:

@@ -96,8 +96,8 @@ def show_statistics(master):
     return show_existing_or_create(master, "statistics_window", lambda: SpectrumStatisticsWindow(master), parent=master)
 
 
-def show_manual(master):
-    manual = manual_path()
+def show_manual(master, language="it"):
+    manual = manual_path(language)
     if not manual.is_file():
         _showerror(master, "Manual", f"The user manual was not found:\n{manual}")
         return
