@@ -1,0 +1,39 @@
+pyLIBS - clean review package
+Date: 2026-10-01
+
+Purpose
+-------
+Clean source distribution prepared for scientific and code review.
+
+Run
+---
+1. Install Python 3.11 or later.
+2. Install dependencies:
+   pip install -r requirements.txt
+3. Start the application:
+   python pyLIBS.py
+
+Included
+--------
+- Current pyLIBS application source.
+- pylibs Python package.
+- Historical and NIST-derived LIBS databases and Stark database.
+- Bundled analytical-line libraries.
+- Icons, splash image and README screenshots.
+- Italian and English manuals, architecture, changelog and audit document.
+- Automated tests and database/manual build tools.
+- Example configuration only.
+
+Intentionally excluded
+----------------------
+- Personal pyLIBS.ini and pending local settings.
+- Codex and deployment backup directories.
+- __pycache__, .pyc and .pyo files.
+- Historical before_* source copies.
+- Measurement-specific probes and temporary diagnostic exports.
+- Experimental spectra, response curves, STD and OPC files belonging to local sessions.
+
+Notes
+-----
+The application creates its local pyLIBS.ini when settings are saved. The
+pyLIBS.ini.example file documents the distributable default configuration.
