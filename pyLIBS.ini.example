@@ -6,13 +6,13 @@ input_dir=
 limit_low=2000.0
 limit_high=9300.0
 threshold=300.0
-delta_min=8.0
+delta_min=0.5
 search_range=0.8
 
 [HAlpha]
 ha_lines=1
 ha_range=150.0
-ha_wl1=6565.0
+ha_wl1=6562.8
 ha_wl2=6490.0
 ha_dl1=40.0
 ha_dl2=50.0
@@ -20,21 +20,33 @@ ha_kt=1.0
 
 [Response]
 apply_response=0
-apply_before=0
-apply_after=1
+apply_before=1
+apply_after=0
 response_file=
+response_files=[]
+lsf_widths={}
+
+[Database]
+libs_db_file=LIBS.db
 
 [Acquisition]
 echelle=0
 single_file_path=
-instrumental_width=1.0
+instrumental_width=0.0
+dark_mode=auto_columns
+signal_column=0
+dark_columns=
+dark_constant=0.0
+dark_file=
 
 [Fit]
+voigt_baseline_mode=local_linear
+voigt_fit_ranges={}
 fix_wg=0
 fixed_wg=0.5
 fix_wl=0
 fixed_wl=0.5
-aki_threshold=0.0
+aki_threshold=100000.0
 ne_low=1000000000000000.0
 ne_high=1e+19
 kt_low=0.5
@@ -44,6 +56,26 @@ convert_to_angstrom=0
 iterations=1
 auto_offset=0
 auto_shift=0.0
+
+[SelfAbsorption]
+irsac_mode=irsac
+irsac_iterations=100
+irsac_tolerance=0.001
+irsac_thermometric_species=
+irsac_reference_lines={}
+irsac_equation_mode=staged
+
+[CFLIBS]
+cflibs_intercept_mode=fixed_temperature
+cflibs_ionization_mode=saha
+cflibs_neutral_fractions=
+
+[Theory]
+theoretical_aki_threshold=100000.0
+
+[WavelengthCalibration]
+auto_wavelength_calibration=1
+wavelength_calibrations=[]
 
 [Windows]
 main_geometry=
@@ -97,4 +129,3 @@ HAlpha_H=
 HAlpha_W=
 HAlpha_X=
 HAlpha_Y=
-

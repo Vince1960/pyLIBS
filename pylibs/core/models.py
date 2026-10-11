@@ -23,6 +23,7 @@ class TemplateLine:
     templint: float = 0.0
     error_inte: float = 0.0
     acc: int = 0
+    fit_profile: str = ""
 
 
 @dataclass

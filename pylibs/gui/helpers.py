@@ -167,3 +167,15 @@ class ToolbarTooltip:
         if self.tip:
             self.tip.destroy()
             self.tip = None
+
+
+def add_context_help_button(parent, owner, title, message):
+    """Create a compact help button without occupying the work area."""
+    button = ttk.Button(
+        parent,
+        text="?",
+        width=3,
+        command=lambda: _showinfo(owner, title, message),
+    )
+    button._context_help_tooltip = ToolbarTooltip(button, f"Help: {title}")
+    return button

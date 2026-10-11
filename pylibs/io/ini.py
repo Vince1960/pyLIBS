@@ -1,6 +1,7 @@
 """pyLIBS.ini loading and saving helpers."""
 
 import configparser
+from pathlib import Path
 
 from pylibs.utils.formatting import safe_float, safe_int
 from pylibs.utils.paths import resource_path
@@ -53,15 +54,85 @@ PYLIBS_INI_ORDER = [
     ("view_log_x", bool),
     ("view_log_y", bool),
     ("background_color", str),
+    ("response_files", str),
+    ("libs_db_file", str),
+    # New sectioned settings are appended so positional legacy INI files keep
+    # their historical alignment.
+    ("lsf_widths", str),
+    ("dark_mode", str),
+    ("signal_column", int),
+    ("dark_columns", str),
+    ("dark_constant", float),
+    ("dark_file", str),
+    ("irsac_mode", str),
+    ("irsac_iterations", int),
+    ("irsac_tolerance", float),
+    ("irsac_thermometric_species", str),
+    ("irsac_reference_lines", str),
+    ("irsac_equation_mode", str),
+    ("cflibs_intercept_mode", str),
+    ("cflibs_ionization_mode", str),
+    ("cflibs_neutral_fractions", str),
+    ("strict_quantitation", bool),
+    ("quality_min_temperature_lines", int),
+    ("quality_min_temperature_levels", int),
+    ("quality_min_energy_span_ev", float),
+    ("quality_min_temperature_r2", float),
+    ("quality_max_relative_slope_error", float),
+    ("quality_max_loo_relative_span", float),
+    ("quality_max_line_population_factor", float),
+    ("quality_max_replicate_area_cv", float),
+    ("quality_min_composition_lines", int),
+    ("quality_max_composition_loo_relative_change", float),
+    ("quality_max_replicate_composition_cv", float),
+    ("quality_max_parameter_composition_relative_change", float),
+    ("quality_require_replicate_composition", bool),
+    ("quality_min_halpha_r2", float),
+    ("quality_min_halpha_snr", float),
+    ("quality_max_ne_relative_uncertainty", float),
+    ("quality_min_mcwhirter_margin", float),
+    ("quality_min_observed_stage_fraction", float),
+    ("quality_max_stage_balance_factor", float),
+    ("theoretical_aki_threshold", float),
+    ("auto_wavelength_calibration", bool),
+    ("wavelength_calibrations", str),
+    ("voigt_baseline_mode", str),
+    ("voigt_fit_ranges", str),
+    ("voigt_fit_range_sources", str),
+    ("remember_ne_for_series", bool),
+    ("boltzmann_intensity_mode", str),
 ]
 
 PYLIBS_INI_SECTIONED_ORDER = [
     ("General", ("username", "input_dir")),
     ("Limits", ("limit_low", "limit_high", "threshold", "delta_min", "search_range")),
-    ("HAlpha", ("ha_lines", "ha_range", "ha_wl1", "ha_wl2", "ha_dl1", "ha_dl2", "ha_kt")),
-    ("Response", ("apply_response", "apply_before", "apply_after", "response_file")),
-    ("Acquisition", ("echelle", "single_file_path", "instrumental_width")),
-    ("Fit", ("fix_wg", "fixed_wg", "fix_wl", "fixed_wl", "aki_threshold", "ne_low", "ne_high", "kt_low", "kt_high", "fix_wavelength", "convert_to_angstrom", "iterations", "auto_offset", "auto_shift")),
+    ("HAlpha", ("ha_lines", "ha_range", "ha_wl1", "ha_wl2", "ha_dl1", "ha_dl2", "ha_kt", "remember_ne_for_series")),
+    ("Response", ("apply_response", "apply_before", "apply_after", "response_file", "response_files", "lsf_widths")),
+    ("Database", ("libs_db_file",)),
+    ("Acquisition", ("echelle", "single_file_path", "instrumental_width", "dark_mode", "signal_column", "dark_columns", "dark_constant", "dark_file")),
+    ("Fit", ("voigt_baseline_mode", "voigt_fit_ranges", "voigt_fit_range_sources", "fix_wg", "fixed_wg", "fix_wl", "fixed_wl", "aki_threshold", "ne_low", "ne_high", "kt_low", "kt_high", "fix_wavelength", "convert_to_angstrom", "iterations", "auto_offset", "auto_shift")),
+    ("Boltzmann", ("boltzmann_intensity_mode",)),
+    ("SelfAbsorption", ("irsac_mode", "irsac_iterations", "irsac_tolerance", "irsac_thermometric_species", "irsac_reference_lines", "irsac_equation_mode")),
+    ("CFLIBS", (
+        "cflibs_intercept_mode", "cflibs_ionization_mode",
+        "cflibs_neutral_fractions", "strict_quantitation",
+        "quality_min_temperature_lines", "quality_min_temperature_levels",
+        "quality_min_energy_span_ev", "quality_min_temperature_r2",
+        "quality_max_relative_slope_error", "quality_max_loo_relative_span",
+        "quality_max_line_population_factor", "quality_min_halpha_r2",
+        "quality_max_replicate_area_cv",
+        "quality_min_composition_lines",
+        "quality_max_composition_loo_relative_change",
+        "quality_max_replicate_composition_cv",
+        "quality_max_parameter_composition_relative_change",
+        "quality_require_replicate_composition",
+        "quality_min_halpha_snr", "quality_max_ne_relative_uncertainty",
+        "quality_min_mcwhirter_margin",
+        "quality_min_observed_stage_fraction",
+        "quality_max_stage_balance_factor",
+    )),
+    ("Theory", ("theoretical_aki_threshold",)),
+    ("WavelengthCalibration", ("auto_wavelength_calibration", "wavelength_calibrations")),
     ("Windows", ("main_geometry", "template_geometry", "fit_geometry", "cf_geometry", "options_geometry", "ident_geometry")),
     ("View", ("view_grid_x", "view_grid_y", "view_log_x", "view_log_y", "background_color")),
 ]
@@ -182,10 +253,19 @@ def load_pylibs_ini(options, filename: str = "pyLIBS.ini"):
     # Keep old experimental name synchronized, if present in older builds.
     if hasattr(options, "input_directory") and not getattr(options, "input_dir", ""):
         options.input_dir = getattr(options, "input_directory", "")
-    # v8.3 default: external database lives beside the program.
-    dbp = resource_path("LIBS.db")
-    if dbp.exists():
-        options.libs_db_file = str(dbp)
+    # Resolve the configured library beside the application when a relative
+    # path is used.  Do not silently replace an explicit NIST/custom choice.
+    configured_db = str(getattr(options, "libs_db_file", "") or "").strip()
+    if configured_db:
+        dbp = Path(configured_db).expanduser()
+        if not dbp.is_absolute():
+            dbp = resource_path(configured_db)
+        if dbp.exists():
+            options.libs_db_file = str(dbp)
+    else:
+        dbp = resource_path("LIBS.db")
+        if dbp.exists():
+            options.libs_db_file = str(dbp)
     if hasattr(options, "window_positions"):
         options.window_positions = window_positions
     options.ini_file = str(path)

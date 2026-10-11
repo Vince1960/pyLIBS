@@ -37,3 +37,18 @@ def format_template_display_value(value):
     if not math.isfinite(number):
         return str(value)
     return f"{number:.3f}".rstrip("0").rstrip(".")
+
+
+def format_scientific_display_value(value, precision=6):
+    """Format small scientific values without changing stored data."""
+    if value is None:
+        return ""
+    if isinstance(value, str) and not value.strip():
+        return ""
+    try:
+        number = float(str(value).strip().replace(",", "."))
+    except Exception:
+        return value
+    if not math.isfinite(number):
+        return str(value)
+    return f"{number:.{int(precision)}e}"

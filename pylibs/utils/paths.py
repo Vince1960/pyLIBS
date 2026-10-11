@@ -23,8 +23,20 @@ def docs_dir() -> Path:
     return app_base_dir() / "docs"
 
 
-def manual_path() -> Path:
-    return docs_dir() / "pyLIBS_Manual.pdf"
+_MANUAL_FILENAMES = {
+    "it": "pyLIBS_Manual.pdf",
+    "en": "pyLIBS_Manual_EN.pdf",
+}
+
+
+def manual_path(language: str = "it") -> Path:
+    """Return the manual for a supported interface language."""
+    code = str(language or "it").strip().lower()
+    try:
+        filename = _MANUAL_FILENAMES[code]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported manual language: {language}") from exc
+    return docs_dir() / filename
 
 
 def icon_dirs() -> list[Path]:

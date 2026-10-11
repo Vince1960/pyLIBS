@@ -6,6 +6,12 @@
 
 ### Changed
 
+- The OPC window now accepts nominal compositions as either `Mass %` or `Number %`. Mass input is converted internally to Number % with database atomic masses before the unchanged Palleschi OPC ratio is evaluated.
+- Authoritative Voigt fitting now defaults to Palleschi's local-linear baseline. The optional BIC comparison is diagnostic only and never replaces Palleschi areas with a constant-baseline result.
+- Only explicitly selected analytical lines enter the quantitative multi-Voigt model. Residual neighbouring peaks are no longer inserted automatically and must be selected deliberately before refitting.
+- Added `File > Load independent windows...`: detector windows can now remain analytically separate, with no interpolation or cross-fade in overlaps. Voigt fitting selects one real window per line group, honours the `Active Spectra` choice in overlaps and rejects groups that would bridge windows.
+- Saha-Boltzmann, ordinary Boltzmann, IRSAC observations and their diagnostic points now use the assigned NIST transition wavelength for the radiometric ordinate and Apply After response lookup; the observed Voigt center is retained only for peak localization, coverage and fit diagnostics.
+- Boltzmann, Saha-Boltzmann, CF-LIBS, OPC and theoretical synthesis now share the radiometric ordinate `ln[5.0341166e15 * Icorr * lambda_nm / abs(Aki*gk)]`; the theoretical and OPC paths use its exact inverse.
 - `pyLIBS.ini` now stores option groups as INI sections instead of `//` comment separators, while still reading legacy files.
 - The Help > Manual command now opens `docs/pyLIBS_Manual.pdf` through the system PDF viewer and shows a clear warning if the file is missing or cannot be opened.
 - Voigt line fitting now requires exactly as many spectrum points as free model parameters, and it keeps expanding the current X window by 50% until that condition is met.
@@ -23,7 +29,7 @@
 - CF-LIBS reports are now generated through a single Report Preview window with Save and Close actions, and no longer include the H-alpha electron-density formula/source field.
 - CF-LIBS Show Report now opens temporary HTML reports in the system default HTML viewer and falls back to source preview if the viewer cannot be launched.
 - Saha-Boltzmann and CF-LIBS plots now support LIBS++-style Shift-click analytical point exclusion/reactivation using the sign of template Aki.
-- CF-LIBS now includes a manual-style One Point Calibration window that accepts nominal number percentages and saves wavelength-dependent `.opc` response calibration files.
+- CF-LIBS includes Palleschi's One Point Calibration on nominal number percentages and saves wavelength-dependent `.opc` response calibration files. OPC number references remain separate from the mass percentages stored by Standard Correction in `.STD` files.
 - Manual Fit now stores residuals after a successful Voigt fit and shows them in a single compact LIBS++-style Residuals plot window on request.
 - Manual Fit and Automatic Fit no longer show the legacy Expand button.
 - Voigt fitting now automatically expands the current X window by 50% and retries when too few spectrum points are available.
