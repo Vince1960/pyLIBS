@@ -1,7 +1,7 @@
 # pyLIBS - Manuale operativo completo
 
 Versione del manuale: 1.2 - 29 settembre 2026  
-Software: pyLIBS 1.0.3  
+Software: pyLIBS 1.1.1
 Origine: LIBS++ di Vincenzo Palleschi e collaboratori
 
 > Questo manuale descrive l'interfaccia e il flusso scientifico effettivamente implementati. I nomi dei comandi sono riportati come appaiono nel programma. Leggere almeno i capitoli 1-4 prima della prima analisi quantitativa.
@@ -270,7 +270,7 @@ La barra inferiore comunica caricamenti, correzioni, Ne attiva, salvataggi e err
 
 ### 6.1 Formati accettati
 
-Il selettore supporta TXT, DAT, ROH, TRT, MCH, JND, ASC e CSV, incluse le estensioni maiuscole. I file ASCII devono contenere almeno due colonne numeriche: lunghezza d'onda e intensità. Sono accettati come separatori spazi, tabulazioni o punti e virgola; la virgola decimale è gestita nei file separati da uno di questi caratteri.
+Il selettore supporta TXT, DAT, ROH, TRT, MCH, JND, ASC, CSV e Andor SIF, incluse le estensioni maiuscole. I file CSV devono contenere due colonne: lunghezza d'onda e intensità. I separatori virgola, punto e virgola e tabulazione vengono rilevati automaticamente; sono accettati intestazione facoltativa, righe vuote e BOM UTF-8. La virgola decimale è accettata con separatori punto e virgola/tabulazione e nei campi CSV tra virgole racchiusi tra virgolette. I valori con virgola decimale separati da virgole senza virgolette sono ambigui e richiedono punto e virgola o tabulazione. Il supporto SIF comprende gli spettri 1D estratti e calibrati (inclusi quelli prodotti dal Mechelle 5000); immagini, acquisizioni multi-frame e altri layout SIF sono segnalati come non supportati.
 
 ### 6.2 Open, Append e Compare
 
@@ -810,6 +810,8 @@ Aprire `Utilities > Batch and Statistics > Batch Operations...`.
 - `Average`: interpola su una griglia comune, calcola la media e crea `.avg`.
 - `Calculate SD`: aggiunge la deviazione standard `.sd`.
 - `Load List` e `Save List`: gestiscono elenchi `.lst` o storici `.fls`.
+- `Convert Andor SIF to ASCII XY`: seleziona più file SIF e una cartella di destinazione, quindi crea un `.txt` senza intestazione per ogni file, con colonne tabulate di lunghezza d'onda e intensità e lo stesso nome base. Gli errori sono riportati per singolo file.
+- `Convert CSV to ASCII XY`: seleziona più file CSV e una cartella di destinazione, quindi crea un `.txt` senza intestazione per ogni file, con colonne tabulate di lunghezza d'onda e intensità e lo stesso nome base. Gli errori sono riportati per singolo file.
 
 Le medie tra acquisizioni sono corrette solo se i file appartengono alla stessa finestra e hanno condizioni sperimentali equivalenti. Non mediare insieme finestre centrali diverse.
 

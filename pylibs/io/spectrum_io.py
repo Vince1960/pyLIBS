@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import csv
+import io
+import math
+import re
 import struct
 from collections import Counter
 from pathlib import Path
 from typing import Optional
 
 from pylibs.utils.formatting import safe_int
+from pylibs.io.andor_sif import read_andor_sif
 
 
 SPECTRUM_FILETYPES = [
     (
         "All Supported Spectrum Files",
-        "*.txt *.TXT *.dat *.DAT *.roh *.ROH *.trt *.TRT *.mch *.MCH *.jnd *.JND *.asc *.ASC *.csv *.CSV",
+        "*.txt *.TXT *.dat *.DAT *.roh *.ROH *.trt *.TRT *.mch *.MCH *.jnd *.JND *.asc *.ASC *.csv *.CSV *.sif *.SIF",
     ),
     ("ASCII Files (*.txt *.TXT)", "*.txt *.TXT"),
     ("Data Files (*.dat *.DAT)", "*.dat *.DAT"),
@@ -24,6 +29,7 @@ SPECTRUM_FILETYPES = [
     ("Joined Files (*.jnd *.JND)", "*.jnd *.JND"),
     ("ASC Files (*.asc *.ASC)", "*.asc *.ASC"),
     ("CSV Files (*.csv *.CSV)", "*.csv *.CSV"),
+    ("Andor SIF Files (*.sif *.SIF)", "*.sif *.SIF"),
     ("All", "*.*"),
 ]
 
@@ -80,6 +86,9 @@ def read_ascii_spectrum_columns(
     convert_nm_to_a: bool = False,
 ) -> tuple[list[float], list[list[float]]]:
     """Read wavelength plus one or more intensity columns."""
+    if Path(filename).suffix.lower() == ".csv":
+        xs, ys = read_csv_spectrum(filename, convert_nm_to_a)
+        return xs, [ys]
     rows = []
     with open(filename, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -107,6 +116,161 @@ def read_ascii_spectrum_columns(
 def read_ascii_spectrum(filename: str, convert_nm_to_a: bool = False) -> tuple[list[float], list[float]]:
     xs, columns = read_ascii_spectrum_columns(filename, convert_nm_to_a)
     return xs, columns[0]
+
+
+_CSV_HEADER_WORDS = {
+    "x", "y", "wavelength", "wavelength_nm", "lambda", "nm", "intensity",
+    "signal", "counts", "count", "ordinate", "pixel", "frequency",
+}
+
+
+def _csv_number(value: str, delimiter: str) -> float:
+    value = value.strip()
+    if not value:
+        raise ValueError("empty numeric field")
+    if "," in value and "." in value:
+        raise ValueError("a numeric field mixes decimal comma and decimal point")
+    if "," in value:
+        # With comma delimiters, commas inside a field can only have come from
+        # a quoted CSV field; this supports unambiguous quoted decimal commas.
+        if delimiter != "," and value.count(",") == 1:
+            value = value.replace(",", ".")
+        elif delimiter == "," and value.count(",") == 1:
+            value = value.replace(",", ".")
+        else:
+            raise ValueError("ambiguous decimal-comma number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError("non-finite numeric value")
+    return number
+
+
+def _csv_header_row(row: list[str]) -> bool:
+    if len(row) != 2:
+        return False
+    normalized = [re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_") for value in row]
+    if all(value in _CSV_HEADER_WORDS for value in normalized):
+        return True
+    # Permit ordinary descriptive labels, but never discard a row containing
+    # a numeric-looking field as a supposed header.
+    return all(value and re.search(r"[A-Za-z]", value) for value in row)
+
+
+def read_csv_spectrum(
+    filename: str,
+    convert_nm_to_a: bool = False,
+) -> tuple[list[float], list[float]]:
+    """Read a two-column CSV spectrum with strict delimiter inference.
+
+    Comma, semicolon and tab delimiters are supported. Decimal commas are
+    accepted inside semicolon/tab separated fields and quoted comma-delimited
+    fields. Bare comma-delimited decimal-comma data is rejected as ambiguous.
+    """
+    try:
+        text = Path(filename).read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("CSV spectrum must be UTF-8 text (an optional BOM is supported).") from exc
+    if not text.strip():
+        raise ValueError("CSV spectrum is empty.")
+
+    candidates: list[tuple[str, list[float], list[float]]] = []
+    failures: list[str] = []
+    ambiguous_decimal_comma = False
+    for delimiter in (",", ";", "\t"):
+        try:
+            rows = [
+                [cell.strip() for cell in row]
+                for row in csv.reader(io.StringIO(text, newline=""), delimiter=delimiter, strict=True)
+                if any(cell.strip() for cell in row)
+            ]
+        except csv.Error as exc:
+            failures.append(f"{delimiter!r} delimiter: malformed quoting ({exc})")
+            continue
+        if not rows:
+            continue
+        has_header = len(rows[0]) == 2 and _csv_header_row(rows[0])
+        data_rows = rows[1:] if has_header else rows
+        if not data_rows:
+            failures.append(f"{delimiter!r} delimiter: no numeric rows")
+            continue
+        xs: list[float] = []
+        ys: list[float] = []
+        problem = None
+        for row_number, row in enumerate(data_rows, start=2 if has_header else 1):
+            if len(row) != 2:
+                if delimiter == "," and len(row) > 2 and all(
+                    _is_plain_numeric_cell(cell) for cell in row
+                ):
+                    ambiguous_decimal_comma = True
+                problem = f"row {row_number} has {len(row)} fields; expected exactly 2"
+                break
+            try:
+                x_value = _csv_number(row[0], delimiter)
+                y_value = _csv_number(row[1], delimiter)
+            except ValueError as exc:
+                problem = f"row {row_number}: {exc}"
+                break
+            xs.append(x_value)
+            ys.append(y_value)
+        if problem:
+            failures.append(f"{delimiter!r} delimiter: {problem}")
+        elif xs:
+            candidates.append((delimiter, xs, ys))
+    if len(candidates) > 1:
+        names = ", ".join("tab" if delim == "\t" else delim for delim, _, _ in candidates)
+        raise ValueError(f"Ambiguous CSV spectrum: multiple delimiters are valid ({names}).")
+    if not candidates:
+        if ambiguous_decimal_comma:
+            raise ValueError(
+                "Ambiguous CSV spectrum: comma-separated fields may be decimal-comma values; "
+                "use semicolons or tabs between columns."
+            )
+        detail = failures[0] if failures else "no two-column numeric data found"
+        raise ValueError(f"Invalid CSV spectrum: {detail}.")
+    _, xs, ys = candidates[0]
+    if convert_nm_to_a:
+        xs = [wave * 10.0 if wave < 1500 else wave for wave in xs]
+    return xs, ys
+
+
+def _is_plain_numeric_cell(value: str) -> bool:
+    """Return whether a comma-delimited cell is a numeric decimal-point value."""
+    try:
+        return math.isfinite(float(value.strip()))
+    except ValueError:
+        return False
+
+
+def convert_csv_batch(
+    filenames: list[str | Path], output_directory: str | Path
+) -> tuple[list[Path], list[tuple[Path, str]]]:
+    """Convert CSV spectra to headerless tab-separated ASCII XY files."""
+    output_dir = Path(output_directory)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    converted: list[Path] = []
+    failed: list[tuple[Path, str]] = []
+    claimed: set[str] = set()
+    for source_value in filenames:
+        source = Path(source_value)
+        destination = output_dir / f"{source.stem}.txt"
+        key = destination.name.casefold()
+        if key in claimed or destination.exists():
+            failed.append((source, f"Output already exists: {destination.name}"))
+            continue
+        try:
+            wavelength, intensity = read_csv_spectrum(str(source))
+            with destination.open("w", encoding="ascii", newline="\n") as handle:
+                for x_value, y_value in zip(wavelength, intensity):
+                    handle.write(f"{x_value:.17g}\t{y_value:.17g}\n")
+            claimed.add(key)
+            converted.append(destination)
+        except Exception as exc:
+            failed.append((source, str(exc)))
+            try:
+                destination.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return converted, failed
 
 
 def read_roh_spectrum(
@@ -190,6 +354,11 @@ def is_roh_spectrum_file(filename: str) -> bool:
 
 
 def load_spectrum_for_open(filename: str, options, spectrum_cls):
+    if Path(filename).suffix.lower() == ".sif":
+        xs, ys = read_andor_sif(filename)
+        if getattr(options, "convert_to_angstrom", False):
+            xs = xs * 10.0
+        return spectrum_cls(xs.tolist(), ys.tolist(), Path(filename).name, filename)
     if is_roh_spectrum_file(filename):
         return spectrum_cls.from_roh(
             filename,

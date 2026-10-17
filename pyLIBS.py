@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-pyLIBS Python ver. 1.0.3
+pyLIBS Python application
 Originally developed as LIBS++ by Vincenzo Palleschi and coworkers,
 © 2026 Vincenzo Palleschi. Licensed under CC BY-NC 4.0 for non-commercial use with attribution
 
@@ -109,10 +109,12 @@ from pylibs.io.spectrum_io import (
     read_ascii_metadata,
     read_ascii_spectrum,
     read_ascii_spectrum_columns,
+    convert_csv_batch,
     read_roh_spectrum,
     write_ascii_spectrum,
     is_roh_spectrum_file,
 )
+from pylibs.io.andor_sif import convert_sif_batch
 from pylibs.gui.icons import get_cached_menu_icon
 from pylibs.gui.toolbar import build_retro_toolbar
 from pylibs.gui.helpers import (
@@ -1318,7 +1320,7 @@ def discover_replicate_spectrum_files(filename: str) -> tuple[str, ...]:
 
 
 def load_spectrum_for_open(filename: str, options: AppOptions) -> Spectrum:
-    if is_roh_spectrum_file(filename):
+    if is_roh_spectrum_file(filename) or Path(filename).suffix.lower() == ".sif":
         return _load_spectrum_for_open(filename, options, Spectrum)
     xs, columns = read_ascii_spectrum_columns(filename, options.convert_to_angstrom)
     metadata = read_ascii_metadata(filename)
@@ -1731,7 +1733,7 @@ class OptionsWindow(tk.Toplevel):
         filenames = filedialog.askopenfilenames(
             title="One instrumental-response file per spectral window",
             initialdir=initial,
-            filetypes=[("Instrument response / OPC", "*.xlsx *.xlsm *.dat *.txt *.asc *.csv *.opc"), ("All", "*.*")]
+            filetypes=[("Instrument response / OPC", "*.xlsx *.xlsm *.dat *.txt *.asc *.csv *.CSV *.opc"), ("All", "*.*")]
         )
         if filenames:
             paths = list(filenames)
@@ -1782,7 +1784,7 @@ class OptionsWindow(tk.Toplevel):
         filename = filedialog.askopenfilename(
             title="Select a wavelength/dark two-column file",
             initialdir=remembered_initial_dir(self.master_app.options),
-            filetypes=[("Spectrum files", "*.txt *.dat *.asc *.csv"), ("All", "*.*")],
+            filetypes=[("Spectrum files", "*.txt *.dat *.asc *.csv *.CSV"), ("All", "*.*")],
         )
         if filename:
             remember_working_dir(self.master_app.options, filename)
@@ -2909,6 +2911,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Button(top,text="MultiFit",command=self.multi_fit).pack(side="left", padx=3)
         ttk.Button(top,text="Join",command=self.join_pairs).pack(side="left", padx=3)
         ttk.Button(top,text="Average",command=self.average_files).pack(side="left", padx=3)
+        ttk.Button(top,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
         self.calculate_sd = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="Calculate SD", variable=self.calculate_sd).pack(side="left", padx=3)
 
@@ -2916,6 +2919,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Button(bottom,text="Load List",command=self.load_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Clear List",command=self.clear_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Save List",command=self.save_list).pack(side="left", padx=3)
+        ttk.Button(bottom,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii).pack(side="left", padx=3)
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
         self.listbox=tk.Listbox(self)
         self.listbox.pack(fill="both", expand=True, padx=6, pady=6)
@@ -2940,6 +2944,64 @@ class BatchStatisticsWindow(tk.Toplevel):
         for fn in fns:
             if self._include_file(fn):
                 self.listbox.insert("end", fn)
+
+    def convert_sif_to_ascii(self):
+        filenames = filedialog.askopenfilenames(
+            parent=self,
+            title="Select Andor SIF files",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            filetypes=[("Andor SIF files", "*.sif *.SIF"), ("All files", "*.*")],
+        )
+        if not filenames:
+            return
+        output_directory = filedialog.askdirectory(
+            parent=self,
+            title="Choose output directory for ASCII XY files",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            mustexist=True,
+        )
+        if not output_directory:
+            return
+        remember_working_dir(self.master_app.options, output_directory)
+        converted, failed = convert_sif_batch(filenames, output_directory)
+        summary = f"Converted {len(converted)} of {len(filenames)} SIF file(s)."
+        if failed:
+            details = "\n".join(f"{source.name}: {error}" for source, error in failed[:12])
+            if len(failed) > 12:
+                details += f"\n…and {len(failed) - 12} more error(s)."
+            _showwarning(self, "Convert Andor SIF to ASCII XY", summary + "\n\nFailed:\n" + details)
+        else:
+            _showinfo(self, "Convert Andor SIF to ASCII XY", summary)
+        self.master_app.status(summary)
+
+    def convert_csv_to_ascii(self):
+        filenames = filedialog.askopenfilenames(
+            parent=self,
+            title="Select CSV spectrum files",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            filetypes=[("CSV files", "*.csv *.CSV"), ("All files", "*.*")],
+        )
+        if not filenames:
+            return
+        output_directory = filedialog.askdirectory(
+            parent=self,
+            title="Choose output directory for ASCII XY files",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            mustexist=True,
+        )
+        if not output_directory:
+            return
+        remember_working_dir(self.master_app.options, output_directory)
+        converted, failed = convert_csv_batch(filenames, output_directory)
+        summary = f"Converted {len(converted)} of {len(filenames)} CSV file(s)."
+        if failed:
+            details = "\n".join(f"{source.name}: {error}" for source, error in failed[:12])
+            if len(failed) > 12:
+                details += f"\n…and {len(failed) - 12} more error(s)."
+            _showwarning(self, "Convert CSV to ASCII XY", summary + "\n\nFailed:\n" + details)
+        else:
+            _showinfo(self, "Convert CSV to ASCII XY", summary)
+        self.master_app.status(summary)
 
     def paths(self):
         return [self.listbox.get(i) for i in range(self.listbox.size())]
@@ -19224,7 +19286,7 @@ class MainWindow(tk.Tk):
         fns=filedialog.askopenfilenames(
             title="One instrumental-response file per spectral window",
             initialdir=remembered_initial_dir(self.options),
-            filetypes=[("Instrument response / OPC","*.xlsx *.xlsm *.txt *.dat *.asc *.csv *.opc"),("All","*.*")],
+            filetypes=[("Instrument response / OPC","*.xlsx *.xlsm *.txt *.dat *.asc *.csv *.CSV *.opc"),("All","*.*")],
         )
         if fns:
             remember_working_dir(self.options, fns)
@@ -20202,7 +20264,7 @@ def install_retro_ui(self):
     self.build_retro_menu()
     self.build_retro_toolbar()
     try:
-        self.title("pyLIBS")
+        self.title(APP_TITLE)
     except Exception:
         pass
     try:

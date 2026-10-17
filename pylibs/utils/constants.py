@@ -1,7 +1,7 @@
 """Stable application constants for pyLIBS."""
 
 APP_NAME = "pyLIBS"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.1.1"
 APP_DESCRIPTION = "Advanced LIBS Spectrum Analysis"
 APP_AUTHOR = (
     "Developed at the Applied Laser Spectroscopy "
@@ -13,7 +13,7 @@ APP_HISTORY = (
 )
 APP_COPYRIGHT = "© CNR Pisa 1999–2026"
 
-APP_TITLE = APP_NAME
+APP_TITLE = f"{APP_NAME} {APP_VERSION}"
 APP_SUBTITLE = APP_DESCRIPTION
 SPLASH_SECONDS = 3
 SPLASH_DURATION_MS = 2800

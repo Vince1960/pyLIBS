@@ -1,7 +1,7 @@
 # pyLIBS - Complete User Manual
 
 Manual version: 1.2 - 29 September 2026  
-Software: pyLIBS 1.0.3  
+Software: pyLIBS 1.1.1
 Origin: LIBS++ by Vincenzo Palleschi and collaborators
 
 > This manual describes the interface and scientific workflow actually implemented in pyLIBS. Command names are reproduced exactly as they appear in the program. Read at least Chapters 1-4 before performing the first quantitative analysis.
@@ -270,7 +270,7 @@ The lower bar reports loading, corrections, active Ne, saved files and errors. R
 
 ### 6.1 Supported formats
 
-The file selector supports TXT, DAT, ROH, TRT, MCH, JND, ASC and CSV, including uppercase extensions. ASCII files must contain at least two numerical columns: wavelength and intensity. Spaces, tabs or semicolons are accepted as separators; decimal commas are handled in files separated by spaces, tabs or semicolons.
+The file selector supports TXT, DAT, ROH, TRT, MCH, JND, ASC, CSV and Andor SIF, including uppercase extensions. CSV spectra must have two columns: wavelength and intensity. Comma, semicolon and tab delimiters are detected automatically; an optional first-row header, empty lines and a UTF-8 BOM are supported. Decimal commas are accepted with semicolon/tab delimiters and in quoted comma-delimited values. Bare comma-delimited decimal-comma data is ambiguous and must use semicolons or tabs. SIF support covers calibrated, extracted single 1D spectra (including Mechelle 5000 output); image, multi-frame and other SIF layouts are reported as unsupported.
 
 ### 6.2 Open, Append and Compare
 
@@ -810,6 +810,8 @@ Open `Utilities > Batch and Statistics > Batch Operations...`.
 - `Average`: interpolates onto a common grid, calculates the average and creates `.avg` files.
 - `Calculate SD`: adds the standard deviation in an `.sd` file.
 - `Load List` and `Save List`: manage `.lst` or historical `.fls` lists.
+- `Convert Andor SIF to ASCII XY`: selects multiple SIF files and an output directory, then writes one headerless tab-separated wavelength/intensity `.txt` per input, retaining the original basename. Conversion errors are reported per file.
+- `Convert CSV to ASCII XY`: selects multiple CSV files and an output directory, then writes one headerless tab-separated wavelength/intensity `.txt` per input, retaining the original basename. Conversion errors are reported per file.
 
 Averaging acquisitions is valid only when the files belong to the same window and were acquired under equivalent experimental conditions. Do not average different central windows together.
 
