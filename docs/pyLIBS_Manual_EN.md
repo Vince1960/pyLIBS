@@ -1,7 +1,7 @@
 # pyLIBS - Complete User Manual
 
 Manual version: 1.2 - 29 September 2026  
-Software: pyLIBS 1.1.1
+Software: pyLIBS 1.2.0
 Origin: LIBS++ by Vincenzo Palleschi and collaborators
 
 > This manual describes the interface and scientific workflow actually implemented in pyLIBS. Command names are reproduced exactly as they appear in the program. Read at least Chapters 1-4 before performing the first quantitative analysis.

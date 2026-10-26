@@ -2,6 +2,21 @@
 
 ------------------------------------------------------------
 
+## 1.2.0 — 2026-10-26
+
+### What's New
+
+- **Time-Resolved Spectra:** Added the capability to generate time-resolved LIBS spectral files by subtracting spectra acquired at different delays, following Grifoni et al. (2014).
+- **Bug fixes:** Various bug fixes and GUI improvements.
+
+### Reference
+
+Grifoni, E., Legnaioli, S., Lezzerini, M., Lorenzetti, G., Pagnotta, S., and Palleschi, V. (2014). *Extracting Time-Resolved Information from Time-Integrated Laser-Induced Breakdown Spectra*. Journal of Spectroscopy, 2014, Article ID 849310.
+
+https://doi.org/10.1155/2014/849310
+
+------------------------------------------------------------
+
 ## Unreleased
 
 ### Changed

@@ -41,6 +41,7 @@ from pylibs.core.instrument_response import (
     serialize_response_paths,
 )
 from pylibs.core.preprocessing import subtract_dark
+from pylibs.core.time_resolved import natural_sort_key, process_time_resolved_pairs, time_resolved_output_path, validate_output_prototype
 from pylibs.core.analysis_workflow import (
     irsac_correction_status,
     theoretical_spectrum_readiness,
@@ -765,6 +766,8 @@ def _calibrated_source_window(
 
 
 LIBS_SPECTRUM_COLORS = ["black", "red", "blue", "green", "magenta", "cyan", "orange", "brown"]
+SPECTRAL_LINE_MARKER_LINEWIDTH = 2.8
+SPECTRAL_LINE_MARKER_ZORDER = 10
 
 
 def default_spectrum_color(index: int) -> str:
@@ -2340,9 +2343,17 @@ class LineIdentificationWindow(tk.Toplevel):
             res.sort(key=lambda l:abs(l.wavelen-wave))
         self.populate(res)
 
-    def assign(self, _=None):
-        item=self.tree.focus()
+    def assign(self, event=None):
+        item = self.tree.identify_row(event.y) if event is not None else ""
+        if not item:
+            item = self.tree.focus()
         if item:
+            wavelength = safe_float(self.wave_var.get(), None)
+            if wavelength is not None:
+                # The plot's initial blue marker is the assignment target. Keep
+                # this dialog's search wavelength current when using the same
+                # assignment routine as plot-driven identification.
+                self.master_app.current_identification_wavelength = float(wavelength)
             self.master_app.assign_atomic_line_to_nearest_template(self.results[int(item)])
 
 
@@ -2445,8 +2456,6 @@ class TraceLinesWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app = master
         self.title("Trace Lines")
-        self.geometry("900x460")
-        self.minsize(840, 360)
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=6)
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
         self.species_var = tk.StringVar(value="Si")
@@ -2512,6 +2521,12 @@ class TraceLinesWindow(tk.Toplevel):
             row=2, column=0, columnspan=13, sticky="w", padx=3, pady=(5, 0)
         )
         self.refresh()
+        self.update_idletasks()
+        controls_width = top.winfo_reqwidth() + 12
+        tree_width = tree_frame.winfo_reqwidth() + 12
+        required_width = max(840, controls_width, tree_width)
+        self.geometry(f"{max(900, required_width)}x460")
+        self.minsize(required_width, 360)
         center_window(self, master)
 
     def refresh(self, show_message=True):
@@ -2882,6 +2897,183 @@ class AutoElementIdentificationWindow(tk.Toplevel):
         self.master_app.status(f"Automatic element identification: {assigned} line assignments")
 
 
+class TimeResolvedSpectraDialog(tk.Toplevel):
+    """Reconstruct spectra integrated over the interval between two delays."""
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.master_app = master.master_app if isinstance(master, BatchStatisticsWindow) else master
+        self.title("Time-Resolved Spectra")
+        self.geometry("850x560")
+        self.minsize(650, 440)
+        self.group_a, self.group_b = [], []
+        self.output_dir = tk.StringVar(value=getattr(self.master_app, "_time_resolved_output_dir", ""))
+        self.t1 = tk.StringVar(value="0")
+        self.t2 = tk.StringVar(value="1")
+        self.prototype = tk.StringVar()
+        self._build()
+
+    def _build(self):
+        frame = ttk.Frame(self, padding=10)
+        frame.pack(fill="both", expand=True)
+        controls = ttk.Frame(frame)
+        controls.pack(fill="x")
+        ttk.Button(controls, text="Select first-delay spectra…", command=lambda: self._choose(1)).grid(row=0, column=0, sticky="w", padx=3, pady=4)
+        ttk.Label(controls, text="t1 (ns)").grid(row=0, column=1, padx=(12, 3))
+        ttk.Entry(controls, textvariable=self.t1, width=12).grid(row=0, column=2)
+        self.count_a = ttk.Label(controls, text="0 files")
+        self.count_a.grid(row=0, column=3, padx=8)
+        ttk.Button(controls, text="Select second-delay spectra…", command=lambda: self._choose(2)).grid(row=1, column=0, sticky="w", padx=3, pady=4)
+        ttk.Label(controls, text="t2 (ns)").grid(row=1, column=1, padx=(12, 3))
+        ttk.Entry(controls, textvariable=self.t2, width=12).grid(row=1, column=2)
+        self.count_b = ttk.Label(controls, text="0 files")
+        self.count_b.grid(row=1, column=3, padx=8)
+        name_row = ttk.Frame(frame)
+        name_row.pack(fill="x", pady=(8, 0))
+        ttk.Label(name_row, text="Output Filename Prototype:").pack(side="left")
+        prototype_entry = ttk.Entry(name_row, textvariable=self.prototype, width=28)
+        prototype_entry.pack(side="left", padx=6)
+        ttk.Label(name_row, text="First output:").pack(side="left", padx=(10, 3))
+        self.preview_label = ttk.Label(name_row, text="—")
+        self.preview_label.pack(side="left", fill="x", expand=True)
+        self.prototype.trace_add("write", lambda *_: self._update_preview())
+        self.t1.trace_add("write", lambda *_: self._update_preview())
+        self.t2.trace_add("write", lambda *_: self._update_preview())
+        ttk.Label(frame, text="Natural-sorted file pairs (review the pairing before processing):").pack(anchor="w", pady=(10, 3))
+        columns = ("first", "second")
+        self.pair_tree = ttk.Treeview(frame, columns=columns, show="headings", height=12)
+        self.pair_tree.heading("first", text="First delay (Group A)")
+        self.pair_tree.heading("second", text="Second delay (Group B)")
+        self.pair_tree.column("first", width=340)
+        self.pair_tree.column("second", width=340)
+        self.pair_tree.pack(fill="both", expand=True)
+        out = ttk.Frame(frame)
+        out.pack(fill="x", pady=8)
+        ttk.Label(out, text="Output directory:").pack(side="left")
+        ttk.Entry(out, textvariable=self.output_dir).pack(side="left", fill="x", expand=True, padx=6)
+        ttk.Button(out, text="Browse…", command=self._choose_output).pack(side="left")
+        buttons = ttk.Frame(frame)
+        buttons.pack(fill="x")
+        self.process_button = ttk.Button(buttons, text="Start Processing", command=self._start)
+        self.process_button.pack(side="left")
+        ttk.Button(buttons, text="Cancel / Close", command=self.destroy).pack(side="right")
+        center_window(self, self.master_app)
+        self._update_preview()
+
+    def _choose(self, group):
+        files = filedialog.askopenfilenames(parent=self, title="Select spectra", initialdir=remembered_initial_dir(self.master_app.options), filetypes=SPECTRUM_FILETYPES)
+        if not files:
+            return
+        ordered = [str(p) for p in sorted((Path(p) for p in files), key=lambda p: (natural_sort_key(p.name), str(p).casefold()))]
+        if group == 1:
+            self.group_a = ordered
+        else:
+            self.group_b = ordered
+        self._refresh_pairs()
+
+    def _update_preview(self):
+        try:
+            if not self.group_a:
+                raise ValueError
+            first_delay, second_delay = float(self.t1.get()), float(self.t2.get())
+            if first_delay < 0 or second_delay <= first_delay or not (math.isfinite(first_delay) and math.isfinite(second_delay)):
+                raise ValueError
+            first = Path(self.group_a[0])
+            path = time_resolved_output_path(first, "", first_delay, second_delay, self.prototype.get(), 1, len(self.group_a))
+            self.preview_label.configure(text=path.name)
+        except (ValueError, TypeError):
+            self.preview_label.configure(text="Enter prototype and valid delays")
+
+    def _refresh_pairs(self):
+        self.count_a.configure(text=f"{len(self.group_a)} file(s)")
+        self.count_b.configure(text=f"{len(self.group_b)} file(s)")
+        self.pair_tree.delete(*self.pair_tree.get_children())
+        for i in range(max(len(self.group_a), len(self.group_b))):
+            a = self.group_a[i] if i < len(self.group_a) else "—"
+            b = self.group_b[i] if i < len(self.group_b) else "—"
+            self.pair_tree.insert("", "end", values=(Path(a).name if a != "—" else a, Path(b).name if b != "—" else b))
+        self._update_preview()
+
+    def _choose_output(self):
+        folder = filedialog.askdirectory(parent=self, title="Choose output directory", initialdir=self.output_dir.get() or remembered_initial_dir(self.master_app.options), mustexist=True)
+        if folder:
+            self.output_dir.set(folder)
+            self.master_app._time_resolved_output_dir = folder
+            remember_working_dir(self.master_app.options, folder)
+
+    def _start(self):
+        if not self.group_a or not self.group_b:
+            _showerror(self, "Time-Resolved Spectra", "Select spectra for both delays.")
+            return
+        if len(self.group_a) != len(self.group_b):
+            _showerror(self, "Time-Resolved Spectra", f"The groups contain different numbers of files ({len(self.group_a)} and {len(self.group_b)}).")
+            return
+        if not self.output_dir.get():
+            _showinfo(self, "Time-Resolved Spectra", "Choose an output directory before processing.")
+            self._choose_output()
+            return
+        try:
+            prototype = validate_output_prototype(self.prototype.get())
+        except ValueError as exc:
+            _showerror(self, "Time-Resolved Spectra", str(exc))
+            return
+        output_dir = Path(self.output_dir.get()).expanduser()
+        if not output_dir.is_dir():
+            _showerror(self, "Time-Resolved Spectra", f"The output directory does not exist:\n{output_dir}")
+            return
+        try:
+            t1, t2 = float(self.t1.get()), float(self.t2.get())
+            if not (math.isfinite(t1) and math.isfinite(t2)) or t1 < 0 or t2 <= t1:
+                raise ValueError
+        except ValueError:
+            _showerror(self, "Time-Resolved Spectra", "Enter finite nonnegative delays with t2 greater than t1.")
+            return
+        if not _askyesno(self, "Confirm Output Directory", f"Save all generated spectra in this directory?\n\n{output_dir}"):
+            return
+        self.output_dir.set(str(output_dir))
+        self.master_app._time_resolved_output_dir = str(output_dir)
+        remember_working_dir(self.master_app.options, str(output_dir))
+        ordered_a = sorted((Path(p) for p in self.group_a), key=lambda p: (natural_sort_key(p.name), str(p).casefold()))
+        collisions = [time_resolved_output_path(a, output_dir, t1, t2, prototype, i, len(ordered_a)) for i, a in enumerate(ordered_a, 1)]
+        collisions = [path for path in collisions if path.exists()]
+        overwrite = False
+        if collisions:
+            names = "\n".join(path.name for path in collisions[:12])
+            if len(collisions) > 12:
+                names += f"\n… and {len(collisions)-12} more"
+            if not _askyesno(self, "Overwrite Existing Spectra?", f"These output files already exist:\n\n{names}\n\nOverwrite them? This cannot be undone."):
+                return
+            overwrite = True
+        self.process_button.configure(state="disabled")
+        self.configure(cursor="watch")
+        arguments = (list(self.group_a), list(self.group_b), t1, t2, str(output_dir), prototype)
+        def worker():
+            try:
+                result = process_time_resolved_pairs(*arguments, overwrite=overwrite)
+                error = None
+            except Exception as exc:
+                result, error = None, str(exc)
+            self.after(0, lambda: self._finished(result, error))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finished(self, result, error):
+        self.process_button.configure(state="normal")
+        self.configure(cursor="")
+        if error:
+            _showerror(self, "Time-Resolved Spectra", error)
+            return
+        pairs, saved, failed = result
+        summary = f"Pairs selected: {len(pairs)}\nSuccessfully processed: {len(saved)}\nFailed or skipped: {len(failed)}"
+        if failed:
+            summary += "\n\nErrors:\n" + "\n".join(f"{a.name} + {b.name}: {message}" for a, b, message in failed[:15])
+            if len(failed) > 15:
+                summary += f"\n… and {len(failed)-15} more error(s)."
+            _showwarning(self, "Time-Resolved Spectra", summary)
+        else:
+            _showinfo(self, "Time-Resolved Spectra", summary)
+        self.master_app.status(f"Time-Resolved Spectra: processed {len(saved)} of {len(pairs)} pair(s)")
+
+
 class BatchStatisticsWindow(tk.Toplevel):
     """Historical Batch Operations window."""
 
@@ -2889,7 +3081,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         super().__init__(master)
         self.master_app=master
         self.title("Batch Operations")
-        self.geometry("860x500")
+        self.geometry("980x500")
         self.minsize(800, 340)
         menu = tk.Menu(self)
         file_menu = tk.Menu(menu, tearoff=0)
@@ -2908,22 +3100,47 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Radiobutton(opts, text="Load all", variable=self.add_mode, value="all").pack(side="left", padx=3)
         ttk.Radiobutton(opts, text="Load odd only", variable=self.add_mode, value="odd").pack(side="left", padx=3)
         ttk.Radiobutton(opts, text="Load even only", variable=self.add_mode, value="even").pack(side="left", padx=3)
-        ttk.Button(top,text="MultiFit",command=self.multi_fit).pack(side="left", padx=3)
-        ttk.Button(top,text="Join",command=self.join_pairs).pack(side="left", padx=3)
-        ttk.Button(top,text="Average",command=self.average_files).pack(side="left", padx=3)
-        ttk.Button(top,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
+        actions = ttk.Frame(top)
+        actions.pack(side="left", padx=3)
+        self.batch_actions = actions
+        self.multifit_button = ttk.Button(actions,text="MultiFit",command=self.multi_fit)
+        self.multifit_button.pack(side="left", padx=3)
+        ttk.Button(actions,text="Join",command=self.join_pairs).pack(side="left", padx=3)
+        ttk.Button(actions,text="Average",command=self.average_files).pack(side="left", padx=3)
         self.calculate_sd = tk.BooleanVar(value=False)
-        ttk.Checkbutton(top, text="Calculate SD", variable=self.calculate_sd).pack(side="left", padx=3)
+        ttk.Checkbutton(actions, text="Calculate SD", variable=self.calculate_sd).pack(side="left", padx=3)
 
         bottom=ttk.Frame(self); bottom.pack(fill="x", padx=6, pady=3)
         ttk.Button(bottom,text="Load List",command=self.load_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Clear List",command=self.clear_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Save List",command=self.save_list).pack(side="left", padx=3)
-        ttk.Button(bottom,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii).pack(side="left", padx=3)
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
+
+        operation_row=ttk.Frame(self); operation_row.pack(fill="x", padx=6, pady=(0, 3))
+        self.operation_row = operation_row
+        self.convert_csv_button = ttk.Button(operation_row,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii)
+        self.convert_csv_button.pack(side="left")
+        ttk.Button(operation_row,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
+        self.time_resolved_spacer = ttk.Frame(operation_row, width=0)
+        self.time_resolved_spacer.pack(side="left")
+        self.time_resolved_button = ttk.Button(operation_row,text="Time-Resolved Spectra",command=self.time_resolved_spectra)
+        self.time_resolved_button.pack(side="left")
+
         self.listbox=tk.Listbox(self)
         self.listbox.pack(fill="both", expand=True, padx=6, pady=6)
         center_window(self, master)
+        self.after_idle(self._fit_batch_layout)
+
+    def _fit_batch_layout(self):
+        target_offset = self.multifit_button.winfo_rootx() - self.operation_row.winfo_rootx()
+        current_offset = self.time_resolved_button.winfo_rootx() - self.operation_row.winfo_rootx()
+        self.time_resolved_spacer.configure(width=max(0, self.time_resolved_spacer.winfo_width() + target_offset - current_offset))
+        self.update_idletasks()
+        required_width = max(800, self.winfo_reqwidth())
+        self.minsize(required_width, max(340, self.winfo_reqheight()))
+
+    def time_resolved_spectra(self):
+        return TimeResolvedSpectraDialog(self)
 
     def _last_numeric_index(self, filename):
         nums = re.findall(r"\d+", Path(filename).stem)
@@ -19551,11 +19768,11 @@ class MainWindow(tk.Tk):
         h=ymax-ymin if ymax>ymin else 1
         selected_elements = _selected_analysis_elements(self)
         for line in (self.template_lines if self.spectra else []):
-            species = str(getattr(line, "specie", "") or "").strip().capitalize()
             if not template_line_is_acquired(self, line):
                 continue
-            if species and selected_elements is not None and species not in selected_elements:
-                continue
+            # Template markers and labels are persistent plot annotations.
+            # Keep them visible independently of the Saha/CF-LIBS element
+            # selection, which controls analysis and trace overlays.
             # Convention: unassigned marked peaks are blue; assigned
             # peaks with complete transition data are yellow; assigned peaks
             # without Aki/levels/statistical weights are light blue.
@@ -19571,7 +19788,15 @@ class MainWindow(tk.Tk):
             marker_wave = template_line_plot_wavelength(line)
             fitted = bool(abs(safe_float(getattr(line, "fitwavelen", 0.0), 0.0)))
             ytop = self._active_spectrum_y_at(marker_wave)
-            self.ax.vlines(marker_wave, 0.0, ytop, linestyles="solid", linewidth=0.9, colors=color)
+            self.ax.vlines(
+                marker_wave,
+                0.0,
+                ytop,
+                linestyles="solid",
+                linewidth=SPECTRAL_LINE_MARKER_LINEWIDTH,
+                colors=color,
+                zorder=SPECTRAL_LINE_MARKER_ZORDER,
+            )
             label = (
                 f"{marker_wave:.2f}"
                 if not line.specie
@@ -22157,11 +22382,15 @@ def _release(self, event):
         self.canvas.draw_idle()
         return
     if button == 1:
-        # A box zoom works in every drag direction. Full view remains the F4
-        # command/toolbar button, so the gesture is no longer directional.
-        self.ax.set_xlim(min(x0, event.xdata), max(x0, event.xdata))
-        self.ax.set_ylim(min(y0, event.ydata), max(y0, event.ydata))
-        self.canvas.draw_idle(); self._update_xscroll()
+        # Matplotlib display y grows upward; convert it to screen direction,
+        # where y grows downward, to distinguish a reverse (bottom-left) drag.
+        screen_dy = -dypix
+        if dxpix < -6 and screen_dy < -6:
+            self.full_scale()
+        else:
+            self.ax.set_xlim(min(x0, event.xdata), max(x0, event.xdata))
+            self.ax.set_ylim(min(y0, event.ydata), max(y0, event.ydata))
+            self.canvas.draw_idle(); self._update_xscroll()
     elif button == 3:
         dx = event.xdata - x0
         dy = event.ydata - y0

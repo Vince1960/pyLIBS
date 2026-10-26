@@ -1,7 +1,7 @@
 # pyLIBS - Manuale operativo completo
 
 Versione del manuale: 1.2 - 29 settembre 2026  
-Software: pyLIBS 1.1.1
+Software: pyLIBS 1.2.0
 Origine: LIBS++ di Vincenzo Palleschi e collaboratori
 
 > Questo manuale descrive l'interfaccia e il flusso scientifico effettivamente implementati. I nomi dei comandi sono riportati come appaiono nel programma. Leggere almeno i capitoli 1-4 prima della prima analisi quantitativa.

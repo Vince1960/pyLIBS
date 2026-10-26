@@ -15,7 +15,7 @@ The software has been developed to provide researchers, students, and laboratory
 
 pyLIBS is under active development.
 
-Current application version: **1.1.1**.
+Current application version: **1.2.0**.
 
 The current public release already includes the core functionality required for:
 
