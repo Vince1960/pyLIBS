@@ -27,8 +27,10 @@ from collections import defaultdict
 import tkinter as tk
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from tkinter import filedialog, ttk, colorchooser, simpledialog
+from tkinter import ttk, colorchooser, simpledialog
 from typing import Optional
+
+from pylibs.gui.file_dialogs import filedialog
 
 from pylibs.core.models import AtomicLine, TemplateLine
 from pylibs.core.instrument_response import (
@@ -14837,6 +14839,7 @@ class CFLibsReportPreviewWindow(tk.Toplevel):
         )
         if not fn:
             return
+        remember_working_dir(self.owner.master_app.options, fn)
         self.owner.write_report_content(fn, self.content)
 
     def close(self):

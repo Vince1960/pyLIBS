@@ -24,7 +24,9 @@ import sys
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
+
+from pylibs.gui.file_dialogs import filedialog
 
 
 TABLE = "Stark"
@@ -197,7 +199,9 @@ class StarkDbEditor(tk.Tk):
 
     def ask_open_database(self):
         filename = filedialog.askopenfilename(
+            parent=self,
             title="Open Stark SQLite database",
+            initialdir=self.db_path.parent if self.db_path else Path.cwd(),
             filetypes=[("SQLite database", "*.db *.sqlite *.sqlite3"), ("All files", "*.*")],
         )
         if filename:
