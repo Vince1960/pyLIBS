@@ -118,6 +118,8 @@ from pylibs.io.spectrum_io import (
     is_roh_spectrum_file,
 )
 from pylibs.io.andor_sif import convert_sif_batch
+from pylibs.io.aryelle import convert_aryelle_batch
+from pylibs.io.aryelle import read_aryelle as _read_aryelle
 from pylibs.gui.icons import get_cached_menu_icon
 from pylibs.gui.toolbar import build_retro_toolbar
 from pylibs.gui.helpers import (
@@ -1325,7 +1327,7 @@ def discover_replicate_spectrum_files(filename: str) -> tuple[str, ...]:
 
 
 def load_spectrum_for_open(filename: str, options: AppOptions) -> Spectrum:
-    if is_roh_spectrum_file(filename) or Path(filename).suffix.lower() == ".sif":
+    if is_roh_spectrum_file(filename) or Path(filename).suffix.lower() in {".sif", ".ary"}:
         return _load_spectrum_for_open(filename, options, Spectrum)
     xs, columns = read_ascii_spectrum_columns(filename, options.convert_to_angstrom)
     metadata = read_ascii_metadata(filename)
@@ -1337,7 +1339,13 @@ def load_spectrum_for_open(filename: str, options: AppOptions) -> Spectrum:
         dark_file = str(getattr(options, "dark_file", "") or "").strip()
         if not dark_file:
             raise ValueError("Dark mode is 'file', but no dark file is configured.")
-        dark_trace = read_ascii_spectrum(dark_file, options.convert_to_angstrom)
+        if Path(dark_file).suffix.lower() == ".ary":
+            ary_x, ary_y = _read_aryelle(dark_file)
+            if options.convert_to_angstrom:
+                ary_x = ary_x * 10.0
+            dark_trace = (ary_x.tolist(), ary_y.tolist())
+        else:
+            dark_trace = read_ascii_spectrum(dark_file, options.convert_to_angstrom)
     if already_dark_corrected:
         corrected = subtract_dark(xs, columns, mode="none", signal_column=1)
         dark_corrected = True
@@ -1789,7 +1797,7 @@ class OptionsWindow(tk.Toplevel):
         filename = filedialog.askopenfilename(
             title="Select a wavelength/dark two-column file",
             initialdir=remembered_initial_dir(self.master_app.options),
-            filetypes=[("Spectrum files", "*.txt *.dat *.asc *.csv *.CSV"), ("All", "*.*")],
+            filetypes=[("Spectrum files", "*.txt *.dat *.asc *.csv *.CSV *.ary *.ARY"), ("All", "*.*")],
         )
         if filename:
             remember_working_dir(self.master_app.options, filename)
@@ -3116,6 +3124,10 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Button(bottom,text="Load List",command=self.load_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Clear List",command=self.clear_list).pack(side="left", padx=3)
         ttk.Button(bottom,text="Save List",command=self.save_list).pack(side="left", padx=3)
+        self.time_resolved_spacer = ttk.Frame(bottom, width=0)
+        self.time_resolved_spacer.pack(side="left")
+        self.time_resolved_button = ttk.Button(bottom,text="Time-Resolved Spectra",command=self.time_resolved_spectra)
+        self.time_resolved_button.pack(side="left")
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
 
         operation_row=ttk.Frame(self); operation_row.pack(fill="x", padx=6, pady=(0, 3))
@@ -3123,19 +3135,15 @@ class BatchStatisticsWindow(tk.Toplevel):
         self.convert_csv_button = ttk.Button(operation_row,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii)
         self.convert_csv_button.pack(side="left")
         ttk.Button(operation_row,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
-        self.time_resolved_spacer = ttk.Frame(operation_row, width=0)
-        self.time_resolved_spacer.pack(side="left")
-        self.time_resolved_button = ttk.Button(operation_row,text="Time-Resolved Spectra",command=self.time_resolved_spectra)
-        self.time_resolved_button.pack(side="left")
-
+        ttk.Button(operation_row,text="Convert ARYELLE to ASCII XY",command=self.convert_aryelle_to_ascii).pack(side="left", padx=3)
         self.listbox=tk.Listbox(self)
         self.listbox.pack(fill="both", expand=True, padx=6, pady=6)
         center_window(self, master)
         self.after_idle(self._fit_batch_layout)
 
     def _fit_batch_layout(self):
-        target_offset = self.multifit_button.winfo_rootx() - self.operation_row.winfo_rootx()
-        current_offset = self.time_resolved_button.winfo_rootx() - self.operation_row.winfo_rootx()
+        target_offset = self.multifit_button.winfo_rootx() - self.winfo_rootx()
+        current_offset = self.time_resolved_button.winfo_rootx() - self.winfo_rootx()
         self.time_resolved_spacer.configure(width=max(0, self.time_resolved_spacer.winfo_width() + target_offset - current_offset))
         self.update_idletasks()
         required_width = max(800, self.winfo_reqwidth())
@@ -3220,6 +3228,44 @@ class BatchStatisticsWindow(tk.Toplevel):
             _showwarning(self, "Convert CSV to ASCII XY", summary + "\n\nFailed:\n" + details)
         else:
             _showinfo(self, "Convert CSV to ASCII XY", summary)
+        self.master_app.status(summary)
+
+    def convert_aryelle_to_ascii(self):
+        filenames = filedialog.askopenfilenames(
+            parent=self, title="Select LTB ARYELLE files",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            filetypes=[("LTB ARYELLE files", "*.ary *.ARY"), ("All files", "*.*")],
+        )
+        if not filenames:
+            directory = filedialog.askdirectory(
+                parent=self, title="Choose a directory containing ARYELLE files",
+                initialdir=remembered_initial_dir(self.master_app.options), mustexist=True,
+            )
+            if not directory:
+                return
+            filenames = (directory,)
+        output_directory = filedialog.askdirectory(
+            parent=self, title="Choose output directory for ASCII XY files",
+            initialdir=remembered_initial_dir(self.master_app.options), mustexist=True,
+        )
+        if not output_directory:
+            return
+        remember_working_dir(self.master_app.options, output_directory)
+
+        def report_progress(index, total, source):
+            self.master_app.status(f"Converting ARYELLE {index}/{total}: {source.name}")
+            self.update_idletasks()
+
+        converted, failed = convert_aryelle_batch(filenames, output_directory, report_progress)
+        total = len(converted) + len(failed)
+        summary = f"Converted {len(converted)} of {total} ARYELLE file(s)."
+        if failed:
+            details = "\n".join(f"{source.name}: {error}" for source, error in failed[:12])
+            if len(failed) > 12:
+                details += f"\n…and {len(failed) - 12} more error(s)."
+            _showwarning(self, "Convert ARYELLE to ASCII XY", summary + "\n\nFailed:\n" + details)
+        else:
+            _showinfo(self, "Convert ARYELLE to ASCII XY", summary)
         self.master_app.status(summary)
 
     def paths(self):

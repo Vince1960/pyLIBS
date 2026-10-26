@@ -15,7 +15,7 @@ The software has been developed to provide researchers, students, and laboratory
 
 pyLIBS is under active development.
 
-Current application version: **1.2.0**.
+Current application version: **1.2.1**.
 
 The current public release already includes the core functionality required for:
 
@@ -30,6 +30,7 @@ Additional functionality and documentation will be added in future releases.
 - Spectrum Visualization
 - Interactive visualization of single and multiple LIBS spectra
 - Import of calibrated extracted 1D Andor SIF spectra, including Mechelle 5000 output
+- Import and batch ASCII conversion of single-spectrum LTB ARYELLE (`.ary`) files
 - Import of two-column CSV spectra with comma, semicolon or tab delimiters
 - Zoom and pan tools
 - Linear and logarithmic axes

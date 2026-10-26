@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ApplicationVersionConsistencyTests(unittest.TestCase):
     def test_application_version_is_centralized_and_at_current_release(self):
-        self.assertEqual(APP_VERSION, "1.2.0")
+        self.assertEqual(APP_VERSION, "1.2.1")
         self.assertEqual(APP_TITLE, f"{APP_NAME} {APP_VERSION}")
         self.assertEqual(pyLIBS.APP_VERSION, APP_VERSION)
         self.assertEqual(simple_dialogs.APP_VERSION, APP_VERSION)

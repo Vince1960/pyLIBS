@@ -13,12 +13,13 @@ from typing import Optional
 
 from pylibs.utils.formatting import safe_int
 from pylibs.io.andor_sif import read_andor_sif
+from pylibs.io.aryelle import read_aryelle
 
 
 SPECTRUM_FILETYPES = [
     (
         "All Supported Spectrum Files",
-        "*.txt *.TXT *.dat *.DAT *.roh *.ROH *.trt *.TRT *.mch *.MCH *.jnd *.JND *.asc *.ASC *.csv *.CSV *.sif *.SIF",
+        "*.txt *.TXT *.dat *.DAT *.roh *.ROH *.trt *.TRT *.mch *.MCH *.jnd *.JND *.asc *.ASC *.csv *.CSV *.sif *.SIF *.ary *.ARY",
     ),
     ("ASCII Files (*.txt *.TXT)", "*.txt *.TXT"),
     ("Data Files (*.dat *.DAT)", "*.dat *.DAT"),
@@ -30,6 +31,7 @@ SPECTRUM_FILETYPES = [
     ("ASC Files (*.asc *.ASC)", "*.asc *.ASC"),
     ("CSV Files (*.csv *.CSV)", "*.csv *.CSV"),
     ("Andor SIF Files (*.sif *.SIF)", "*.sif *.SIF"),
+    ("LTB ARYELLE Files (*.ary *.ARY)", "*.ary *.ARY"),
     ("All", "*.*"),
 ]
 
@@ -354,6 +356,11 @@ def is_roh_spectrum_file(filename: str) -> bool:
 
 
 def load_spectrum_for_open(filename: str, options, spectrum_cls):
+    if Path(filename).suffix.lower() == ".ary":
+        xs, ys = read_aryelle(filename)
+        if getattr(options, "convert_to_angstrom", False):
+            xs = xs * 10.0
+        return spectrum_cls(xs.tolist(), ys.tolist(), Path(filename).name, filename)
     if Path(filename).suffix.lower() == ".sif":
         xs, ys = read_andor_sif(filename)
         if getattr(options, "convert_to_angstrom", False):

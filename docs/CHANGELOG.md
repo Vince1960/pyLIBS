@@ -2,6 +2,18 @@
 
 ------------------------------------------------------------
 
+## 1.2.1 — 2026-10-26
+
+### What's New in pyLIBS 1.2.1
+
+- Added native support for **LTB ARYELLE (.ary)** spectrum files.
+- ARYELLE spectra can now be imported directly into pyLIBS.
+- Added batch conversion from ARYELLE files to ASCII spectra.
+- Improved the layout of the Batch Operations window.
+- Minor fixes and improvements.
+
+------------------------------------------------------------
+
 ## 1.2.0 — 2026-10-26
 
 ### What's New
