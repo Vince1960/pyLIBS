@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import tkinter as tk
+import os
+import re
+import subprocess
 from tkinter import messagebox, ttk
 
 from pylibs.utils.formatting import safe_int
@@ -90,8 +93,41 @@ def restore_lift_focus(win, parent=None):
     return True
 
 
+def primary_monitor_geometry(win=None):
+    """Return the primary monitor rectangle as ``(x, y, width, height)``.
+
+    On X11, xrandr reports monitor origins in virtual-desktop coordinates. On
+    other platforms, Tk's screen dimensions provide a safe single-screen
+    fallback without adding a runtime dependency.
+    """
+    if os.name == "posix" and os.environ.get("DISPLAY"):
+        try:
+            result = subprocess.run(
+                ["xrandr", "--listmonitors"], capture_output=True, text=True,
+                timeout=2, check=False,
+            )
+            if result.returncode == 0:
+                monitors = []
+                for line in result.stdout.splitlines():
+                    match = re.search(r"(\d+)/\d+x(\d+)/\d+([+-]\d+)([+-]\d+)", line)
+                    if match:
+                        monitors.append(("+*" in line or "*+" in line,
+                                         int(match.group(3)), int(match.group(4)),
+                                         int(match.group(1)), int(match.group(2))))
+                if monitors:
+                    return next((m[1:] for m in monitors if m[0]), monitors[0][1:])
+        except (OSError, subprocess.SubprocessError, ValueError):
+            pass
+    try:
+        if win is not None:
+            return 0, 0, max(1, int(win.winfo_screenwidth())), max(1, int(win.winfo_screenheight()))
+    except Exception:
+        pass
+    return 0, 0, 1920, 1080
+
+
 def center_window(win, parent=None):
-    """Center a toplevel on the current screen without changing its size."""
+    """Center a new toplevel on its parent or the primary monitor."""
     try:
         if win is None or not win.winfo_exists():
             return False
@@ -101,14 +137,18 @@ def center_window(win, parent=None):
         win.update_idletasks()
         width = max(1, win.winfo_width() or win.winfo_reqwidth())
         height = max(1, win.winfo_height() or win.winfo_reqheight())
+        sx, sy, screen_w, screen_h = primary_monitor_geometry(win)
+        x = sx + max(0, (screen_w - width) // 2)
+        y = sy + max(0, (screen_h - height) // 2)
         if parent is not None and getattr(parent, "winfo_exists", lambda: False)():
-            screen_w = max(1, parent.winfo_screenwidth())
-            screen_h = max(1, parent.winfo_screenheight())
-        else:
-            screen_w = max(1, win.winfo_screenwidth())
-            screen_h = max(1, win.winfo_screenheight())
-        x = max(0, (screen_w - width) // 2)
-        y = max(0, (screen_h - height) // 2)
+            px, py = parent.winfo_rootx(), parent.winfo_rooty()
+            pw = max(1, parent.winfo_width() or parent.winfo_reqwidth())
+            ph = max(1, parent.winfo_height() or parent.winfo_reqheight())
+            if px >= sx and py >= sy and px + pw <= sx + screen_w and py + ph <= sy + screen_h:
+                x = px + (pw - width) // 2
+                y = py + (ph - height) // 2
+        x = min(max(x, sx), sx + max(0, screen_w - width))
+        y = min(max(y, sy), sy + max(0, screen_h - height))
         win.geometry(f"+{x}+{y}")
         return True
     except Exception:

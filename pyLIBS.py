@@ -128,6 +128,7 @@ from pylibs.gui.helpers import (
     add_context_help_button,
     center_window,
     legacy_geometry_to_tk,
+    primary_monitor_geometry,
     _askyesno,
     _showerror,
     _showinfo,
@@ -15027,10 +15028,10 @@ def show_startup_splash(root: tk.Tk, duration_ms: int = SPLASH_DURATION_MS):
             canvas.tag_raise(text)
         splash.update_idletasks()
         w, h = image.width(), image.height()
-        sw, sh = splash.winfo_screenwidth(), splash.winfo_screenheight()
-        x = max(0, (sw - w) // 2)
-        y = max(0, (sh - h) // 2)
-        splash.geometry(f"{w}x{h}+{x}+{y}")
+        splash.geometry(f"{w}x{h}")
+        # The root is withdrawn during startup, so its coordinates are not a
+        # useful parent location; center the splash on the primary monitor.
+        center_window(splash)
         splash.lift()
         splash.attributes("-topmost", True)
         splash.update_idletasks()
@@ -18683,6 +18684,7 @@ class MainWindow(tk.Tk):
             )
         self.use_saved_window_positions = False
         self.title(APP_TITLE); self.geometry("1280x720")
+        center_window(self)
         self.libs_db=LibsDatabase(self.options.libs_db_file)
         self.spectra: list[Spectrum]=[]
         # False keeps the historical Append behaviour. True means that every
@@ -22079,18 +22081,9 @@ def _geometry_string_from_parts(width, height, x, y):
 
 
 def _centered_geometry_for_size(master, width, height):
-    try:
-        screen_w = master.winfo_screenwidth() if master is not None else 0
-        screen_h = master.winfo_screenheight() if master is not None else 0
-    except Exception:
-        screen_w = 0
-        screen_h = 0
-    if screen_w <= 0:
-        screen_w = 1920
-    if screen_h <= 0:
-        screen_h = 1080
-    x = max(0, (screen_w - max(1, int(width))) // 2)
-    y = max(0, (screen_h - max(1, int(height))) // 2)
+    sx, sy, screen_w, screen_h = primary_monitor_geometry(master)
+    x = sx + max(0, (screen_w - max(1, int(width))) // 2)
+    y = sy + max(0, (screen_h - max(1, int(height))) // 2)
     return _geometry_string_from_parts(width, height, x, y)
 
 
