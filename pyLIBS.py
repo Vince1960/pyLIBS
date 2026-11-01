@@ -25,6 +25,7 @@ import sys
 import threading
 from collections import defaultdict
 import tkinter as tk
+from types import SimpleNamespace
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from tkinter import ttk, colorchooser, simpledialog
@@ -7213,6 +7214,12 @@ def _irsac_configuration_mismatch(app: "MainWindow") -> str:
     if not bool(getattr(app, "apply_sac_correction", False)):
         return ""
     workflow = getattr(app, "last_self_absorption_result", None)
+    if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
+        if getattr(app, "irsac_algorithm", "IRSAC1") != "IRSAC2":
+            return "IRSAC2 factors are applied while IRSAC1 is selected"
+        if not getattr(app, "last_irsac2_result", None):
+            return "the applied IRSAC2 result is missing"
+        return ""
     if not isinstance(workflow, dict):
         return "the applied IRSAC result is missing"
     used_equation = _canonical_irsac_equation_mode(
@@ -7257,6 +7264,19 @@ def _self_absorption_quantification_blocker(app: "MainWindow") -> str:
     if not bool(getattr(app, "apply_sac_correction", False)):
         return ""
     workflow = getattr(app, "last_self_absorption_result", None)
+    if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
+        if getattr(app, "irsac_algorithm", "IRSAC1") != "IRSAC2":
+            return "IRSAC2 factors are applied while IRSAC1 is selected"
+        if not getattr(app, "last_irsac2_result", None):
+            return "the applied IRSAC2 result is missing"
+        invalid = [
+            str(getattr(line, "specie", "line"))
+            for line in getattr(app, "template_lines", []) or []
+            if bool(getattr(line, "sa_use", False))
+            and (safe_float(getattr(line, "sa_sac", 0.0), 0.0) <= 0.0
+                 or not math.isfinite(safe_float(getattr(line, "sa_sac", 0.0), 0.0)))
+        ]
+        return "IRSAC2 contains a non-positive or non-finite factor" if invalid else ""
     if not isinstance(workflow, dict):
         return "the applied self-absorption assessment is missing"
     mode = str(workflow.get("mode", "") or "").strip().lower()
@@ -7424,6 +7444,7 @@ class SahaBoltzmannWindow(tk.Toplevel):
         left.pack(side="left")
         ttk.Button(left, text="Compute Plot", command=self.compute).pack(side="left")
         ttk.Button(left, text="CF-LIBS", command=self.open_cflibs).pack(side="left", padx=(12, 3))
+        ttk.Button(left, text="Export...", command=self.export_data).pack(side="left", padx=4)
         self.mode_var = tk.StringVar(value="Most reliable element")
         ttk.Label(left, text="Temperature").pack(side="left", padx=(12, 3))
         ttk.Combobox(
@@ -12012,6 +12033,19 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         top.pack(fill="x", padx=6, pady=5)
         self.apply_sac_button = ttk.Button(top, text="Apply correction", command=self.apply_sac)
         self.apply_sac_button.pack(side="left")
+        ttk.Label(top, text="IRSAC implementation").pack(side="left", padx=(8, 3))
+        self.algorithm_var = tk.StringVar(value=getattr(master, "irsac_algorithm", "IRSAC1"))
+        self.algorithm_combo = ttk.Combobox(
+            top, textvariable=self.algorithm_var,
+            values=("IRSAC1 (pyLIBS 1.2.1)", "IRSAC2 (Brazilian)"),
+            state="readonly", width=23,
+        )
+        self.algorithm_var.set(
+            "IRSAC2 (Brazilian)" if self.algorithm_var.get().startswith("IRSAC2")
+            else "IRSAC1 (pyLIBS 1.2.1)"
+        )
+        self.algorithm_combo.pack(side="left")
+        self.algorithm_combo.bind("<<ComboboxSelected>>", self._on_algorithm_changed)
         ttk.Label(top, text="Mode").pack(side="left", padx=(12, 3))
         configured_mode = _option_key_from_label(
             _SELF_ABSORPTION_MODE_LABELS,
@@ -12410,6 +12444,16 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 pass
 
     def recalculate(self, show_message=True):
+        if self.algorithm_var.get().startswith("IRSAC2"):
+            self.master_app.irsac_algorithm = "IRSAC2"
+            window = self.master_app.show_self_absorption()
+            try:
+                window.compute()
+            except Exception:
+                pass
+            self.summary_var.set("IRSAC2 selected; see the Brazilian self-absorption window.")
+            return getattr(self.master_app, "last_irsac2_result", None)
+        self.master_app.irsac_algorithm = "IRSAC1"
         fitted_areas = {
             id(line): getattr(line, "inte", None)
             for line in self._assigned_lines()
@@ -12678,6 +12722,16 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             self._toggle_use_value(item)
         return "break"
 
+    def _on_algorithm_changed(self, _event=None):
+        use_brazilian = self.algorithm_var.get().startswith("IRSAC2")
+        self.master_app.irsac_algorithm = "IRSAC2" if use_brazilian else "IRSAC1"
+        if use_brazilian:
+            self.master_app.show_self_absorption()
+            self.summary_var.set("IRSAC2 selected; calculate and inspect results in its separate window.")
+        else:
+            self.summary_var.set("IRSAC1 selected (original pyLIBS 1.2.1 implementation).")
+        return "break"
+
     def _toggle_use_value(self, item):
         try:
             idx = int(item)
@@ -12726,6 +12780,19 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
 
     def apply_sac(self):
         """Toggle the selected correction in plots, temperature and CF-LIBS fits."""
+        if self.algorithm_var.get().startswith("IRSAC2"):
+            self.master_app.irsac_algorithm = "IRSAC2"
+            window = self.master_app.show_self_absorption()
+            if not getattr(window, "results", None):
+                window.compute()
+            if getattr(self.master_app, "apply_sac_correction", False):
+                window.remove()
+            else:
+                window.apply()
+            self.summary_var.set("IRSAC2 correction state updated in its results window.")
+            self._update_apply_sac_button()
+            return
+        self.master_app.irsac_algorithm = "IRSAC1"
         enabling = not bool(getattr(self.master_app, "apply_sac_correction", False))
         workflow_result = getattr(self.master_app, "last_self_absorption_result", None)
         if enabling and not isinstance(workflow_result, dict):
@@ -14052,6 +14119,8 @@ class CFLibsWindow(tk.Toplevel):
         self.opc_button = ttk.Button(top, text="OPC", command=self.show_opc, state="disabled")
         self.opc_button.pack(side="left", padx=4)
         ttk.Button(top, text="Show Report", command=self.show_report).pack(side="left", padx=4)
+        ttk.Button(top, text="Export...", command=self.export_data).pack(side="left", padx=4)
+        ttk.Button(top, text="Full Report...", command=self.show_full_report).pack(side="left", padx=4)
         ttk.Button(top, text="Quality Check", command=self.show_quality_report).pack(side="left", padx=4)
         ttk.Button(top, text="Robustness", command=self.show_robustness_report).pack(side="left", padx=4)
         ttk.Button(top, text="Use current T / Ne", command=self.use_current_inputs).pack(side="left", padx=4)
@@ -18589,7 +18658,16 @@ class MainWindow(tk.Tk):
         _configure_tk_scaling(self)
         self.withdraw()
         self._startup_splash = show_startup_splash(self, SPLASH_DURATION_MS)
-        configure_retro_style(self)
+        from pylibs.gui.theme import apply_modern_theme, ui_style
+        self.ui_style = ui_style()
+        if self.ui_style == "modern":
+            try:
+                apply_modern_theme(self)
+            except Exception:
+                self.ui_style = "classic"
+                configure_retro_style(self)
+        else:
+            configure_retro_style(self)
         self.options=AppOptions()
         self.loaded_ini_path = load_pylibs_ini(self.options)
         self.pending_scientific_settings_applied = False
@@ -18702,6 +18780,14 @@ class MainWindow(tk.Tk):
         self.standard_correction_window = None
         self.sac_check_window = None
         self.sac_window = None
+        self.lte_window = None
+        self.selfconsistent_window = None
+        self.uncertainty_window = None
+        self.outlier_window = None
+        self.irsac2_window = None
+        self.last_cflibs_uncertainty = None
+        self.last_irsac2_result = None
+        self.session_file = ""
         self.ne_halpha_window = None
         self.theoretical_window = None
         self.statistics_window = None
@@ -20302,6 +20388,9 @@ def build_retro_menu(self):
         "open.png",
     )
     file_menu.add_separator()
+    _add_menu_command(self, file_menu, shortcut_items, "Open Session...", lambda: self.open_session(), "Ctrl+Shift+O", "<Control-Shift-o>", "session_open.png")
+    _add_menu_command(self, file_menu, shortcut_items, "Save Session...", lambda: self.save_session_as(), "Ctrl+Shift+S", "<Control-Shift-s>", "session_save.png")
+    file_menu.add_separator()
     _add_menu_command(self, file_menu, shortcut_items, "Save", self.ask_save_spectrum, "Ctrl+S", "<Control-s>", "save.png")
     _add_menu_command(self, file_menu, shortcut_items, "Save with Labels", self.save_with_labels, "Ctrl+L", "<Control-l>", "save.png")
     file_menu.add_separator()
@@ -20360,6 +20449,12 @@ def build_retro_menu(self):
     _add_menu_cascade(self, view_menu, "Window Layout", layout_menu, "full_view.png")
     _add_menu_command(self, layout_menu, shortcut_items, "Save Window Positions", self.save_window_positions)
     _add_menu_command(self, layout_menu, shortcut_items, "Restore Window Positions", self.load_window_positions)
+
+    self.modern_ui_var = tk.BooleanVar(value=getattr(self, "ui_style", "modern") == "modern")
+    _add_menu_checkbutton(
+        self, view_menu, shortcut_items, "Modern Interface", lambda: self.toggle_ui_style(),
+        self.modern_ui_var,
+    )
 
     util_menu = tk.Menu(menu, tearoff=0)
     menu.add_cascade(label="Utilities", menu=util_menu)
@@ -20444,10 +20539,16 @@ def build_retro_menu(self):
     plasma_menu.add_separator()
     _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption / IRSAC...", self.show_sac_check, "", "", "calibration.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "SAC Factors...", self.show_sac_window, "", "", "calibration.png")
+    plasma_menu.add_separator()
+    _add_menu_command(self, plasma_menu, shortcut_items, "LTE Check (McWhirter)...", lambda: self.show_lte_check(), "", "", "lte.png")
+    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Consistent T–Ne Fit...", lambda: self.show_selfconsistent(), "", "", "tne.png")
+    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption IRSAC2 (Brazilian)...", lambda: self.show_self_absorption(), "", "", "self_absorption.png")
 
     quantitative_menu = tk.Menu(analysis_menu, tearoff=0)
     _add_menu_cascade(self, analysis_menu, "Quantitative Analysis", quantitative_menu, "database.png")
     _add_menu_command(self, quantitative_menu, shortcut_items, "CF-LIBS...", self.show_cf_libs, "", "", "database.png")
+    _add_menu_command(self, quantitative_menu, shortcut_items, "Monte Carlo Uncertainty...", lambda: self.show_uncertainty(), "", "", "uncertainty.png")
+    _add_menu_command(self, quantitative_menu, shortcut_items, "Outliers and Line Influence...", lambda: self.show_outliers(), "", "", "outliers.png")
     _add_menu_command(self, quantitative_menu, shortcut_items, "Theoretical Spectrum...", self.show_theoretical_spectrum, "", "", "calculator.png")
     quantitative_menu.add_separator()
     _add_menu_command(self, quantitative_menu, shortcut_items, "Standard Correction...", self.show_standard_correction, "", "", "database.png")
@@ -20468,71 +20569,8 @@ def build_retro_menu(self):
     _bind_menu_shortcuts(self, shortcut_items)
 
 def build_retro_toolbar(self):
-    """Build original-like toolbar order without exposing Single Fit."""
-    if hasattr(self, "retro_toolbar"):
-        return
-    from pylibs.gui.helpers import ToolbarTooltip
-    from pylibs.gui.icons import load_toolbar_icon
-
-    self.retro_toolbar = ttk.Frame(self)
-    try:
-        self.retro_toolbar.pack(side="top", fill="x", before=self.children.get("!frame"))
-    except Exception:
-        self.retro_toolbar.pack(side="top", fill="x")
-
-    buttons = [
-        ("Open", self.ask_open_spectrum),
-        ("Append", self.ask_import_multiple),
-        ("Clear", self.clear_all_spectra),
-        ("Active Spectra", self.show_active_spectra),
-        ("Response", self.show_response_window),
-        ("Full Scale", self.full_scale),
-        ("Selected Lines", self.show_template_manager),
-        ("Trace", self.show_trace_lines),
-        ("Ne from Hα", self.show_ne_halpha),
-        ("Auto Fit", self.show_auto_fit_manager),
-        ("Manual Fit", self.show_retro_fit_manager),
-        ("Saha-Boltzmann", self.show_saha_boltzmann),
-        ("CF-LIBS", self.show_cf_libs),
-    ]
-    icon_names = {
-        "Open": "open.png",
-        "Append": "append.png",
-        "Clear": "clear.png",
-        "Active Spectra": "fit.png",
-        "Response": "calibration.png",
-        "Full Scale": "full_view.png",
-        "Selected Lines": "show_template.png",
-        "Trace": "trace.png",
-        "Ne from Hα": "H_alpha.png",
-        "Auto Fit": "fit_auto.png",
-        "Manual Fit": "fit_manual.png",
-        "Saha-Boltzmann": "calculator.png",
-        "CF-LIBS": "database.png",
-    }
-    icon_fallbacks = {
-        "Auto Fit": "fit.png",
-        "Manual Fit": "fit.png",
-    }
-    tooltip_text = {
-        "Trace": "Trace Lines",
-        "Full Scale": "Full View",
-        "Response": "Instrument Response",
-    }
-    self.toolbar_icons = {}
-    self.toolbar_icon_files = {}
-    self.toolbar_tooltips = []
-    self.toolbar_missing_icons = []
-    for label, cmd in buttons:
-        icon_name = icon_names.get(label)
-        image, icon_name, icon_path = load_toolbar_icon(self, label, icon_name, icon_fallbacks.get(label))
-        if image is not None:
-            button = ttk.Button(self.retro_toolbar, image=image, command=cmd)
-            button.pack(side="left", padx=1, pady=1)
-            self.toolbar_tooltips.append(ToolbarTooltip(button, tooltip_text.get(label, label)))
-        else:
-            self.toolbar_missing_icons.append(label)
-            ttk.Button(self.retro_toolbar, text=label, command=cmd).pack(side="left", padx=1, pady=1)
+    from pylibs.gui.toolbar import build_retro_toolbar as build_toolbar
+    return build_toolbar(self)
 
 def install_retro_ui(self):
     self.build_retro_menu()
@@ -20545,6 +20583,26 @@ def install_retro_ui(self):
         self.status(_main_window_status_text())
     except Exception:
         pass
+
+def toggle_ui_style(self):
+    from pylibs.gui.theme import apply_modern_theme, set_ui_style
+
+    style = "modern" if self.modern_ui_var.get() else "classic"
+    try:
+        if style == "modern":
+            apply_modern_theme(self)
+        else:
+            configure_retro_style(self)
+        self.ui_style = style
+        if not set_ui_style(style):
+            self.status("Interface changed for this run; could not save the preference.")
+        if getattr(self, "retro_toolbar", None) is not None:
+            self.retro_toolbar.destroy()
+            self.retro_toolbar = None
+            self.build_retro_toolbar()
+    except Exception as exc:
+        self.modern_ui_var.set(self.ui_style == "modern")
+        _showerror(self, "Interface", f"Could not change interface style:\n{exc}")
 
 def show_template_window(self):
     win = _template_window_reference(self)
@@ -21090,6 +21148,8 @@ def invalidate_cflibs_results(self):
     self.last_cflibs_rows = []
     self.last_cflibs_quality = None
     self.last_cflibs_robustness = None
+    self.last_cflibs_uncertainty = None
+    self.last_irsac_comparison = None
     try:
         for child in self.winfo_children():
             if isinstance(child, CFLibsWindow) and child.winfo_exists():
@@ -21108,6 +21168,8 @@ def invalidate_self_absorption_analysis(self):
     """Discard IRSAC/theory state whenever spectra, fits or assignments change."""
     self.apply_sac_correction = False
     self.last_self_absorption_result = None
+    self.last_self_absorption = None
+    self.last_irsac2_result = None
     self.post_irsac_temperature = None
     self.post_irsac_temperature_source = None
     self.last_theoretical_spectrum = None
@@ -22341,6 +22403,138 @@ def show_cf_libs(self):
         sync()
     return self.cflibs_window
 
+def show_lte_check(self):
+    from pylibs.gui.lte_dialog import LTECheckWindow
+    self.lte_window = show_existing_or_create(
+        self, "lte_window", lambda: LTECheckWindow(self),
+        refresh=lambda window: (window.load_session(), window.compute()), parent=self,
+    )
+    return self.lte_window
+
+def show_selfconsistent(self):
+    from pylibs.core.dev_adapters import halpha_ne, mean_kt, saha_points
+    from pylibs.gui.selfconsistent_dialog import SelfConsistentWindow
+    backend = SimpleNamespace(points=saha_points, mean_kt=mean_kt, halpha_ne=halpha_ne)
+    self.selfconsistent_window = show_existing_or_create(
+        self, "selfconsistent_window", lambda: SelfConsistentWindow(self, backend), parent=self,
+    )
+    return self.selfconsistent_window
+
+def show_uncertainty(self):
+    from pylibs.core.dev_adapters import mc_inputs
+    from pylibs.gui.uncertainty_dialog import UncertaintyWindow
+    self.uncertainty_window = show_existing_or_create(
+        self, "uncertainty_window", lambda: UncertaintyWindow(self, mc_inputs),
+        refresh=lambda window: window.load_session(), parent=self,
+    )
+    return self.uncertainty_window
+
+def show_outliers(self):
+    from pylibs.core.dev_adapters import alternatives, outlier_cf_data, outlier_points
+    from pylibs.gui.outlier_dialog import OutlierWindow
+    backend = SimpleNamespace(
+        points=outlier_points, alternatives=alternatives,
+        set_active=_set_template_line_active, cf_data=outlier_cf_data,
+    )
+    self.outlier_window = show_existing_or_create(
+        self, "outlier_window", lambda: OutlierWindow(self, backend),
+        refresh=lambda window: window.run(), parent=self,
+    )
+    return self.outlier_window
+
+def show_self_absorption(self):
+    from pylibs.core.dev_adapters import self_absorption_lines
+    from pylibs.gui.sa_dialog import SelfAbsorptionWindow
+    self.irsac2_window = show_existing_or_create(
+        self, "irsac2_window", lambda: SelfAbsorptionWindow(self, self_absorption_lines),
+        refresh=lambda window: window.load_session(), parent=self,
+    )
+    return self.irsac2_window
+
+def save_session(self, filename=None, ask=False):
+    from pylibs.io.session_io import SESSION_FILETYPES, collect_state, save_session as write_session
+    target = "" if ask else (filename or getattr(self, "session_file", ""))
+    if not target:
+        initial = (Path(self.spectra[0].filename).stem if self.spectra and self.spectra[0].filename
+                   else "analysis")
+        target = filedialog.asksaveasfilename(
+            parent=self, title="Save pyLIBS analysis session", initialfile=initial + ".plibs",
+            defaultextension=".plibs", filetypes=SESSION_FILETYPES,
+        )
+    if not target:
+        return None
+    try:
+        path = write_session(target, collect_state(self, f"pyLIBS {APP_VERSION}"))
+    except Exception as exc:
+        _showerror(self, "Save session", f"Could not save the session:\n{exc}")
+        return None
+    self.session_file = str(path)
+    self.status(f"Session saved: {path}")
+    return path
+
+def save_session_as(self):
+    return self.save_session(ask=True)
+
+def open_session(self, filename=""):
+    from pylibs.io.session_io import SESSION_FILETYPES, apply_state, load_session, summary
+    target = filename or filedialog.askopenfilename(
+        parent=self, title="Open pyLIBS analysis session", filetypes=SESSION_FILETYPES,
+    )
+    if not target:
+        return None
+    try:
+        state = load_session(target)
+    except Exception as exc:
+        _showerror(self, "Open session", f"Could not read the session:\n{exc}")
+        return None
+    if not filename and (self.spectra or self.template_lines):
+        if not _askyesno(self, "Open session", "Opening a session replaces the current spectra, template and analysis settings. Continue?"):
+            return None
+    for attr in ("saha_window", "cflibs_window", "lte_window", "selfconsistent_window",
+                 "uncertainty_window", "outlier_window", "irsac2_window", "sac_window"):
+        window = getattr(self, attr, None)
+        try:
+            if window is not None and window.winfo_exists():
+                window.destroy()
+        except Exception:
+            pass
+        setattr(self, attr, None)
+    try:
+        apply_state(
+            self, state, Spectrum, TemplateLine, ResponseCurve,
+            source_window_cls=SpectrumSourceWindow,
+        )
+    except Exception as exc:
+        _showerror(self, "Open session", f"The session could not be restored:\n{exc}")
+        return None
+    self.session_file = str(target)
+    self.invalidate_cflibs_results()
+    self.invalidate_self_absorption_analysis()
+    for name in ("view_grid_x", "view_grid_y", "view_log_x", "view_log_y"):
+        variable = getattr(self, name + "_var", None)
+        try:
+            if variable is not None:
+                variable.set(bool(getattr(self, name)))
+        except Exception:
+            pass
+    self.options.view_grid_x = self.view_grid_x
+    self.options.view_grid_y = self.view_grid_y
+    self.options.view_log_x = self.view_log_x
+    self.options.view_log_y = self.view_log_y
+    self.options.background_color = self.plot_background
+    self.redraw()
+    try:
+        limits = state.get("view", {})
+        if limits.get("xlim"):
+            self.ax.set_xlim(*limits["xlim"])
+        if limits.get("ylim"):
+            self.ax.set_ylim(*limits["ylim"])
+        self.canvas.draw_idle()
+    except Exception:
+        pass
+    self.status(f"Session restored: {summary(state)}. Analysis results were marked for recomputation.")
+    return state
+
 def show_sac_window(self):
     self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
     return self.sac_window
@@ -22520,10 +22714,108 @@ def goto_wavelength(self, wavelength):
     self.canvas.draw_idle(); self._update_xscroll()
     self.status(f"GoTo: {wavelength:.4f} Å  (window ±{half_window:g} Å)")
 
+def _saha_export_tables(self):
+    from pylibs.gui.plot_export import info_rows
+    points = []
+    for element, rows in sorted(getattr(self, "saha_display_groups", {}).items()):
+        for point in rows:
+            line = point.get("line")
+            points.append([
+                element, _roman_ion(safe_int(point.get("ion", 1), 1)), point.get("center"),
+                getattr(line, "asswavelen", None), point.get("x"), point.get("y"),
+                getattr(line, "aki", None), getattr(line, "gk", None),
+                "excluded" if point.get("inactive") else "active",
+                getattr(line, "sa_sac", None),
+            ])
+    fits = []
+    for element, fit in sorted(getattr(self, "saha_fits", {}).items()):
+        fits.append([element, fit.get("nlines"), fit.get("kt"), fit.get("kt_sigma"),
+                     fit.get("r2"), fit.get("slope"), fit.get("q"), fit.get("z1"), fit.get("z2"),
+                     element in getattr(self, "included_elements", set())])
+    return {
+        "points": (["element", "ion", "fitted_center", "assigned_wavelength", "x_SB_eV", "y_SB",
+                    "Aki", "gk", "line_status", "SAC"], points),
+        "fits": (["element", "n_lines", "kT_eV", "sigma_kT_eV", "R2", "slope", "intercept", "Z_I", "Z_II", "included"], fits),
+        "info": info_rows(self.master_app, [["Ne (cm-3)", self.current_ne],
+                                             ["Representative kT (eV)", self.representative_kt],
+                                             ["Excluded lines", self.skipped_lines]]),
+    }
+
+def _cflibs_export_tables(self):
+    from pylibs.gui.plot_export import info_rows
+    points = []
+    for (element, ion), rows in sorted(getattr(self, "last_groups", {}).items()):
+        fit = getattr(self, "last_fits", {}).get((element, ion), {})
+        for point in rows:
+            line = point.get("line")
+            points.append([element, _roman_ion(ion), getattr(line, "asswavelen", None), point.get("x"),
+                           point.get("y"), point.get("icorr"), point.get("eff"),
+                           "excluded" if point.get("inactive") else "active",
+                           fit.get("q_at_t"), fit.get("slope")])
+    result_rows = []
+    for row in getattr(self, "last_rows", []) or []:
+        result_rows.append([row.get("element"), row.get("nlines"), row.get("number_percent"),
+                            row.get("mass_percent"), row.get("ionized_neutral_ratio"),
+                            row.get("neutral_conc"), row.get("ionized_conc"), row.get("atomic_mass"),
+                            row.get("line_population_factor"), row.get("loo_max_relative_change"),
+                            row.get("replicate_composition_cv")])
+    return {
+        "points": (["element", "ion", "assigned_wavelength", "Ek_eV", "lnI_over_gA", "corrected_intensity",
+                    "response_factor", "line_status", "intercept", "slope"], points),
+        "results": (["element", "n_lines", "molar_percent", "mass_percent", "ionized_to_neutral", "N_I", "N_II",
+                     "atomic_mass", "line_population_factor", "LOO_max_relative_change", "replicate_composition_CV"], result_rows),
+        "info": info_rows(self.master_app, [["kT (eV)", getattr(self, "last_kt", None)],
+                                             ["Ne (cm-3)", getattr(self, "last_ne", None)],
+                                             ["IRSAC implementation", getattr(self.master_app, "irsac_algorithm", "IRSAC1")],
+                                             ["Skipped lines", getattr(self, "last_skipped", None)]]),
+    }
+
+def _export_analysis_data(self, title, base_name, provider):
+    from pylibs.gui.plot_export import ExportDialog
+    return ExportDialog(self, title, getattr(self, "fig", None), provider, base_name,
+                        getattr(self.master_app.options, "input_dir", "") or "")
+
+def _saha_export_data(self):
+    return _export_analysis_data(self, "Export Saha-Boltzmann plot and data", "saha_boltzmann", self.export_tables)
+
+def _cflibs_export_data(self):
+    return _export_analysis_data(self, "Export CF-LIBS plot and data", "cflibs", self.export_tables)
+
+def _cflibs_show_full_report(self):
+    from pylibs.io.report_full import collect_sections, render_html, render_text
+    sections = collect_sections(self)
+    body = render_html(sections)
+    html = ("<!doctype html><html><head><meta charset='utf-8'><title>pyLIBS full analysis report</title>"
+            "<style>body{font:14px sans-serif;max-width:1200px;margin:2em auto;color:#222}"
+            "table{border-collapse:collapse;margin:1em 0}th,td{border:1px solid #ccd;padding:.35em;text-align:left}"
+            "th{background:#edf1f5}figure img{max-width:100%}.muted{color:#555}</style></head><body>"
+            f"<h1>pyLIBS {APP_VERSION} full analysis report</h1>{body}</body></html>")
+    fn = filedialog.asksaveasfilename(
+        parent=self, title="Save full analysis report", defaultextension=".html",
+        filetypes=[("HTML report", "*.html"), ("Text report", "*.txt")],
+    )
+    if not fn:
+        return
+    path = Path(fn)
+    try:
+        if path.suffix.lower() == ".txt":
+            path.write_text("\n".join(render_text(sections)), encoding="utf-8")
+        else:
+            path.write_text(html, encoding="utf-8")
+        self.master_app.status(f"Full report saved: {path}")
+    except Exception as exc:
+        _showerror(self, "Full report", f"Could not save the report:\n{exc}")
+
+SahaBoltzmannWindow.export_tables = _saha_export_tables
+SahaBoltzmannWindow.export_data = _saha_export_data
+CFLibsWindow.export_tables = _cflibs_export_tables
+CFLibsWindow.export_data = _cflibs_export_data
+CFLibsWindow.show_full_report = _cflibs_show_full_report
+
 # Compatibility glue for the retro UI layer. Keep these monkey patches until
 # the corresponding class methods are migrated in a dedicated pass.
 _RETRO_METHODS = [
-    build_retro_menu, build_retro_toolbar, install_retro_ui,
+    build_retro_menu, build_retro_toolbar, install_retro_ui, toggle_ui_style,
     show_template_window, show_template_manager, close_template_window, show_active_spectra, show_retro_fit_manager, show_single_fit_manager, show_auto_fit_manager,
     compare_spectrum, swap_spectra, clear_all_spectra, save_with_labels, print_plot,
     copy_plot, change_background, toggle_grid, toggle_log,
@@ -22534,6 +22826,8 @@ _RETRO_METHODS = [
     full_y_main_visible_x,
     expand_x_50, full_scale, show_options, restore_factory_settings, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
+    show_lte_check, show_selfconsistent, show_uncertainty, show_outliers,
+    show_self_absorption, save_session, save_session_as, open_session,
     show_sac_window, load_template_file, save_template_file, _show_fit_manager,
     _full_x_limits, _update_xscroll, _xscroll_changed, _zoom_out_from_box, _release, _scroll_zoom,
     goto_wavelength, show_goto_dialog,
