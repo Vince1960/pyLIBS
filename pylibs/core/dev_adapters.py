@@ -1,4 +1,4 @@
-"""Adapters from pyLIBS 1.2.1 state into the Brazilian diagnostic APIs.
+"""Adapters from pyLIBS 1.2.1 state into the new diagnostic APIs.
 
 Imports of the application module are deferred until a diagnostic is opened to
 avoid a startup import cycle.

@@ -28,7 +28,7 @@ class IntegrationRoundTripTests(unittest.TestCase):
             ]),
             session_temperature=0.7, session_ne=1e17, apply_sac_correction=True,
         )
-        state = collect_state(app, "1.2.1")
+        state = collect_state(app, "1.3.0")
         restored = SimpleNamespace(spectra=[], template_lines=[], options=SimpleNamespace(kt_low=0.5))
         apply_state(restored, state, pyLIBS.Spectrum, pyLIBS.TemplateLine,
                     ResponseCurve, pyLIBS.SpectrumSourceWindow)

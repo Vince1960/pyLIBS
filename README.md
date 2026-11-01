@@ -15,7 +15,7 @@ The software has been developed to provide researchers, students, and laboratory
 
 pyLIBS is under active development.
 
-Current application version: **1.2.1**.
+Current application version: **1.3.0**.
 
 The current public release already includes the core functionality required for:
 
@@ -64,11 +64,17 @@ Additional functionality and documentation will be added in future releases.
 - Hybrid self-absorption chain: Palleschi/Stark plus iterative Yang et al. IRSAC
 - Electron density estimation
 - Plasma temperature evaluation
+- LTE plasma diagnostics
+- Monte Carlo uncertainty estimation
+- Outlier and spectral-line influence diagnostics
+- IRSAC1 and IRSAC2 selection and comparison
 - Data Management
 - Persistent user preferences
 - Automatic restoration of window positions
+- Multi-monitor window positioning
+- Session save and restore
 - Import and export of templates
-- Excel report generation
+- Expanded reports and CSV/XLSX exports
 
 ## Scientific Scope
 

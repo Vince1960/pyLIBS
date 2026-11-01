@@ -12038,12 +12038,12 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.algorithm_var = tk.StringVar(value=getattr(master, "irsac_algorithm", "IRSAC1"))
         self.algorithm_combo = ttk.Combobox(
             top, textvariable=self.algorithm_var,
-            values=("IRSAC1 (pyLIBS 1.2.1)", "IRSAC2 (Brazilian)"),
+            values=("IRSAC1 (original)", "IRSAC2 (new)"),
             state="readonly", width=23,
         )
         self.algorithm_var.set(
-            "IRSAC2 (Brazilian)" if self.algorithm_var.get().startswith("IRSAC2")
-            else "IRSAC1 (pyLIBS 1.2.1)"
+            "IRSAC2 (new)" if self.algorithm_var.get().startswith("IRSAC2")
+            else "IRSAC1 (original)"
         )
         self.algorithm_combo.pack(side="left")
         self.algorithm_combo.bind("<<ComboboxSelected>>", self._on_algorithm_changed)
@@ -12452,7 +12452,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 window.compute()
             except Exception:
                 pass
-            self.summary_var.set("IRSAC2 selected; see the Brazilian self-absorption window.")
+            self.summary_var.set("IRSAC2 selected; see the IRSAC2 self-absorption window.")
             return getattr(self.master_app, "last_irsac2_result", None)
         self.master_app.irsac_algorithm = "IRSAC1"
         fitted_areas = {
@@ -12724,9 +12724,9 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         return "break"
 
     def _on_algorithm_changed(self, _event=None):
-        use_brazilian = self.algorithm_var.get().startswith("IRSAC2")
-        self.master_app.irsac_algorithm = "IRSAC2" if use_brazilian else "IRSAC1"
-        if use_brazilian:
+        use_irsac2 = self.algorithm_var.get().startswith("IRSAC2")
+        self.master_app.irsac_algorithm = "IRSAC2" if use_irsac2 else "IRSAC1"
+        if use_irsac2:
             self.master_app.show_self_absorption()
             self.summary_var.set("IRSAC2 selected; calculate and inspect results in its separate window.")
         else:
@@ -20544,7 +20544,7 @@ def build_retro_menu(self):
     plasma_menu.add_separator()
     _add_menu_command(self, plasma_menu, shortcut_items, "LTE Check (McWhirter)...", lambda: self.show_lte_check(), "", "", "lte.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "Self-Consistent T–Ne Fit...", lambda: self.show_selfconsistent(), "", "", "tne.png")
-    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption IRSAC2 (Brazilian)...", lambda: self.show_self_absorption(), "", "", "self_absorption.png")
+    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption IRSAC2...", lambda: self.show_self_absorption(), "", "", "self_absorption.png")
 
     quantitative_menu = tk.Menu(analysis_menu, tearoff=0)
     _add_menu_cascade(self, analysis_menu, "Quantitative Analysis", quantitative_menu, "database.png")

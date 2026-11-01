@@ -5,8 +5,8 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tests import _synthetic_brazil as S  # noqa: E402
-from tests.test_brazil_plasma_fit import sb_points  # noqa: E402
+from tests import _synthetic_data as S  # noqa: E402
+from tests.test_plasma_fit import sb_points  # noqa: E402
 
 try:
     import scipy  # noqa: F401

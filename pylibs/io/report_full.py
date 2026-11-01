@@ -321,7 +321,7 @@ def _sec_new_diagnostics(app):
             rows.append([getattr(line, "label", ""), _num(getattr(r, "stark_sac", None)),
                          _num(getattr(r, "irsac_sa", None)), _num(getattr(r, "irsac_sac", None)),
                          getattr(r, "irsac_status", ""), getattr(r, "level_test", "")])
-        s.note("Applied correction algorithm: IRSAC2 (Brazilian implementation).")
+        s.note("Applied correction algorithm: IRSAC2.")
         s.table("irsac2_lines", ["Line", "Stark SAC", "IRSAC SA", "IRSAC SAC", "IRSAC status", "Same-level test"], rows)
     sa1 = getattr(app, "last_self_absorption_result", None)
     if isinstance(sa1, dict) and sa1.get("algorithm") != "IRSAC2":

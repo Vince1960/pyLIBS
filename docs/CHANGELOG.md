@@ -2,6 +2,21 @@
 
 ------------------------------------------------------------
 
+## 1.3.0 — 2026-11-01
+
+### What's New in pyLIBS 1.3.0
+
+- Added a modern GUI with an improved icon system and classic theme option.
+- Added multi-monitor window positioning and saved window layouts.
+- Added LTE and plasma diagnostics, Monte Carlo uncertainty estimation, and outlier and spectral-line influence diagnostics.
+- Added IRSAC1 and IRSAC2 selection and comparison.
+- Added session save and restore.
+- Expanded analysis reports and CSV/XLSX exports.
+- Preserved existing spectrum import and analysis capabilities, including Andor SIF, Aryelle, and time-resolved spectra.
+- Updated the application version and release metadata.
+
+------------------------------------------------------------
+
 ## 1.2.1 — 2026-10-26
 
 ### What's New in pyLIBS 1.2.1
