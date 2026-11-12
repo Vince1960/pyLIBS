@@ -9,7 +9,7 @@
 - Added a modern GUI with an improved icon system and classic theme option.
 - Added multi-monitor window positioning and saved window layouts.
 - Added LTE and plasma diagnostics, Monte Carlo uncertainty estimation, and outlier and spectral-line influence diagnostics.
-- Added IRSAC1 and IRSAC2 selection and comparison.
+- Added the IRSAC2 self-absorption workflow with uncertainty and safety checks.
 - Added session save and restore.
 - Expanded analysis reports and CSV/XLSX exports.
 - Preserved existing spectrum import and analysis capabilities, including Andor SIF, Aryelle, and time-resolved spectra.
@@ -45,6 +45,19 @@ https://doi.org/10.1155/2014/849310
 ------------------------------------------------------------
 
 ## Unreleased
+
+### Added
+
+- Added a dedicated mercury-lamp wavelength calibration window for measuring a reference-line offset, applying it temporarily and saving instrument-specific calibration profiles.
+- `Trace Lines` can now use either the persistent analytical-line library or the complete element database across the detector windows that were actually acquired. Peak-filtered assignment creates usable fit rows even for elements absent from the persistent list.
+- Right-clicking the main spectrum now restores the original full-scale view.
+
+### Fixed
+
+- `Clear Graph` now removes stale fitted lines and Saha-Boltzmann state while preserving the persistent analytical-line library for the next measurement.
+- Global wavelength shifts and saved calibration profiles are now applied consistently during peak identification without changing the assigned NIST transition wavelength.
+- Historical IRSAC selections are migrated to the single visible IRSAC2 workflow, and Aki filtering is shared consistently by its line adapter.
+- Corrected the historical `Stark.db` conversion from HWHM in nm to FWHM in the active wavelength unit, including the Fe I 4260.4702 Angstrom entry that was ten times too small.
 
 ### Changed
 

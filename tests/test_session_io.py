@@ -58,12 +58,33 @@ class TestSession(unittest.TestCase):
         self.assertEqual((t.aki, t.gk, t.error_inte), (-1.47, 4, 12.3))      # exclusion kept (negative Aki)
         self.assertEqual((t.sa_use, t.sa_sac, t.sa_sac_rel), (True, 1.37, 0.08))
         self.assertEqual((new.session_temperature, new.session_ne, new.apply_sac_correction), (0.85, 6e16, False))
+        self.assertEqual(new.irsac_algorithm, "IRSAC2")
         self.assertIn("results_snapshot", state)
         self.assertFalse(new.session_result_validity["restored_as_authoritative"])
         self.assertEqual((new.options.kt_low, new.options.instrumental_width), (0.6, 0.37))
         self.assertEqual(new.options.libs_db_file, "D:/LIBS.db")             # paths are never overwritten
         self.assertEqual(new.response.y, [0.5, 0.7])
         self.assertIn("1 excluded", summary(state))
+
+    def test_historical_algorithm_selection_is_migrated_to_irsac2(self):
+        app = SimpleNamespace(
+            spectra=[],
+            template_lines=[],
+            options=SimpleNamespace(),
+            apply_sac_correction=True,
+            irsac_algorithm="IRSAC1",
+        )
+        state = {
+            "spectra": [],
+            "template": [],
+            "session": {"irsac_algorithm": "IRSAC1"},
+            "options": {},
+        }
+
+        apply_state(app, state, Spec, TemplateLine)
+
+        self.assertEqual(app.irsac_algorithm, "IRSAC2")
+        self.assertFalse(app.apply_sac_correction)
 
     def test_rejects_other_files(self):
         import gzip

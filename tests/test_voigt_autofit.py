@@ -39,8 +39,11 @@ class VoigtAutoFitTests(unittest.TestCase):
         )
         x = np.linspace(-1.0, 1.0, 200001)
         y = multigaussian_model(x, 0.0, 0.0, amplitude, 0.0, sigma)
+        trapezoid = getattr(np, "trapezoid", None)
+        if trapezoid is None:
+            trapezoid = np.trapz
         self.assertAlmostEqual(
-            float(np.trapz(y, x)),
+            float(trapezoid(y, x)),
             palleschi_gaussian_area(amplitude, sigma),
             places=10,
         )
@@ -363,15 +366,19 @@ class VoigtAutoFitTests(unittest.TestCase):
         self.assertEqual(snapshot["y"][0], 350.0)
 
     def test_automatic_fit_uses_only_traced_analysis_elements(self):
+        assigned_cd = TemplateLine(wavelen=326.1, specie="Cd", ion=1)
+        assigned_cd.trace_selected = True
         runner = object.__new__(RetroFitManagerWindow)
         runner.automatic = True
         runner.master_app = SimpleNamespace(
             analysis_elements={"Cd", "Ni", "Pb"},
             template_lines=[
-                TemplateLine(wavelen=326.1, specie="Cd", ion=1),
-                TemplateLine(wavelen=328.2, specie="Zn", ion=1),
-                TemplateLine(wavelen=344.6, specie="Ni", ion=1),
-                TemplateLine(wavelen=405.8, specie="Pb", ion=1),
+                assigned_cd,
+                TemplateLine(wavelen=328.2, specie="Zn", ion=1, templint=10.0),
+                TemplateLine(wavelen=344.6, specie="Ni", ion=1, templint=10.0),
+                TemplateLine(wavelen=405.8, specie="Pb", ion=1, templint=10.0),
+                # A persistent-library seed is not an observed selection.
+                TemplateLine(wavelen=340.365, specie="Cd", ion=1),
             ],
         )
 

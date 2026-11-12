@@ -100,6 +100,60 @@ class DatabaseLibraryTests(unittest.TestCase):
         self.assertTrue(any(abs(value - 368.34624) < 0.001 for value in wavelengths))
         self.assertTrue(all(290.0 <= value <= 487.0 for value in wavelengths))
 
+    def test_complete_element_source_returns_every_transition_in_interval(self):
+        database = LibsDatabase(str(ROOT / "LIBS_NIST_5_12.db")).connect()
+        try:
+            lines = database.all_element_lines(
+                "Pb",
+                367.0,
+                369.0,
+                ions=[1],
+                wavelength_unit="nm",
+            )
+        finally:
+            database.close()
+
+        self.assertTrue(lines)
+        self.assertTrue(any(abs(line.wavelen - 368.34624) < 0.001 for line in lines))
+        self.assertTrue(all(line.specie == "Pb" and line.ion == 1 for line in lines))
+        self.assertTrue(all(367.0 <= line.wavelen <= 369.0 for line in lines))
+        self.assertEqual(len(lines), len({round(line.wavelen, 9) for line in lines}))
+
+    def test_complete_element_source_all_includes_every_available_ion_stage(self):
+        database = LibsDatabase(str(ROOT / "LIBS_NIST_5_12.db")).connect()
+        try:
+            lines = database.all_element_lines(
+                "Pb",
+                140.0,
+                370.0,
+                ions=None,
+                wavelength_unit="nm",
+            )
+        finally:
+            database.close()
+
+        self.assertTrue(lines)
+        self.assertEqual({line.ion for line in lines}, {1, 2})
+
+    def test_complete_calcium_source_preserves_strong_line_ranking(self):
+        database = LibsDatabase(str(ROOT / "LIBS_NIST_5_12.db")).connect()
+        try:
+            lines = database.all_element_lines(
+                "Ca",
+                390.0,
+                400.0,
+                ions=[2],
+                wavelength_unit="nm",
+            )
+        finally:
+            database.close()
+
+        ranked = sorted(lines, key=lambda line: line.inte, reverse=True)
+        self.assertGreaterEqual(len(ranked), 2)
+        self.assertAlmostEqual(ranked[0].wavelen, 393.365991, places=5)
+        self.assertAlmostEqual(ranked[1].wavelen, 396.846997, places=5)
+        self.assertEqual([ranked[0].inte, ranked[1].inte], [230.0, 220.0])
+
     def test_nist_nm_search_enriches_the_same_lead_transition(self):
         database = LibsDatabase(str(ROOT / "LIBS_NIST_5_12.db")).connect()
         try:

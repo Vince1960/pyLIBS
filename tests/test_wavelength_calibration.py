@@ -2,10 +2,20 @@ import math
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
-from pyLIBS import WavelengthCalibrationWindow, load_template_lines
+from pyLIBS import (
+    AppOptions,
+    MainWindow,
+    MercuryWavelengthCalibrationWindow,
+    Spectrum,
+    SpectrumShiftWindow,
+    WavelengthCalibrationWindow,
+    apply_wavelength_offset_to_spectra,
+    load_template_lines,
+)
 from pylibs.core.wavelength_calibration import (
     CalibrationAnchor,
     calibration_for_window,
@@ -17,12 +27,35 @@ from pylibs.core.wavelength_calibration import (
 
 
 class WavelengthCalibrationTests(unittest.TestCase):
+    @staticmethod
+    def _calibration_app(options):
+        app = SimpleNamespace(options=options)
+        app.wavelength_calibration_profiles = lambda: parse_calibrations(
+            options.wavelength_calibrations
+        )
+        app.apply_autoshift_if_enabled = lambda spectrum: (
+            MainWindow.apply_autoshift_if_enabled(app, spectrum)
+        )
+        app._queue_wavelength_calibration_warning = lambda _message: None
+        return app
+
     def test_calibration_accepts_pasted_decimal_comma_wavelengths(self):
         references = WavelengthCalibrationWindow._parse_pasted_wavelengths(
             "313,411; 344.626 349,296\n356.637"
         )
 
         self.assertEqual(references, [313.411, 344.626, 349.296, 356.637])
+
+    def test_mercury_reference_parser_accepts_labels_and_decimal_comma(self):
+        self.assertAlmostEqual(
+            MercuryWavelengthCalibrationWindow._parse_reference(
+                "Hg I 546,075000 nm"
+            ),
+            546.075,
+        )
+        self.assertIsNone(
+            MercuryWavelengthCalibrationWindow._parse_reference("Hg I")
+        )
 
     def test_plain_one_column_nist_list_loads_without_a_csv_header(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -173,6 +206,99 @@ class WavelengthCalibrationTests(unittest.TestCase):
         self.assertEqual(calibration.model, "offset")
         self.assertAlmostEqual(calibration.intercept, -0.4, places=6)
         self.assertFalse(calibration.anchors[2].used)
+
+    def test_unmatched_saved_profile_keeps_raw_axis_without_legacy_offset(self):
+        profile = fit_wavelength_calibration(
+            [CalibrationAnchor(305.0, 305.4, 10.0)],
+            name="305.txt",
+            raw_min=284.0,
+            raw_max=325.0,
+        )
+        options = AppOptions(
+            auto_shift=0.75,
+            auto_wavelength_calibration=True,
+            wavelength_calibrations=serialize_calibrations([profile]),
+        )
+        app = self._calibration_app(options)
+        spectrum = Spectrum([637.0, 656.0, 674.0], [1.0, 2.0, 1.0], "656.txt")
+
+        MainWindow.apply_wavelength_calibration_if_enabled(app, spectrum)
+
+        self.assertEqual(spectrum.x, [637.0, 656.0, 674.0])
+        self.assertEqual(spectrum.wavelength_calibration_status, "unmatched")
+        self.assertIn("legacy global offset was not applied", spectrum.wavelength_calibration_message)
+
+    def test_legacy_offset_remains_a_fallback_when_no_profiles_exist(self):
+        options = AppOptions(
+            auto_shift=0.4,
+            auto_wavelength_calibration=True,
+            wavelength_calibrations="[]",
+        )
+        app = self._calibration_app(options)
+        spectrum = Spectrum([300.0, 301.0], [1.0, 2.0], "legacy.txt")
+
+        MainWindow.apply_wavelength_calibration_if_enabled(app, spectrum)
+
+        self.assertEqual(spectrum.x, [300.4, 301.4])
+        self.assertEqual(
+            spectrum.wavelength_calibration_status, "legacy-global-offset"
+        )
+
+    def test_matching_profile_takes_precedence_over_legacy_offset(self):
+        profile = fit_wavelength_calibration(
+            [CalibrationAnchor(305.0, 305.4, 10.0)],
+            name="305.txt",
+            raw_min=284.0,
+            raw_max=325.0,
+        )
+        options = AppOptions(
+            auto_shift=0.75,
+            auto_wavelength_calibration=True,
+            wavelength_calibrations=serialize_calibrations([profile]),
+        )
+        app = self._calibration_app(options)
+        spectrum = Spectrum([304.9, 305.4, 305.9], [1.0, 2.0, 1.0], "sample_305.txt")
+
+        MainWindow.apply_wavelength_calibration_if_enabled(app, spectrum)
+
+        self.assertAlmostEqual(spectrum.x[1], 305.0)
+        self.assertEqual(
+            spectrum.wavelength_calibration_status, "per-window-profile"
+        )
+
+    def test_temporary_shift_preserves_nist_values_and_moves_only_fit_centers(self):
+        line = SimpleNamespace(
+            wavelen=340.36521,
+            asswavelen=340.36521,
+            fitwavelen=-340.72,
+        )
+        window = SimpleNamespace(master_app=SimpleNamespace(template_lines=[line]))
+
+        changed = SpectrumShiftWindow._shift_measured_fit_centers(window, -0.35)
+
+        self.assertTrue(changed)
+        self.assertAlmostEqual(line.fitwavelen, -340.37)
+        self.assertAlmostEqual(line.wavelen, 340.36521)
+        self.assertAlmostEqual(line.asswavelen, 340.36521)
+
+    def test_shared_wavelength_offset_preserves_raw_axis_metadata(self):
+        spectrum = Spectrum(
+            [545.5, 546.4, 547.0],
+            [1.0, 10.0, 1.0],
+            "sample.txt",
+        )
+
+        shifted = apply_wavelength_offset_to_spectra([spectrum], -0.325)
+
+        self.assertEqual(shifted, 1)
+        self.assertAlmostEqual(spectrum.x[1], 546.075)
+        self.assertAlmostEqual(spectrum.source_windows[0].x[1], 546.075)
+        self.assertAlmostEqual(spectrum.source_windows[0].raw_x[1], 546.4)
+        self.assertAlmostEqual(
+            spectrum.source_windows[0].calibration_intercept,
+            -0.325,
+        )
+        self.assertEqual(spectrum.wavelength_calibration_status, "temporary-offset")
 
 
 if __name__ == "__main__":

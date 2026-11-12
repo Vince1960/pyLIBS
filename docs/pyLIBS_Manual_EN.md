@@ -120,15 +120,15 @@ This is the minimum procedure for an unknown sample.
 3. Load all sample windows with `File > Load independent windows...` when joins must be avoided completely. Use `File > Append...` only when a merged spectrum is explicitly required.
 4. Confirm that the graph shows only the ranges that were actually acquired and that no oblique segments bridge gaps between windows.
 5. Open `Utilities > Instrument Calibration > Instrument Response...`, load all response curves and apply `signal / response` if they are not already stored.
-6. Open `Utilities > Instrument Calibration > Wavelength Calibration...`, load or paste known NIST lines, estimate every window and use `Apply and remember`.
+6. Open `Utilities > Instrument Calibration > Wavelength Calibration...`, load or paste known NIST lines, estimate every window and use `Apply and use for future spectra`.
 7. Open `Utilities > Analytical Line Lists > Main Analytical-Line Library...` and confirm that the main line library is loaded.
 8. In `Analyse > Spectral Fitting > Automatic Fit...`, use `Find visible peaks`; add any missing measured maxima with `Add peak from graph`.
-9. Open `Analyse > Peak and Line Detection > Trace Lines...`, enter one element at a time, keep `Only near selected peaks` enabled, choose the ionization state and tolerance, then press `OK` and `Assign`.
+9. Open `Analyse > Peak and Line Detection > Trace Lines...`, enter one element at a time, choose `Main analytical list` or `Complete element database`, keep `Only lines with a measured peak` enabled, choose the ionization state and tolerance, then press `OK` and `Assign`.
 10. Repeat Step 9 only for the elements to be analyzed. If an element was added by mistake, select it and press `Delete` or `Remove element (Del)`.
 11. Return to `Auto Fit`, set or verify the ROIs and press `Fit selected peaks (Voigt)`. Check centers, areas, widths, replicate CV and quality.
 12. Load H-alpha separately with `Analyse > Plasma Diagnostics > Electron Density from Hα...`; verify the correct maximum, run the fit and confirm Ne.
 13. Open `Analyse > Plasma Diagnostics > Saha-Boltzmann Plot...`, select `Most reliable element` or an explicit species and calculate. Check the number of lines, levels, Delta Ek, R2 and leave-one-out stability.
-14. Open `Analyse > Plasma Diagnostics > Self-Absorption / IRSAC...`. Read the diagnosis first. Apply the correction only when experimental evidence supports it.
+14. Open `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Read the diagnosis first. Apply the correction only when experimental evidence supports it.
 15. Open `Analyse > Quantitative Analysis > CF-LIBS...`, use the current T and Ne, calculate, and inspect `Robustness` and `Show Report` before accepting the percentages.
 16. Save the report with all measurement information.
 
@@ -186,9 +186,10 @@ Energy mode remains the default to preserve the current configuration. Changing 
 
 ### 4.6 Wavelength calibration
 
-- `Legacy global Delta lambda`: single historical translation. It is not suitable when the shift differs among windows.
-- `Use saved per-window calibration`: applies the stored profile independently to each window.
-- `Per-window calibration...`: opens the procedure described in Chapter 8.
+- `Apply saved per-window calibration on load`: applies the stored profile independently to each window.
+- `Manage per-window calibration...`: opens the procedure described in Chapter 8.
+
+The old global offset remains readable only for compatibility with historical configurations and is no longer a normal interface setting. When per-window profiles exist but none matches a loaded file, the program keeps the raw axis and displays a warning: it does not silently combine a missing profile with the historical offset.
 
 ### 4.7 H-alpha parameters
 
@@ -368,20 +369,60 @@ Select a window in the upper table. In the lower table, select the suspect line 
 
 ### 8.4 Applying and remembering
 
-- `Apply to loaded spectra`: applies calibration only to the current data.
-- `Apply and remember`: applies and stores the profiles for later measurements with compatible windows.
+- `Apply to current spectra`: applies calibration only to the current data.
+- `Apply and use for future spectra`: applies and stores the profiles for later measurements with compatible windows.
 - `Clear saved calibration`: deletes persistent profiles.
 
 Per-window calibration is preferable to a global shift when the displacement varies among detectors.
 
-### 8.5 Manual shift and other axis operations
+If a loaded window does not match any saved profile, a warning identifies its file and range. That window remains on its raw axis until a compatible profile is created; the program does not automatically apply another kind of shift.
 
-`Utilities > Instrument Calibration > Manual Wavelength Shift...` provides a controlled correction when one known line is available. Enter the observed position in `Move Point at` and the reference position in `to`. The program applies `shift = reference - observed`.
+### 8.5 Dedicated mercury-lamp check
 
-1. Press `Pick` and click the observed point, then the destination position, or enter both values.
-2. Enable `Shift all spectra` only when the same offset is valid for every displayed spectrum.
-3. Enable `Shift Identifications` only when markers, assigned lines and fit centers must also follow the displacement.
-4. Press `OK`, check a second independent line and save a per-window profile whenever possible.
+Open `Utilities > Instrument Calibration > Mercury Wavelength Check...` to measure the shift from an Hg spectrum without adding the lamp trace to the analytical sample.
+
+1. First load any sample spectra to which the same offset should be applied temporarily.
+2. Open `Mercury Wavelength Check...` and press `Load Hg spectrum...`. The Hg file is read separately on its raw axis. Any dark treatment follows the normal import rules supported by that file format; neither radiometric response nor an existing saved wavelength-calibration profile is applied.
+3. In `Hg I reference (NIST, nm)`, select the transition that was actually acquired. The list comes from the active NIST library and is restricted to Hg I lines covered by the loaded window.
+4. Set `Maximum shift` above the expected displacement and press `Calculate shift`.
+5. Review `Observed center`, `Offset`, prominence and signal-to-noise ratio. The observed center is refined using the same Voigt method as the general calibration tool.
+
+`Apply temporarily to loaded spectra` adds the calculated offset once to the sample spectra already loaded. It does not modify `pyLIBS.ini`; when the spectra already report a wavelength correction, a confirmation is displayed to prevent double counting.
+
+`Save offset for matching window` instead stores a persistent `offset` profile in the `[WavelengthCalibration]` section of `pyLIBS.ini`. Future windows with a compatible range use it automatically. If a compatible profile already exists, the program requests confirmation and replaces it. The configuration therefore keeps one active profile for that spectral interval and does not choose ambiguously between two spectrometers.
+
+One Hg line measures only a constant translation. To verify or correct the wavelength scale as well, use at least three lines distributed over the interval and the general `Wavelength Calibration...` window.
+
+### 8.6 Manual shift and other axis operations
+
+For an Hg lamp, prefer the dedicated workflow in section 8.5. The following command remains available as a generic alternative when an observed wavelength and its corresponding reference wavelength are already known.
+
+`Utilities > Instrument Calibration > Temporary Wavelength Shift...` (`Ctrl+F1`) provides a controlled correction for spectra already loaded when one known line is available, for example a mercury-lamp line. Do not increase the `Trace Lines` tolerance to compensate for incorrect wavelength calibration: the tolerance only widens the assignment interval and does not correct the axis.
+
+Procedure using a known Hg line:
+
+1. Load the spectrum to be corrected before running `Trace Lines`, `Assign` or fitting.
+2. Open `Temporary Wavelength Shift...`.
+3. Enter the measured Hg-line center in `Observed wavelength`. You may press `Pick` and click the observed maximum or type the value.
+4. Enter the reference wavelength for the same transition in `Target wavelength (NIST)`.
+5. Enable `Shift all spectra` only when all loaded spectra come from the same spectrometer and the same offset applies to each of them.
+6. Press `OK`, run `Trace Lines > Find lines` again and verify at least one second independent line.
+
+The program calculates and applies to every X-axis sample:
+
+`Delta lambda = lambda_NIST - lambda_observed`
+
+`lambda_corrected = lambda_measured + Delta lambda`
+
+Example: if the active library reports the reference Hg line at `546.075 nm` and the measured maximum is `546.400 nm`, then `Delta lambda = -0.325 nm`; the complete axis is shifted by `-0.325 nm`.
+
+The observed and NIST wavelengths must use the same unit and the same air/vacuum convention. In the visible range the spectrometer is normally referenced to wavelengths in air; therefore use the corresponding NIST air wavelength unless the instrument documentation explicitly states otherwise.
+
+The temporary shift updates the measured axis and any existing fitted centers, but it never changes NIST wavelengths, theoretical markers or persistent profiles. It applies only to spectra currently loaded.
+
+When changing spectrometer, check `Options > Wavelength calibration` and make sure that a profile created for the previous instrument is not applied automatically. Disable `Apply saved per-window calibration on load` or use `Clear saved calibration` before creating new profiles. Do not apply an old persistent profile together with the Hg shift, because the correction would be counted twice.
+
+A single line determines only a constant offset. If the displacement changes with wavelength, acquire at least three reliable Hg lines distributed across the interval and create a linear calibration in `Wavelength Calibration...`; save a per-window profile when the correction must be reused for future measurements.
 
 `Utilities > Signal Processing > Intensity Offset...` applies the vertical displacement `desired value - current value` to the main spectrum. This is not a physical dark subtraction and must not be used to conceal an incorrect background.
 
@@ -429,17 +470,18 @@ The main library does not automatically authorize all its elements for quantific
 
 ### 10.2 Trace Lines: correct procedure
 
-1. If necessary, zoom into the interval to be analyzed.
+1. When using the main list, zoom into the interval to be analyzed. A complete-database search instead uses every detector window that was actually acquired.
 2. Open `Analyse > Peak and Line Detection > Trace Lines...`.
 3. Enter the symbol in `Trace Species`, for example `Cu`, `Sn` or `Pb`.
-4. Select `I`, `II`, `Both` or `All`.
-5. Keep `Only near selected peaks` enabled so that only transitions near previously selected observed maxima are accepted.
-6. Set `Tolerance` in the displayed unit.
-7. Press `OK` and inspect the table.
-8. Press `Assign` only when the lines are consistent.
-9. Repeat for every element that is actually required.
+4. Under `Line source`, choose `Main analytical list` to use only the persistent curated list in the visible interval, or `Complete element database` to query every transition available for that element across all actually acquired detector windows.
+5. Select `I`, `II`, `Both` or `All`.
+6. Keep `Only lines with a measured peak` enabled: the program automatically searches for a real measured local maximum near each transition.
+7. Set `Tolerance` in the displayed unit.
+8. Press `OK` and inspect the table.
+9. Press `Assign` only when the lines are consistent.
+10. Repeat for every element that is actually required.
 
-`Max Lines (all mode)` limits the number of lines while exploring `All`. Disable `Only near selected peaks` only to inspect the database: expected transitions without a measured maximum must not become analytical areas.
+`Only lines with a measured peak` filters both sources. Theoretical rows preloaded from the analytical list do not count as observations: every transition must have a measured maximum within `Tolerance`. With the complete database, the comparison may also propose an alternative identity for an already assigned peak. `Assign` automatically adds the corresponding measured maxima to the analytical-line list, even when the element was absent from the original list, making them available for fitting and integration. Disable the filter only to inspect every theoretical line from the chosen source.
 
 ### 10.3 Removing an incorrect element
 
@@ -615,15 +657,15 @@ Self-absorption must not be corrected automatically for every sample. Evidence i
 
 ### 14.1 Modes
 
-- `Combined Stark-width and IRSAC correction`: combines the Stark-linewidth check with IRSAC for supported lines.
-- `Stark-linewidth correction`: uses only the correction based on predicted and observed Stark width.
-- `IRSAC internal-reference correction`: applies IRSAC to internal references for each species; the thermometric species determines the frozen corrected temperature used by subsequent corrections.
+- `IRSAC2 (recommended)`: uses only the IRSAC2 internal-reference assessment.
+- `Stark where available, else IRSAC2`: uses the Stark check when resolved, reliable line data are available; otherwise it uses IRSAC2.
+- `Stark only`: uses only the correction based on predicted and observed Stark width.
 
-The Stark-linewidth correction requires a line-specific match in `Stark.db`. The absence of that line does not prove the absence of self-absorption; it means that this check is unavailable for that transition.
+IRSAC2 is the only selectable IRSAC workflow. The Stark correction requires a line-specific match in `Stark_extended.db`; a missing line only means that this independent check is unavailable.
 
 ### 14.2 Diagnosis before correction
 
-Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-Absorption / IRSAC...`. Check:
+Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Both commands open the same IRSAC2 window. Check:
 
 - consistency of lines sharing the same upper level;
 - behavior of the ordinate as a function of Ek;
@@ -634,48 +676,42 @@ Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-Abso
 
 `Not assessable` does not mean `no self-absorption`. It means the data do not support a sound decision.
 
-### 14.3 Initial-temperature fallback
+### 14.3 Plasma state and uncertainties
 
-`Initial-T fallback` can be:
+IRSAC2 uses `kT`, its uncertainty, `Ne`, the relative uncertainty of Ne, instrumental FWHM, any instrumental Lorentzian component, relative `gA` uncertainty and the significance threshold `nσ`. Initial values come from the Saha-Boltzmann/H-alpha session when available and remain editable in the window.
 
-- `Auto (from Saha)`: reuses the reference selected by Saha-Boltzmann only when a fallback initial T is needed;
-- an explicit species, such as `Cd I`, `Sn I` or `Pb I`.
+### 14.4 IRSAC2 reference line
 
-The selected thermometric species supplies both the raw T and the corrected T that is then frozen during IRSAC. `Auto (from Saha)` reuses the Saha-Boltzmann reference species; an explicit choice such as `Cd I` remains fixed. Prefer a species with a broad Ek interval, at least three independent upper levels and a stable fit. Other species cannot move the IRSAC temperature.
+Every neutral or ionic species needs an internal reference. Automatic selection first considers lines whose intensity is at least 5% of the strongest line, excludes unreliable fits when possible, and minimizes the optical-depth proxy
 
-### 14.4 IRSAC reference line
+`tau_proxy = gk Aki lambda^3 exp(-Ei/kT)`.
 
-One line acts as the internal reference for every neutral or ionic species. `Automatic line references` applies Yang Eq. (7): it rejects Aki uncertainties above 50%, keeps candidates with the best reported accuracy, and gives weight 0.5 to ascending Ei rank and 0.5 to descending Aki rank. To force a line, select it in the table and press `Use selected line as IRSAC reference`. A manual selection must be documented and makes quantitative checks stricter.
+The per-species selector permits a manual reference. A manual reference must be justified and documented; a resonance line with `Ei approximately 0` is often fragile.
 
-### 14.5 IRSAC with a frozen thermometric temperature
+### 14.5 IRSAC2 mathematics
 
-The quantitative mode is `Staged Aslam IRSAC (internal references)`. It preserves the measured integrated areas and applies this sequence once:
+IRSAC2 preserves the measured integrated areas. For a line `k` and reference `r` of the same species it calculates
 
-1. obtains the raw temperature from the thermometric species alone, `y = ln(lambda_NIST I / Aki gk)`; the fallback value is used only when that fit is unavailable;
-2. selects one internal reference for each species with Eq. (7), or uses a manually selected reference;
-3. at the raw T it calculates, for every line of the thermometric species, `f_k = I_k (A_ref g_ref)/(I_ref A_k g_k) exp[-(E_ref-E_k)/(0.69503476 T)]`;
-4. corrects the area with `I_corr,k = I_k/f_k`; the reference has `f_ref=1` by construction;
-5. refits only the corrected Boltzmann plot of the thermometric species and obtains the final IRSAC T;
-6. freezes this T and evaluates every other species with the same equation and its own internal reference;
-7. never updates T from the other species and never forces their independent free slopes to be parallel;
-8. in final CF-LIBS it imposes the physical common slope `m=-1/(kB T_IRSAC)` and fits only `q = mean(y_corr - m E)` for each species.
+`d_k = ln(I_k/gA_k) - ln(I_r/gA_r) + (Ek_k-Ek_r)/kT`.
 
-The assigned NIST wavelength is used in the Boltzmann ordinate and instrumental-response lookup, but is not inserted a second time into Eq. (6). The observed center remains a fit result and does not replace the transition wavelength. A relative multiplier `1/f_k` below 1 is allowed: it is a normalization to the chosen internal reference, not an absolute optical-depth measurement.
+It propagates uncertainty from both intensities, `gA` and `kT`. The relative factor is `SA_k = exp(d_k + ln(f_ref))`; when absorption is significant, the area multiplier is `SAC_k = 1/SA_k`. No correction is applied when the result is compatible with one within `nσ`, when the fit is poor, or when `SAC` exceeds the configured bound, default `3.33`.
 
-Comparison with an external worksheet requires the same integrated areas, instrumental response, NIST wavelength, Aki, gk, Ek, references and thermometric species.
+With `Estimate reference-line absorption`, `f_ref` is reduced below one only when at least two independent lines appear significantly less absorbed than the reference; one anomalous line is treated as a possible blend.
 
-### 14.6 Recalculation
+The independent Stark check uses `w0 = w(10^17,T) Ne/10^17`. In `Stark_extended.db`, `w` is already an FWHM in Angstrom. The historical `Stark.db` instead stores HWHM in nm at `10^17 cm^-3`; compatibility paths therefore apply `FWHM(Angstrom) = 20 * HWHM(nm) * Ne/10^17`, or divide that result by 10 when the spectrum is expressed in nm. After subtracting any instrumental Lorentzian component, the program sets `r=wL/w0` and calculates `SA=r^(-1/0.54)` and `SAC_area=r^(0.46/0.54)`, applying them only when the difference is resolved and significant.
 
-- `Recalculate IRSAC`: reuses the measured areas and recalculates only the correction. IRSAC never refits the spectrum or changes its areas.
-- If the baseline or ROI changes, repeat the fit explicitly in the fitting window before recalculating IRSAC.
-- `Apply correction`: activates accepted factors.
-- `Remove correction`: returns to uncorrected areas.
+### 14.6 Computing and applying
 
-The window reports raw T, final IRSAC T, thermometric species, references, relative factors and diagnostic checks. If the corrected thermometric temperature cannot be calculated, the factors cannot be applied. Quality checks remain visible but never silently alter the equation or fitted areas.
+- `Compute`: recalculates diagnosis and factors from measured areas; it never refits the spectrum or changes Voigt areas.
+- `Apply SAC`: applies only valid factors according to the selected mode.
+- `Remove SAC`: returns to uncorrected areas.
+- `Iterate SAC <-> T-Ne`: alternates IRSAC2 and the T-Ne fit until the configured convergence criterion is met.
+
+The table reports the reference, optical-depth proxy, Stark checks, `SA`, `SAC`, same-upper-level test and the method actually applied. Diagnostics never silently change the baseline, ROI or measured area.
 
 ### 14.7 When correction must not be used
 
-Do not apply IRSAC when:
+Do not apply IRSAC2 when:
 
 - the diagnosis shows no significant evidence;
 - lines are interfered or the fit is unstable;
@@ -690,7 +726,7 @@ A correction may be displayed for diagnosis but blocked from producing percentag
 
 `Analyse > Plasma Diagnostics > SAC Factors...` calculates diagnostic factors using `kT`, `Ne`, optical path `path lu` and total density `N total`. When a CF-LIBS result exists, it uses its `Number %`; otherwise it assigns equal percentages to the elements present. The table reports `SAC`, widths and the line-center coefficient.
 
-This window does not replace `Self-Absorption / IRSAC` and does not by itself measure concentration or optical path. Use it only as a specialist tool when `lu` and `N total` are experimentally justified.
+This window does not replace `Self-Absorption Correction (IRSAC2)` and does not by itself measure concentration or optical path. Use it only as a specialist tool when `lu` and `N total` are experimentally justified.
 
 ## 15. CF-LIBS concentrations
 
@@ -867,7 +903,7 @@ For a completely unknown sample, use the CF-LIBS workflow without OPC or Standar
 | A line appears where no window was acquired | unfiltered library/markers or stale session | use Clear Graph, reload the windows and inspect the report; the line must not enter calculations |
 | An unrequested element appears | element traced previously or a residual assignment | in Trace Lines, select the element and press Delete; then recalculate |
 | An evident peak is not selected | threshold, zoom or incomplete observed-peak list | zoom into the region, use Auto Fit > Add peak from graph, then Trace Lines |
-| A line without a peak is selected | `Only near selected peaks` is disabled | enable it again and delete the assignment |
+| A line without a peak is displayed | `Only lines with a measured peak` is disabled | enable it again and delete the assignment |
 | The program appears to freeze during fitting | ROI too broad, too many parameters or insufficient information | press Stop, narrow the ROI, check components and retry |
 | R2 = 1 with two points | one straight line always passes through two points | do not treat this as evidence of a good temperature; more lines and levels are required |
 | Lines are parallel in CF-LIBS | common slope imposed by T | expected after selecting a common temperature |
@@ -927,7 +963,8 @@ For a completely unknown sample, use the CF-LIBS workflow without OPC or Standar
 | Instrument Calibration > Instrument Response... | Ctrl+Alt+R | loads and checks response curves |
 | Instrument Calibration > Apply Instrument Response | - | applies the signal-to-response ratio |
 | Instrument Calibration > Wavelength Calibration... | - | calibrates each window |
-| Instrument Calibration > Manual Wavelength Shift... | Ctrl+F1 | applies a selected shift |
+| Instrument Calibration > Mercury Wavelength Check... | - | calculates a temporary or persistent offset from one Hg line |
+| Instrument Calibration > Temporary Wavelength Shift... | Ctrl+F1 | shifts current data without changing NIST references or saved profiles |
 | Signal Processing > Intensity Offset... | Ctrl+F2 | changes the vertical level |
 | Signal Processing > Smooth Spectrum | Ctrl+F3 | smooths the displayed spectrum |
 | Signal Processing > Convert nm to Å | Ctrl+F4 | converts nanometers to angstroms |
@@ -949,13 +986,13 @@ For a completely unknown sample, use the CF-LIBS workflow without OPC or Standar
 | Spectral Fitting > Automatic Fit... | performs automatic peak selection and Voigt fitting |
 | Plasma Diagnostics > Electron Density from Hα... | calculates electron density |
 | Plasma Diagnostics > Saha-Boltzmann Plot... | calculates temperature and ionization stages |
-| Plasma Diagnostics > Self-Absorption / IRSAC... | diagnoses and corrects self-absorption |
+| Plasma Diagnostics > Self-Absorption Correction (IRSAC2)... | diagnoses and corrects self-absorption with IRSAC2 |
 | Plasma Diagnostics > SAC Factors... | opens the historical SAC-factor window |
 | Quantitative Analysis > CF-LIBS... | calculates concentrations and robustness |
 | Quantitative Analysis > Theoretical Spectrum... | provides a diagnostic theoretical comparison |
 | Quantitative Analysis > Standard Correction... | applies an external-standard correction |
 
-`SAC Factors` and `Standard Correction` are specialist or historical tools. In the ordinary workflow, use `Self-Absorption / IRSAC`; apply standard correction only when an appropriate documented standard exists.
+`SAC Factors` and `Standard Correction` are specialist or historical tools. In the ordinary workflow, use `Self-Absorption Correction (IRSAC2)`; apply standard correction only when an appropriate documented standard exists.
 
 ### 20.6 Help
 

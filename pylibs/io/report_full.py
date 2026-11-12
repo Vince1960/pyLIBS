@@ -323,35 +323,6 @@ def _sec_new_diagnostics(app):
                          getattr(r, "irsac_status", ""), getattr(r, "level_test", "")])
         s.note("Applied correction algorithm: IRSAC2.")
         s.table("irsac2_lines", ["Line", "Stark SAC", "IRSAC SA", "IRSAC SAC", "IRSAC status", "Same-level test"], rows)
-    sa1 = getattr(app, "last_self_absorption_result", None)
-    if isinstance(sa1, dict) and sa1.get("algorithm") != "IRSAC2":
-        s.note("Applied correction algorithm: IRSAC1 (original pyLIBS 1.2.1 implementation).")
-        s.table("irsac1_status", ["Field", "Value"], [
-            ["Mode", sa1.get("mode")], ["Equation", sa1.get("equation_mode")],
-            ["Converged", sa1.get("converged")], ["Iterations", sa1.get("iterations")],
-            ["Corrected lines", sa1.get("corrected_lines")], ["Assessment", sa1.get("assessment_status")],
-        ])
-
-    comparison = getattr(app, "last_irsac_comparison", None)
-    if isinstance(comparison, dict):
-        rows = []
-        labels = comparison.get("line_labels", {})
-        a, b = comparison.get("irsac1_factors", {}), comparison.get("irsac2_factors", {})
-        for key, label in sorted(labels.items(), key=lambda item: item[1]):
-            rows.append([label, _num(a.get(key)), _num(b.get(key))])
-        s.table("irsac_comparison_factors", ["Line", "IRSAC1 factor", "IRSAC2 factor"], rows)
-        comp_rows = []
-        c1, c2 = comparison.get("composition1", {}), comparison.get("composition2", {})
-        for element in sorted(set(c1) | set(c2)):
-            comp_rows.append([element, *c1.get(element, (None, None)), *c2.get(element, (None, None))])
-        s.table("irsac_comparison_composition", ["Element", "IRSAC1 molar %", "IRSAC1 mass %", "IRSAC2 molar %", "IRSAC2 mass %"], comp_rows)
-        s.table("irsac_comparison_runtime", ["Method", "Seconds", "Convergence", "Iterations", "Temperature K"], [
-            ["IRSAC1", _num(comparison.get("irsac1_seconds")), comparison.get("irsac1_converged"),
-             comparison.get("irsac1_iterations"), _num(comparison.get("irsac1_temperature_k"))],
-            ["IRSAC2", _num(comparison.get("irsac2_seconds")), "fixed-T/no iteration", "—", "input T"],
-        ])
-    else:
-        s.note("The IRSAC1 / IRSAC2 comparison has not been run.")
     return s
 
 

@@ -61,13 +61,13 @@ Additional functionality and documentation will be added in future releases.
 - Calibration-Free LIBS (CF-LIBS)
 - Self-absorption correction tools
 - Stark broadening analysis
-- Hybrid self-absorption chain: Palleschi/Stark plus iterative Yang et al. IRSAC
+- IRSAC2 self-absorption assessment with optional Stark-width evidence
 - Electron density estimation
 - Plasma temperature evaluation
 - LTE plasma diagnostics
 - Monte Carlo uncertainty estimation
 - Outlier and spectral-line influence diagnostics
-- IRSAC1 and IRSAC2 selection and comparison
+- IRSAC2 reference-line selection, uncertainty checks and correction limits
 - Data Management
 - Persistent user preferences
 - Automatic restoration of window positions
@@ -189,14 +189,12 @@ The implemented analysis order is: select the signal column, subtract the dark
 trace pixel by pixel, divide each window by its own instrumental response,
 apply the saved wavelength calibration to each window, join overlapping
 windows, fit single or multiple Voigt profiles, calculate electron density from
-H-alpha, and apply either Palleschi's Stark correction or the internal-reference
-IRSAC equations of Yang et al. (Applied Spectroscopy 72, 129-140, DOI
-`10.1177/0003702817734293`). The selective IRSAC branch keeps the fitted Voigt
-areas fixed and iterates factors, independent evidence and the temperature of
-the chosen thermometric species until the selected lines, temperature and
-factors are all stable. Before common-slope quantitation it rejects corrections
-whose independently fitted species slope is incompatible with that temperature.
-Saha-Boltzmann and CF-LIBS use only the accepted factors. The theoretical-spectrum window is
+H-alpha, and assess self-absorption with IRSAC2. IRSAC2 keeps fitted Voigt areas
+fixed, selects the least optically thick usable reference for each species,
+propagates intensity and temperature uncertainties, and rejects insignificant,
+unsafe or poor-fit corrections. Stark-width evidence can be used independently
+when resolved line-specific data are available. Saha-Boltzmann and CF-LIBS use
+only the accepted factors. The theoretical-spectrum window is
 deliberately downstream and
 diagnostic only: it remains locked until an IRSAC-capable correction has been
 calculated, converged and applied. Its temperature is read-only, records that

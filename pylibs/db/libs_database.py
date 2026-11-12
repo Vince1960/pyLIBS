@@ -422,6 +422,111 @@ class LibsDatabase:
                     break
         return out
 
+    def all_element_lines(
+        self,
+        element: str,
+        xmin: float,
+        xmax: float,
+        ions: Optional[list[int]] = None,
+        wavelength_unit: str = "database",
+    ) -> list[AtomicLine]:
+        """Return every transition available in an element-specific table.
+
+        ``trace_lines`` deliberately ranks and limits the strongest database
+        entries.  Trace Lines also needs an explicit exhaustive source so the
+        user can compare the curated analytical list with every transition
+        stored for the requested element in the visible detector interval.
+        ``ions=None`` means every ionization stage present in the table;
+        an explicit list restricts the query to those stages.
+        """
+        conn = self._ensure()
+        element = (element or "").strip().capitalize()
+        if not element or element not in self.tables():
+            return []
+        if xmin > xmax:
+            xmin, xmax = xmax, xmin
+        wavelength_scale = self.wavelength_scale_to_database(wavelength_unit)
+        xmin *= wavelength_scale
+        xmax *= wavelength_scale
+        ion_values = None if ions is None else [int(ion) for ion in ions]
+        if ion_values == []:
+            return []
+        ion_clause = ""
+        params = [xmin, xmax]
+        if ion_values is not None:
+            placeholders = ",".join("?" for _ in ion_values)
+            ion_clause = f'AND CAST(ion AS INTEGER) IN ({placeholders}) '
+            params.extend(ion_values)
+        rows = conn.execute(
+            f'SELECT specie, ion, wavelen, Ei, Ek, gi, gk, Aki, acc '
+            f'FROM "{element}" WHERE CAST(wavelen AS REAL) BETWEEN ? AND ? '
+            f'{ion_clause}'
+            f'ORDER BY CAST(wavelen AS REAL), CAST(ion AS INTEGER)',
+            params,
+        ).fetchall()
+
+        # The element-specific tables contain the complete transition data,
+        # while Datalibs carries the relative line intensity used by the
+        # original Trace Lines ranking.  Preserve that strength when the two
+        # tables describe the same transition instead of returning every
+        # complete-table line with inte=0.
+        strength_rows = conn.execute(
+            'SELECT wavelen, ion, inte FROM "Datalibs" '
+            'WHERE CAST(wavelen AS REAL) BETWEEN ? AND ? '
+            'AND TRIM(specie)=? '
+            + ion_clause
+            + 'ORDER BY CAST(wavelen AS REAL)',
+            [xmin, xmax, element] + (ion_values or []),
+        ).fetchall()
+        strengths_by_ion: dict[int, list[tuple[float, float]]] = {}
+        for strength_row in strength_rows:
+            try:
+                strength_ion = int(float(strength_row["ion"]))
+                strength_wavelength = float(strength_row["wavelen"])
+                strength = max(0.0, safe_float(strength_row["inte"]))
+            except (TypeError, ValueError):
+                continue
+            strengths_by_ion.setdefault(strength_ion, []).append(
+                (strength_wavelength, strength)
+            )
+        strength_tolerance = 0.005 * self.wavelength_scale_to_database("nm")
+
+        out: list[AtomicLine] = []
+        seen = set()
+        for row in rows:
+            try:
+                wavelength = float(row["wavelen"]) / wavelength_scale
+                ion = int(float(row["ion"]))
+            except (TypeError, ValueError):
+                continue
+            species = str(row["specie"] or element).strip() or element
+            key = (species.capitalize(), ion, round(wavelength, 9))
+            if key in seen:
+                continue
+            seen.add(key)
+            relative_intensity = 0.0
+            strength_candidates = strengths_by_ion.get(ion, [])
+            if strength_candidates:
+                strength_wavelength, strength = min(
+                    strength_candidates,
+                    key=lambda item: abs(item[0] - float(row["wavelen"])),
+                )
+                if abs(strength_wavelength - float(row["wavelen"])) <= strength_tolerance:
+                    relative_intensity = strength
+            out.append(AtomicLine(
+                wavelen=wavelength,
+                specie=species,
+                ion=ion,
+                inte=relative_intensity,
+                ei=safe_float(row["Ei"]),
+                ek=safe_float(row["Ek"]),
+                gi=safe_int(row["gi"]),
+                gk=safe_int(row["gk"]),
+                aki=self._aki_to_si(row["Aki"]),
+                acc=safe_int(row["acc"]),
+            ))
+        return out
+
     def match_selected_lines(
         self,
         element: str,

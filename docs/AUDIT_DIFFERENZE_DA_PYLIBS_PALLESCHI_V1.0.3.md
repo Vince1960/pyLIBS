@@ -9,7 +9,7 @@ tag `v1.0.3`, commit `cd781f3a09e9b93eb5deac9eb217bc1075b66b2a`.
 
 Questo dettaglio e' importante: per "procedura ufficiale" in questo documento si
 intende il programma Python pubblicato su GitHub a quel tag, non una ricostruzione
-a memoria, non il vecchio programma locale LIBS+ e non direttamente i sorgenti
+a memoria, non la precedente versione locale LIBS+ e non direttamente i sorgenti
 storici Borland di LIBS++.
 
 File confrontati:
