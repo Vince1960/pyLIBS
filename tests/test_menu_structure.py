@@ -68,6 +68,7 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
             "show_goto_dialog", "find_peaks_basic", "show_trace_lines",
             "show_retro_fit_manager", "show_auto_fit_manager", "show_ne_halpha",
             "show_saha_boltzmann", "show_sac_check", "show_sac_window",
+            "show_self_absorption",
             "show_cf_libs", "show_theoretical_spectrum", "show_standard_correction",
             "show_manual", "show_about",
         }
@@ -130,7 +131,13 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
         plasma = cascade(analysis, "Plasma Diagnostics")
         quantitative = cascade(analysis, "Quantitative Analysis")
         self.assertIn("Electron Density from Hα...", labels(plasma, "command"))
+        self.assertIn(
+            "Self-Absorption Correction (IRSAC2)...",
+            labels(plasma, "command"),
+        )
         self.assertIn("SAC Factors...", labels(plasma, "command"))
+        self.assertNotIn("Self-Absorption / IRSAC...", labels(plasma, "command"))
+        self.assertNotIn("Self-Absorption IRSAC2...", labels(plasma, "command"))
         self.assertIn("CF-LIBS...", labels(quantitative, "command"))
         self.assertNotIn("SAC", labels(plasma, "command"))
         self.assertNotIn("CF LIBS", labels(quantitative, "command"))

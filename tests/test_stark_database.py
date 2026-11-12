@@ -26,7 +26,8 @@ class TestStarkDatabase(unittest.TestCase):
     def test_original_stark_db_is_hwhm_in_nm(self):
         """Original value x 20 (HWHM nm -> FWHM A) equals the NIST critical-review FWHM normalized to 1e17."""
         cases = {("Sr", 2, 4215.52): 0.32, ("Ni", 1, 3414.76): 0.0763, ("Ba", 2, 4934.09): 0.434,
-                 ("Cu", 1, 5105.54): 0.43, ("Al", 2, 2816.19): 0.424}
+                 ("Cu", 1, 5105.54): 0.43, ("Al", 2, 2816.19): 0.424,
+                 ("Fe", 1, 4260.47): 1.1}
         for (el, ion, wl), fwhm in cases.items():
             w = self.orig.execute("SELECT \"w-T10000\" FROM Stark WHERE TRIM(Element)=? AND Ion=? "
                                   "AND ABS(Wavelength-?)<0.1", (el, ion, wl)).fetchone()[0]

@@ -635,6 +635,8 @@ class Spectrum:
     dark_columns: tuple[int, ...] = ()
     replicate_files: tuple[str, ...] = field(default_factory=tuple)
     source_windows: tuple[SpectrumSourceWindow, ...] = field(default_factory=tuple, repr=False)
+    wavelength_calibration_status: str = ""
+    wavelength_calibration_message: str = ""
 
     def __post_init__(self):
         if not self.source_windows:
@@ -1102,6 +1104,245 @@ def wavelength_is_acquired(
     )
 
 
+def acquired_wavelength_intervals(
+    app: "MainWindow",
+    *,
+    include_visible_comparisons: bool = False,
+) -> list[tuple[float, float]]:
+    """Return the union of detector intervals that contain measured samples."""
+    spectra = list(getattr(app, "spectra", []) or [])
+    if not spectra:
+        return []
+    use_all_windows = bool(getattr(app, "independent_window_mode", False))
+    candidates = (
+        [spectrum for spectrum in spectra if getattr(spectrum, "visible", True)]
+        if include_visible_comparisons or use_all_windows
+        else spectra[:1]
+    )
+    intervals = sorted(
+        (float(low), float(high))
+        for spectrum in candidates
+        for low, high in spectrum_wavelength_intervals(spectrum)
+        if math.isfinite(float(low)) and math.isfinite(float(high))
+    )
+    merged: list[list[float]] = []
+    for low, high in intervals:
+        low, high = sorted((low, high))
+        if not merged or low > merged[-1][1]:
+            merged.append([low, high])
+        else:
+            merged[-1][1] = max(merged[-1][1], high)
+    return [(low, high) for low, high in merged]
+
+
+def selected_observed_peak_wavelengths(
+    app: "MainWindow",
+    element: str,
+    *,
+    allow_alternative_assignments: bool = False,
+) -> list[float]:
+    """Return measured peak positions, excluding untouched library seed rows."""
+    requested = str(element or "").strip().capitalize()
+    wavelengths = []
+    for line in list(getattr(app, "template_lines", []) or []):
+        if _template_line_has_fit_error(line):
+            continue
+        if not template_line_is_observed_selection(line):
+            continue
+        species = str(getattr(line, "specie", "") or "").strip().capitalize()
+        if not allow_alternative_assignments and species and species != requested:
+            continue
+        wavelength = abs(
+            safe_float(getattr(line, "fitwavelen", 0.0), 0.0)
+        ) or abs(
+            safe_float(getattr(line, "wavelen", 0.0), 0.0)
+        )
+        if wavelength > 0.0 and math.isfinite(wavelength):
+            wavelengths.append(wavelength)
+    return sorted(set(wavelengths))
+
+
+def template_line_is_observed_selection(line: TemplateLine) -> bool:
+    """True when a template row represents a measured peak, not a seed.
+
+    Rows cloned from the persistent analytical library are theoretical
+    candidates only. Auto Fit may use a row after the user marked a measured
+    maximum, Trace Lines assigned a measured match, or a previous fit stored a
+    valid center and area.
+    """
+    if bool(getattr(line, "trace_selected", False)):
+        return True
+    marked_intensity = abs(
+        safe_float(getattr(line, "templint", 0.0), 0.0)
+    )
+    if marked_intensity > 0.0:
+        return True
+    fitted = abs(safe_float(getattr(line, "fitwavelen", 0.0), 0.0))
+    fit_area = abs(safe_float(getattr(line, "inte", 0.0), 0.0))
+    fit_profile = str(getattr(line, "fit_profile", "") or "").strip()
+    return fitted > 0.0 and fit_area > 0.0 and bool(fit_profile)
+
+
+def measured_peak_near_wavelength(
+    app: "MainWindow",
+    reference_wavelength: float,
+    tolerance: float,
+) -> Optional[dict]:
+    """Locate a real local maximum near a theoretical transition."""
+    reference = safe_float(reference_wavelength, math.nan)
+    tolerance = abs(safe_float(tolerance, 0.0))
+    if not math.isfinite(reference) or tolerance <= 0.0:
+        return None
+    spectrum = select_spectrum_for_wavelengths(app, [reference])
+    if spectrum is None:
+        return None
+    best = None
+    for segment_x, segment_y in spectrum_plot_segments(spectrum):
+        points = sorted(
+            (
+                (float(x), float(y))
+                for x, y in zip(segment_x, segment_y)
+                if math.isfinite(float(x)) and math.isfinite(float(y))
+            ),
+            key=lambda point: point[0],
+        )
+        if len(points) < 3 or not (points[0][0] <= reference <= points[-1][0]):
+            continue
+        segment_x = [point[0] for point in points]
+        segment_y = [point[1] for point in points]
+        # Estimate significance on the complete detector segment.  Computing
+        # it on a tiny interval around every database wavelength promoted an
+        # arbitrary noise wiggle to a "measured peak" whenever that interval
+        # happened to be locally flat.
+        candidates = _voigt_peak_candidates(segment_x, segment_y)
+        if not candidates:
+            baseline_values = sorted(segment_y)
+            baseline = baseline_values[len(baseline_values) // 2]
+            differences = [
+                right - left
+                for left, right in zip(segment_y, segment_y[1:])
+            ]
+            ordered_differences = sorted(differences)
+            median_difference = (
+                ordered_differences[len(ordered_differences) // 2]
+                if ordered_differences
+                else 0.0
+            )
+            deviations = sorted(
+                abs(value - median_difference) for value in differences
+            )
+            mad_difference = deviations[len(deviations) // 2] if deviations else 0.0
+            noise_sigma = 1.4826 * mad_difference / math.sqrt(2.0)
+            ordered_signal = sorted(segment_y)
+            low_index = max(0, int(0.05 * (len(ordered_signal) - 1)))
+            high_index = min(
+                len(ordered_signal) - 1,
+                int(0.995 * (len(ordered_signal) - 1)),
+            )
+            signal_span = max(
+                0.0,
+                ordered_signal[high_index] - ordered_signal[low_index],
+            )
+            prominence_floor = max(
+                5.0 * noise_sigma,
+                0.015 * signal_span,
+                max((abs(value) for value in segment_y), default=0.0) * 1.0e-10,
+                1.0e-300,
+            )
+            candidates = [
+                {
+                    "index": index,
+                    "x": segment_x[index],
+                    "y": segment_y[index],
+                    "prominence": max(0.0, segment_y[index] - baseline),
+                }
+                for index in range(1, len(segment_y) - 1)
+                if segment_y[index] > segment_y[index - 1]
+                and segment_y[index] >= segment_y[index + 1]
+                and segment_y[index] - baseline >= prominence_floor
+            ]
+        plausible = [
+            candidate
+            for candidate in candidates
+            if abs(candidate["x"] - reference) <= tolerance
+            and candidate.get("prominence", 0.0) > 0.0
+        ]
+        if not plausible:
+            continue
+        candidate = min(
+            plausible,
+            key=lambda item: (
+                abs(item["x"] - reference),
+                -item.get("prominence", 0.0),
+            ),
+        )
+        maximum_prominence = max(
+            (
+                safe_float(item.get("prominence"), 0.0)
+                for item in candidates
+            ),
+            default=0.0,
+        )
+        match = {
+            "wavelength": float(candidate["x"]),
+            "intensity": float(candidate["y"]),
+            "prominence": float(candidate.get("prominence", 0.0)),
+            "prominence_fraction": (
+                float(candidate.get("prominence", 0.0)) / maximum_prominence
+                if maximum_prominence > 0.0
+                else 0.0
+            ),
+            "spectrum": spectrum,
+        }
+        if best is None or (
+            abs(match["wavelength"] - reference),
+            -match["prominence"],
+        ) < (
+            abs(best["wavelength"] - reference),
+            -best["prominence"],
+        ):
+            best = match
+    return best
+
+
+def automatic_trace_peak_match(
+    app: "MainWindow",
+    line: AtomicLine,
+    tolerance: float,
+    *,
+    strong_transition: bool = False,
+    wavelength_unit: str = "nm",
+) -> Optional[dict]:
+    """Match a transition without letting a small residual shift hide it.
+
+    The user tolerance remains authoritative for ordinary transitions. Only
+    the two strongest database transitions receive a narrow 50% recovery
+    margin, and recovery is accepted only for a peak carrying at least 5% of
+    the maximum prominence in that detector window. This resolves residual
+    calibration/sampling offsets without reopening the broad coincidence
+    search that previously labelled noise and unrelated weak lines.
+    """
+    tolerance = max(0.0, abs(safe_float(tolerance, 0.0)))
+    match = measured_peak_near_wavelength(app, line.wavelen, tolerance)
+    if match is not None or not strong_transition or tolerance <= 0.0:
+        return match
+    recovery_tolerance = 1.5 * tolerance
+    recovered = measured_peak_near_wavelength(
+        app,
+        line.wavelen,
+        recovery_tolerance,
+    )
+    if recovered is None:
+        return None
+    if safe_float(recovered.get("prominence_fraction"), 0.0) < 0.05:
+        return None
+    recovered = dict(recovered)
+    recovered["recovered_strong_transition"] = True
+    recovered["base_tolerance"] = tolerance
+    recovered["recovery_tolerance"] = recovery_tolerance
+    return recovered
+
+
 def _selected_active_spectrum(app: "MainWindow") -> Optional[Spectrum]:
     """Return the spectrum selected in Active Spectra, when available."""
     try:
@@ -1247,6 +1488,21 @@ def template_line_is_acquired(app: "MainWindow", line: TemplateLine) -> bool:
     """Use the observed/fitted line center to validate spectral coverage."""
     center = template_line_plot_wavelength(line)
     return center > 0.0 and wavelength_is_acquired(app, center)
+
+
+def template_line_marker_is_visible(app: "MainWindow", line: TemplateLine) -> bool:
+    """Show assigned markers only for elements selected for this analysis.
+
+    The persistent analytical library seeds ``template_lines`` for every new
+    measurement.  Those seed rows are available to the fit workflow, but they
+    are not evidence that their elements occur in the loaded spectrum.  An
+    unassigned marker was placed manually and therefore remains visible.
+    """
+    species = str(getattr(line, "specie", "") or "").strip().capitalize()
+    if not species:
+        return True
+    selected_elements = _selected_analysis_elements(app)
+    return selected_elements is None or species in selected_elements
 
 
 def template_line_plot_wavelength(line: TemplateLine) -> float:
@@ -1699,21 +1955,24 @@ class OptionsWindow(tk.Toplevel):
         self.entry(g_aki, "theoretical_aki_threshold", 3, 1, width=9)
 
         g_shift = self.group(right, "Wavelength calibration", 2, 0)
-        ttk.Label(g_shift, text="Legacy global Δλ").grid(row=0, column=0, padx=4, pady=3, sticky="w")
-        self.entry(g_shift, "auto_shift", 0, 1, width=8)
         self.check(
             g_shift,
             "auto_wavelength_calibration",
-            "Use saved per-window calibration",
-            1,
+            "Apply saved per-window calibration on load",
+            0,
             0,
             colspan=2,
         )
         ttk.Button(
             g_shift,
-            text="Per-window calibration...",
+            text="Manage per-window calibration...",
             command=self.master_app.show_wavelength_calibration,
-        ).grid(row=2, column=0, columnspan=2, padx=4, pady=4, sticky="ew")
+        ).grid(row=1, column=0, columnspan=2, padx=4, pady=4, sticky="ew")
+        ttk.Label(
+            g_shift,
+            text="Manual wavelength shift affects only spectra currently loaded.",
+            wraplength=310,
+        ).grid(row=2, column=0, columnspan=2, padx=4, pady=(1, 4), sticky="w")
 
         g_db = self.group(right, "Atomic library", 3, 0)
         self.entry(g_db, "libs_db_file", 0, 0, width=31, sticky="ew")
@@ -1721,23 +1980,20 @@ class OptionsWindow(tk.Toplevel):
         ttk.Button(g_db, text="LIBS++", command=lambda: self.use_bundled_database("LIBS.db")).grid(row=1, column=0, padx=3, pady=3, sticky="w")
         ttk.Button(g_db, text="NIST ASD 5.12", command=lambda: self.use_bundled_database("LIBS_NIST_5_12.db")).grid(row=1, column=1, padx=3, pady=3, sticky="e")
 
-        g_sa = self.group(right, "Self-absorption correction", 4, 0)
-        ttk.Label(g_sa, text="Mode").grid(row=0, column=0, padx=4, pady=3, sticky="w")
-        self.choice(
-            g_sa,
-            "irsac_mode",
-            _SELF_ABSORPTION_MODE_LABELS,
-            0,
-            1,
-            "hybrid",
-            width=39,
-        )
-        ttk.Label(g_sa, text="Thermometric species").grid(row=1, column=0, padx=4, pady=3, sticky="w")
-        self.entry(g_sa, "irsac_thermometric_species", 1, 1, width=14)
+        g_sa = self.group(right, "Self-absorption correction (IRSAC2)", 4, 0)
         ttk.Label(
             g_sa,
-            text="IRSAC: raw T -> correct reference species -> freeze corrected T",
-        ).grid(row=2, column=0, columnspan=2, padx=4, pady=3, sticky="w")
+            text=(
+                "IRSAC2 parameters, reference lines and correction criteria are "
+                "managed in the analysis window."
+            ),
+            wraplength=310,
+        ).grid(row=0, column=0, columnspan=2, padx=4, pady=4, sticky="w")
+        ttk.Button(
+            g_sa,
+            text="Open IRSAC2...",
+            command=self.master_app.show_self_absorption,
+        ).grid(row=1, column=0, columnspan=2, padx=4, pady=4, sticky="ew")
 
     def _set_global_mode(self, mode):
         self.vars["apply_before"].set(mode == "before") if "apply_before" in self.vars else None
@@ -2454,6 +2710,70 @@ def remove_traced_elements(app, elements) -> tuple[int, int]:
     return len(markers) - len(kept_markers), cleared_assignments
 
 
+def clear_current_line_analysis(app: "MainWindow") -> tuple[int, int]:
+    """Remove sample-specific line results while preserving the main library.
+
+    The analytical library is a reusable catalogue. ``template_lines`` is the
+    measurement workspace and may contain fitted areas, manual peaks and rows
+    created from the complete database. Rebuild that workspace from clean
+    library clones so cleared fits cannot re-enter Saha-Boltzmann.
+    """
+    previous_count = len(list(getattr(app, "template_lines", []) or []))
+    clean_lines = _clone_template_lines(
+        getattr(app, "analytical_line_library", []) or []
+    )
+    app.template_lines = clean_lines
+    app.atomic_lines = []
+    app.element_markers = []
+    app.trace_markers = []
+    app.analysis_elements = set()
+    app.fit_overlay = None
+    app.fit_baseline_overlay = None
+    app.fit_component_overlays = []
+    app.fit_integration_bounds = []
+    app.last_saha_boltzmann = None
+    app.session_temperature = None
+    app.session_temperature_source = None
+    app.post_irsac_temperature = None
+    app.post_irsac_temperature_source = None
+
+    notify = getattr(app, "notify_template_changed", None)
+    if callable(notify):
+        notify(redraw=False)
+    else:
+        invalidate_self_absorption_analysis(app)
+        invalidate_cflibs = getattr(app, "invalidate_cflibs_results", None)
+        if callable(invalidate_cflibs):
+            invalidate_cflibs()
+
+    # A persistent Saha window otherwise continues to display its old plot
+    # until the user explicitly recomputes it.
+    saha_window = getattr(app, "saha_window", None)
+    try:
+        saha_exists = saha_window is not None and saha_window.winfo_exists()
+    except Exception:
+        saha_exists = False
+    if saha_exists:
+        saha_window.saha_groups = {}
+        saha_window.saha_display_groups = {}
+        saha_window.saha_fits = {}
+        saha_window.included_elements = set()
+        saha_window.diagnostic_elements = set()
+        saha_window.blocked_elements = set()
+        saha_window.auto_excluded_elements = set()
+        saha_window.representative_kt = None
+        saha_window.last_valid_mean_kt = None
+        try:
+            saha_window.tree.delete(*saha_window.tree.get_children())
+            saha_window.summary_var.set(
+                "Line analysis cleared; recompute after selecting lines"
+            )
+            saha_window._draw_plot({}, {}, None)
+        except Exception:
+            pass
+    return previous_count, len(clean_lines)
+
+
 class TraceLinesWindow(tk.Toplevel):
     """Analyse > Trace Lines:
 
@@ -2463,40 +2783,67 @@ class TraceLinesWindow(tk.Toplevel):
     species shown in the dialog.
     """
     columns = ("wavelen", "specie", "ion", "inte", "ei", "ek", "gi", "gk", "aki", "acc")
+    SOURCE_LIBRARY = "Main analytical list"
+    SOURCE_DATABASE = "Complete element database"
 
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
         self.title("Trace Lines")
+        self.last_query_lines = []
+        self.last_peak_matches = {}
+        self.last_tolerance = 0.0
         top = ttk.Frame(self); top.pack(fill="x", padx=6, pady=6)
         ttk.Label(top, text="Trace Species").grid(row=0, column=0, sticky="w", padx=3, pady=3)
-        self.species_var = tk.StringVar(value="Si")
+        self.species_var = tk.StringVar(value="")
         species_entry = ttk.Entry(top, textvariable=self.species_var, width=10)
         species_entry.grid(row=0, column=1, sticky="w", padx=3)
+        ttk.Label(top, text="Line source").grid(
+            row=0, column=2, sticky="w", padx=(8, 2)
+        )
+        self.source_var = tk.StringVar(value=self.SOURCE_LIBRARY)
+        source_box = ttk.Combobox(
+            top,
+            textvariable=self.source_var,
+            values=(self.SOURCE_LIBRARY, self.SOURCE_DATABASE),
+            width=27,
+            state="readonly",
+        )
+        source_box.grid(row=0, column=3, columnspan=2, sticky="w", padx=3)
         self.mode_var = tk.StringVar(value="Both")
-        ttk.Label(top, text="Mode").grid(row=0, column=2, sticky="w", padx=(8, 2))
-        for c, mode in enumerate(("I", "II", "Both", "All"), start=3):
+        ttk.Label(top, text="Mode").grid(row=0, column=5, sticky="w", padx=(8, 2))
+        for c, mode in enumerate(("I", "II", "Both", "All"), start=6):
             ttk.Radiobutton(top, text=mode, variable=self.mode_var, value=mode).grid(row=0, column=c, padx=3)
-        ttk.Label(top, text="Max Lines (all mode)").grid(row=0, column=7, sticky="w", padx=(16,3))
-        self.max_var = tk.StringVar(value="5")
-        ttk.Entry(top, textvariable=self.max_var, width=7).grid(row=0, column=8, sticky="w", padx=3)
-        ttk.Button(top, text="OK", command=self.trace).grid(row=0, column=9, padx=8)
-        ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=10, padx=3)
-        ttk.Button(top, text="Clear", command=self.clear).grid(row=0, column=11, padx=3)
+        ttk.Button(top, text="Find lines", command=self.trace).grid(row=0, column=10, padx=8)
+        ttk.Button(top, text="Assign", command=self.assign).grid(row=0, column=11, padx=3)
+        ttk.Button(top, text="Clear analysis", command=self.clear).grid(
+            row=0, column=12, padx=3
+        )
         add_context_help_button(
             top,
             self,
             "Trace Lines",
             (
-                "By default, the selected element is matched only to observed peaks already selected in the spectrum. "
-                "Disable 'Only near selected peaks' to browse all compatible database lines.\n\n"
-                "Assign transfers the displayed identifications to the analytical-line list."
+                "Choose 'Main analytical list' to use only the persistent curated list, or 'Complete element "
+                "database' to use every transition stored for that element across all acquired detector windows.\n\n"
+                "By default, either source is restricted to transitions for which a real measured local maximum is found. "
+                "Peak significance is evaluated against the noise of the complete detector window; untouched rows "
+                "preloaded from the analytical list are not treated as observations. When several theoretical lines "
+                "match the same maximum, the strongest database transition is retained. "
+                "'Max automatic lines' limits the final list after this physical ranking; increase it only when "
+                "you deliberately need weaker transitions. If one of the two strongest database transitions misses "
+                "the requested tolerance by a small residual calibration offset, it may use a 50% recovery margin "
+                "only when the observed peak is prominent in its detector window. "
+                "Disable 'Only lines with a measured peak' to browse every theoretical line from the chosen source.\n\n"
+                "Assign adds the matched measured maxima to the analytical-line list, so they can be fitted and integrated."
+                " 'Clear analysis' removes the current assignments, fitted areas and derived Saha/IRSAC/CF-LIBS "
+                "state, then restores a clean copy of the persistent main line library."
             ),
-        ).grid(row=0, column=12, padx=(8, 3))
+        ).grid(row=0, column=13, padx=(8, 3))
         self.selected_only_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             top,
-            text="Only near selected peaks",
+            text="Only lines with a measured peak",
             variable=self.selected_only_var,
         ).grid(row=1, column=0, columnspan=4, sticky="w", padx=3, pady=(5, 0))
         ttk.Label(top, text="Tolerance").grid(
@@ -2514,7 +2861,16 @@ class TraceLinesWindow(tk.Toplevel):
         ttk.Label(
             top, text=master.current_wavelength_unit_label()
         ).grid(row=1, column=6, sticky="w", pady=(5, 0))
-        self.info_var = tk.StringVar(value="")
+        ttk.Label(top, text="Max automatic lines").grid(
+            row=1, column=7, sticky="e", padx=(8, 2), pady=(5, 0)
+        )
+        self.max_lines_var = tk.StringVar(value="5")
+        ttk.Entry(top, textvariable=self.max_lines_var, width=5).grid(
+            row=1, column=8, sticky="w", padx=3, pady=(5, 0)
+        )
+        self.info_var = tk.StringVar(
+            value="Enter an element symbol, then click Find lines. Assign adds the matches to the analysis."
+        )
         tree_frame = ttk.Frame(self)
         self.tree = ttk.Treeview(tree_frame, columns=self.columns, show="headings")
         for c in self.columns:
@@ -2523,14 +2879,14 @@ class TraceLinesWindow(tk.Toplevel):
         tree_frame.pack(fill="both", expand=True, padx=6, pady=6)
         self.tree.bind("<Double-Button-1>", self._on_tree_double_click)
         self.tree.bind("<Delete>", self.delete_selected_elements)
-        species_entry.bind("<Double-Button-1>", lambda event: self.trace())
+        species_entry.bind("<Return>", lambda event: self.trace())
         ttk.Button(
             top,
             text="Remove element (Del)",
             command=self.delete_selected_elements,
-        ).grid(row=1, column=8, columnspan=4, sticky="e", padx=3, pady=(5, 0))
+        ).grid(row=1, column=10, columnspan=3, sticky="e", padx=3, pady=(5, 0))
         ttk.Label(top, textvariable=self.info_var).grid(
-            row=2, column=0, columnspan=13, sticky="w", padx=3, pady=(5, 0)
+            row=2, column=0, columnspan=14, sticky="w", padx=3, pady=(5, 0)
         )
         self.refresh()
         self.update_idletasks()
@@ -2540,6 +2896,7 @@ class TraceLinesWindow(tk.Toplevel):
         self.geometry(f"{max(900, required_width)}x460")
         self.minsize(required_width, 360)
         center_window(self, master)
+        species_entry.focus_set()
 
     def refresh(self, show_message=True):
         self.tree.delete(*self.tree.get_children())
@@ -2550,89 +2907,212 @@ class TraceLinesWindow(tk.Toplevel):
         element = self.species_var.get().strip().capitalize()
         if not element:
             return
+        self.last_query_lines = []
+        self.last_peak_matches = {}
+        self.last_tolerance = 0.0
         mode = self.mode_var.get()
-        # Use exactly the wavelength interval that is visible in the main plot
-        # at the moment the user presses OK.  This 
-        # avoids searching the full spectrum after a zoom.
+        source = self.source_var.get()
         view_xlim, view_ylim = self.master_app.current_plot_view()
         lo, hi = view_xlim
-        maxn = safe_int(self.max_var.get(), 20)
         wavelength_unit = getattr(self.master_app, "wavelength_unit", "angstrom")
-        ions = [1] if mode == "I" else [2] if mode == "II" else [1, 2]
+        ions = (
+            [1]
+            if mode == "I"
+            else [2]
+            if mode == "II"
+            else [1, 2]
+            if mode == "Both"
+            else None
+        )
         selected_only = bool(self.selected_only_var.get())
-        selected_wavelengths = []
+        max_automatic_lines = max(
+            1, safe_int(self.max_lines_var.get(), 5)
+        )
+        if source == self.SOURCE_DATABASE:
+            search_intervals = acquired_wavelength_intervals(self.master_app)
+            if not search_intervals:
+                search_intervals = [tuple(sorted((lo, hi)))]
+        else:
+            search_intervals = [tuple(sorted((lo, hi)))]
+        selected_wavelengths = selected_observed_peak_wavelengths(
+            self.master_app,
+            element,
+            allow_alternative_assignments=(source == self.SOURCE_DATABASE),
+        )
         if selected_only:
-            for selected_line in self.master_app.template_lines:
-                if _template_line_has_fit_error(selected_line):
-                    continue
-                selected_species = str(
-                    getattr(selected_line, "specie", "") or ""
-                ).strip().capitalize()
-                if selected_species and selected_species != element:
-                    continue
-                fitted = abs(
-                    safe_float(
-                        getattr(selected_line, "fitwavelen", 0.0), 0.0
-                    )
+            selected_wavelengths = [
+                wavelength
+                for wavelength in selected_wavelengths
+                if any(
+                    low <= wavelength <= high
+                    for low, high in search_intervals
                 )
-                wavelength = fitted or safe_float(
-                    getattr(selected_line, "wavelen", 0.0), 0.0
-                )
-                if min(lo, hi) <= wavelength <= max(lo, hi):
-                    selected_wavelengths.append(wavelength)
-            if not selected_wavelengths:
-                self.info_var.set(
-                    "No selected observed peak is inside the visible interval."
-                )
-                return
+            ]
         try:
             self.master_app.libs_db.filename = self.master_app.options.libs_db_file
-            if selected_only:
-                tolerance = max(
-                    0.0,
-                    safe_float(
-                        self.tolerance_var.get(),
-                        0.10 if wavelength_unit == "nm" else 1.0,
-                    ),
-                )
-                lines = self.master_app.libs_db.match_selected_lines(
+            tolerance = max(
+                0.0,
+                safe_float(
+                    self.tolerance_var.get(),
+                    0.10 if wavelength_unit == "nm" else 1.0,
+                ),
+            )
+            if source == self.SOURCE_LIBRARY:
+                lines = trace_lines_from_analytical_library(
+                    getattr(self.master_app, "analytical_line_library", []) or [],
                     element,
-                    selected_wavelengths,
-                    tolerance,
-                    ions=ions,
+                    ions,
+                    lo,
+                    hi,
                     wavelength_unit=wavelength_unit,
-                )
-            elif mode == "I":
-                lines = self.master_app.libs_db.trace_lines(
-                    element, lo, hi, ions=[1], max_lines=maxn,
-                    table="Datalibs", wavelength_unit=wavelength_unit,
-                )
-            elif mode == "II":
-                lines = self.master_app.libs_db.trace_lines(
-                    element, lo, hi, ions=[2], max_lines=maxn,
-                    table="Datalibs", wavelength_unit=wavelength_unit,
-                )
-            elif mode == "All":
-                lines = self.master_app.libs_db.trace_lines(
-                    element, lo, hi, ions=[1, 2], max_lines=maxn,
-                    table="Datalibs", wavelength_unit=wavelength_unit,
+                    selected_wavelengths=None,
+                    tolerance=tolerance,
                 )
             else:
-                lines = (
-                    self.master_app.libs_db.trace_lines(
-                        element, lo, hi, ions=[1], max_lines=maxn,
-                        table="Datalibs", wavelength_unit=wavelength_unit,
-                    ) +
-                    self.master_app.libs_db.trace_lines(
-                        element, lo, hi, ions=[2], max_lines=maxn,
-                        table="Datalibs", wavelength_unit=wavelength_unit,
-                    )
+                lines = []
+                seen = set()
+                for interval_low, interval_high in search_intervals:
+                    for line in self.master_app.libs_db.all_element_lines(
+                        element,
+                        interval_low,
+                        interval_high,
+                        ions=ions,
+                        wavelength_unit=wavelength_unit,
+                    ):
+                        key = (
+                            str(
+                                getattr(line, "specie", "") or ""
+                            ).strip().capitalize(),
+                            safe_int(getattr(line, "ion", 0), 0),
+                            round(
+                                safe_float(
+                                    getattr(line, "wavelen", 0.0), 0.0
+                                ),
+                                9,
+                            ),
+                        )
+                        if key not in seen:
+                            seen.add(key)
+                            lines.append(line)
+            peak_matches = {}
+            if selected_only:
+                ranked_transitions = sorted(
+                    (
+                        line
+                        for line in lines
+                        if safe_float(getattr(line, "inte", 0.0), 0.0) > 0.0
+                    ),
+                    key=lambda line: (
+                        safe_float(getattr(line, "inte", 0.0), 0.0),
+                        safe_float(getattr(line, "aki", 0.0), 0.0)
+                        * max(1, safe_int(getattr(line, "gk", 0), 0)),
+                    ),
+                    reverse=True,
                 )
+                strongest_transition_ids = {
+                    id(line) for line in ranked_transitions[:2]
+                }
+                measured_lines = []
+                for line in lines:
+                    match = automatic_trace_peak_match(
+                        self.master_app,
+                        line,
+                        tolerance,
+                        strong_transition=(
+                            id(line) in strongest_transition_ids
+                        ),
+                        wavelength_unit=wavelength_unit,
+                    )
+                    if match is None:
+                        nearby_selected = [
+                            wavelength
+                            for wavelength in selected_wavelengths
+                            if abs(line.wavelen - wavelength) <= tolerance
+                        ]
+                        if nearby_selected:
+                            observed = min(
+                                nearby_selected,
+                                key=lambda wavelength: abs(
+                                    line.wavelen - wavelength
+                                ),
+                            )
+                            match = {
+                                "wavelength": float(observed),
+                                "intensity": float(
+                                    self.master_app._active_spectrum_y_at(
+                                        observed
+                                    )
+                                ),
+                                "prominence": 0.0,
+                                "spectrum": None,
+                            }
+                    if match is not None:
+                        measured_lines.append(line)
+                        peak_matches[id(line)] = match
+                # A single measured maximum must not be labelled as several
+                # nearby theoretical transitions.  Prefer the transition
+                # carrying the strongest database intensity, then Aki*gk,
+                # and finally the closest wavelength.
+                best_by_peak = {}
+                for line in measured_lines:
+                    match = peak_matches[id(line)]
+                    peak_key = (
+                        id(match.get("spectrum")),
+                        round(safe_float(match.get("wavelength"), 0.0), 9),
+                    )
+                    relative_strength = max(
+                        0.0, safe_float(getattr(line, "inte", 0.0), 0.0)
+                    )
+                    transition_strength = max(
+                        0.0, safe_float(getattr(line, "aki", 0.0), 0.0)
+                    ) * max(1, safe_int(getattr(line, "gk", 0), 0))
+                    score = (
+                        1 if relative_strength > 0.0 else 0,
+                        relative_strength,
+                        transition_strength,
+                        -abs(
+                            safe_float(match.get("wavelength"), 0.0)
+                            - safe_float(getattr(line, "wavelen", 0.0), 0.0)
+                        ),
+                    )
+                    previous = best_by_peak.get(peak_key)
+                    if previous is None or score > previous[0]:
+                        best_by_peak[peak_key] = (score, line)
+                lines = [entry[1] for entry in best_by_peak.values()]
+                peak_matches = {
+                    id(line): peak_matches[id(line)]
+                    for line in lines
+                }
+                lines.sort(
+                    key=lambda line: (
+                        1
+                        if safe_float(getattr(line, "inte", 0.0), 0.0) > 0.0
+                        else 0,
+                        max(
+                            0.0,
+                            safe_float(getattr(line, "inte", 0.0), 0.0),
+                        ),
+                        max(
+                            0.0,
+                            safe_float(getattr(line, "aki", 0.0), 0.0),
+                        ) * max(1, safe_int(getattr(line, "gk", 0), 0)),
+                        safe_float(
+                            peak_matches[id(line)].get("prominence"), 0.0
+                        ),
+                    ),
+                    reverse=True,
+                )
+                lines = lines[:max_automatic_lines]
+                peak_matches = {
+                    id(line): peak_matches[id(line)]
+                    for line in lines
+                }
             # Enrich each traced line with complete transition data when available.
             enriched = []
+            enriched_peak_matches = {}
             for l in lines:
                 try:
-                    enriched.append(
+                    enriched_line = (
                         self.master_app.libs_db.enrich_line_from_element_table(
                             l,
                             tolerance=0.005 if wavelength_unit == "nm" else 0.05,
@@ -2640,12 +3120,20 @@ class TraceLinesWindow(tk.Toplevel):
                         )
                     )
                 except Exception:
-                    enriched.append(l)
+                    enriched_line = l
+                enriched.append(enriched_line)
+                if id(l) in peak_matches:
+                    enriched_peak_matches[id(enriched_line)] = peak_matches[id(l)]
             lines = [
                 line
                 for line in enriched
                 if wavelength_is_acquired(self.master_app, line.wavelen)
             ]
+            peak_matches = {
+                id(line): enriched_peak_matches[id(line)]
+                for line in lines
+                if id(line) in enriched_peak_matches
+            }
         except Exception as e:
             _showerror(self, "Trace Lines", str(e))
             return
@@ -2658,7 +3146,10 @@ class TraceLinesWindow(tk.Toplevel):
                 if not (
                     str(getattr(marker, "specie", "")).strip().capitalize()
                     == element
-                    and safe_int(getattr(marker, "ion", 0), 0) in ions
+                    and (
+                        ions is None
+                        or safe_int(getattr(marker, "ion", 0), 0) in ions
+                    )
                 )
             ]
         for l in lines:
@@ -2666,6 +3157,9 @@ class TraceLinesWindow(tk.Toplevel):
                 existing.append(l)
         existing.sort(key=lambda x: x.wavelen)
         self.master_app.trace_markers = existing
+        self.last_query_lines = list(lines)
+        self.last_peak_matches = dict(peak_matches)
+        self.last_tolerance = float(tolerance)
         if lines:
             selected = getattr(self.master_app, "analysis_elements", None)
             if selected is None:
@@ -2680,26 +3174,59 @@ class TraceLinesWindow(tk.Toplevel):
         self.master_app.restore_plot_view(view_xlim, view_ylim)
         unit_label = self.master_app.current_wavelength_unit_label()
         if selected_only:
+            measured_count = len(
+                {
+                    round(match["wavelength"], 9)
+                    for match in self.last_peak_matches.values()
+                }
+            )
+            recovered_count = sum(
+                1
+                for match in self.last_peak_matches.values()
+                if match.get("recovered_strong_transition")
+            )
+            recovery_text = (
+                f"; {recovered_count} strong transition(s) recovered from a "
+                "small residual wavelength offset"
+                if recovered_count
+                else ""
+            )
             self.info_var.set(
-                f"Matched {len(lines)} {element} candidate(s) to "
-                f"{len(selected_wavelengths)} selected peak(s) within "
+                f"Matched {len(lines)} {element} candidate(s) from "
+                f"{source.lower()} to {measured_count} measured peak(s) within "
                 f"+/-{tolerance:g} {unit_label}; total traced lines: "
-                f"{len(existing)}."
+                f"{len(existing)} (automatic limit {max_automatic_lines})"
+                f"{recovery_text}."
             )
         else:
+            if source == self.SOURCE_DATABASE:
+                scope = f"{len(search_intervals)} acquired detector interval(s)"
+            else:
+                scope = (
+                    f"visible interval {min(lo,hi):.2f}-{max(lo,hi):.2f} "
+                    f"{unit_label}"
+                )
             self.info_var.set(
-                f"Traced {len(lines)} {element} lines ({mode}) in the visible "
-                f"interval {min(lo,hi):.2f}-{max(lo,hi):.2f} {unit_label}; "
+                f"Traced {len(lines)} {element} lines from {source.lower()} "
+                f"({mode}) in {scope}; "
                 f"total traced lines: {len(existing)}."
             )
         self.master_app.status(self.info_var.get())
 
     def assign(self):
-        n = self.master_app.assign_traced_lines()
+        n = self.master_app.assign_traced_lines(
+            self.last_query_lines,
+            peak_matches=self.last_peak_matches,
+            tolerance=self.last_tolerance,
+        )
         self.refresh()
+        fit_ready = safe_int(
+            getattr(self.master_app, "last_trace_fit_ready_count", 0),
+            0,
+        )
         self.info_var.set(
-            f"Assign: {n} analytical lines assigned within Range = "
-            f"{self.master_app.options.search_range} "
+            f"Assign: {n} transition(s) identified; {fit_ready} measured "
+            f"peak(s) ready for Auto Fit within +/-{self.last_tolerance:g} "
             f"{self.master_app.current_wavelength_unit_label()}."
         )
 
@@ -2753,14 +3280,59 @@ class TraceLinesWindow(tk.Toplevel):
         return "break"
 
     def clear(self):
-        self.master_app.trace_markers = []
-        self.master_app.analysis_elements = set()
-        self.master_app.last_saha_boltzmann = None
-        invalidate_self_absorption_analysis(self.master_app)
-        self.master_app.invalidate_cflibs_results()
+        previous_count, library_count = clear_current_line_analysis(
+            self.master_app
+        )
         self.refresh()
         self.master_app.redraw(preserve_view=True)
-        self.master_app.status("Trace Lines: marcatori cancellati")
+        self.info_var.set(
+            f"Analysis cleared: {previous_count} sample line(s) removed; "
+            f"main library restored with {library_count} clean line(s)."
+        )
+        self.master_app.status(self.info_var.get())
+
+
+def trace_lines_from_analytical_library(
+    library,
+    element,
+    ions,
+    xmin,
+    xmax,
+    *,
+    wavelength_unit="nm",
+    selected_wavelengths=None,
+    tolerance=0.0,
+):
+    """Return curated element lines; ``ions=None`` includes every stage."""
+    element = str(element or "").strip().capitalize()
+    ion_filter = (
+        None
+        if ions is None
+        else {safe_int(ion, 0) for ion in ions}
+    )
+    low, high = sorted((float(xmin), float(xmax)))
+    use_angstrom = str(wavelength_unit or "").strip().lower() in (
+        "a", "å", "angstrom", "angström",
+    )
+    selected = [float(value) for value in (selected_wavelengths or [])]
+    out = []
+    for line in library or []:
+        species = str(getattr(line, "specie", "") or "").strip().capitalize()
+        ion = safe_int(getattr(line, "ion", 0), 0)
+        wavelength_nm = safe_float(getattr(line, "wavelen", 0.0), 0.0)
+        wavelength = wavelength_nm * 10.0 if use_angstrom else wavelength_nm
+        if (
+            species != element
+            or (ion_filter is not None and ion not in ion_filter)
+            or not (low <= wavelength <= high)
+        ):
+            continue
+        if selected and not any(
+            abs(wavelength - observed) <= tolerance for observed in selected
+        ):
+            continue
+        out.append(AtomicLine(wavelength, species, ion))
+    return sorted(out, key=lambda line: (line.wavelen, line.ion))
 
 
 class AutoElementIdentificationWindow(tk.Toplevel):
@@ -3680,28 +4252,95 @@ class VerticalShiftWindow(tk.Toplevel):
         self.destroy()
 
 
+def apply_wavelength_offset_to_spectra(spectra, shift):
+    """Apply one wavelength offset while preserving every raw source axis."""
+    shift = float(shift)
+    shifted = 0
+    for spectrum in list(spectra or []):
+        spectrum.x = [float(x) + shift for x in spectrum.x]
+        shifted_sources = []
+        for source_window in spectrum.source_windows:
+            raw_axis = _source_raw_axis(source_window)
+            shifted_sources.append(
+                SpectrumSourceWindow(
+                    tuple(float(x) + shift for x in source_window.x),
+                    tuple(source_window.y),
+                    source_window.name,
+                    source_window.filename,
+                    source_window.dark_corrected,
+                    source_window.dark_source,
+                    source_window.signal_column,
+                    source_window.dark_columns,
+                    raw_axis,
+                    safe_float(
+                        getattr(source_window, "calibration_intercept", 0.0),
+                        0.0,
+                    )
+                    + shift,
+                    safe_float(
+                        getattr(source_window, "calibration_slope", 1.0),
+                        1.0,
+                    ),
+                    str(
+                        getattr(source_window, "calibration_model", "")
+                        or "manual-offset"
+                    ),
+                    safe_float(
+                        getattr(source_window, "calibration_rms", 0.0),
+                        0.0,
+                    ),
+                    tuple(getattr(source_window, "replicate_files", ()) or ()),
+                )
+            )
+        spectrum.source_windows = tuple(shifted_sources)
+        spectrum.wavelength_calibration_status = "temporary-offset"
+        spectrum.wavelength_calibration_message = (
+            f"Temporary wavelength offset applied: {shift:+.6g}."
+        )
+        shifted += 1
+    return shifted
+
+
+def shift_measured_fit_centers(lines, shift):
+    """Move measured fit centers without changing NIST reference wavelengths."""
+    changed = False
+    for line in list(lines or []):
+        if line.fitwavelen:
+            fitwavelen = safe_float(getattr(line, "fitwavelen", 0.0), 0.0)
+            sign = -1.0 if fitwavelen < 0 else 1.0
+            line.fitwavelen = sign * (abs(fitwavelen) + float(shift))
+            changed = True
+    return changed
+
+
 class SpectrumShiftWindow(tk.Toplevel):
-    """Shift wavelength dialog."""
+    """Apply a temporary offset to the wavelength axis of loaded spectra."""
     def __init__(self, master: "MainWindow"):
         super().__init__(master)
         self.master_app = master
-        self.title("Shift")
+        self.title("Temporary Wavelength Shift")
         self.resizable(False, False)
         self.transient(master)
         self.capture_target = None
         self.protocol("WM_DELETE_WINDOW", self.cancel)
 
-        ttk.Label(self, text="Move Point at:").grid(row=0, column=0, sticky="e", padx=8, pady=(10, 4))
-        ttk.Label(self, text="to:").grid(row=1, column=0, sticky="e", padx=8, pady=4)
+        ttk.Label(self, text="Observed wavelength:").grid(row=0, column=0, sticky="e", padx=8, pady=(10, 4))
+        ttk.Label(self, text="Target wavelength (NIST):").grid(row=1, column=0, sticky="e", padx=8, pady=4)
         self.source_var = tk.StringVar(value="")
         self.target_var = tk.StringVar(value="")
         ttk.Entry(self, textvariable=self.source_var, width=16).grid(row=0, column=1, padx=4, pady=(10, 4))
         ttk.Entry(self, textvariable=self.target_var, width=16).grid(row=1, column=1, padx=4, pady=4)
         ttk.Button(self, text="Pick", command=lambda: self.begin_capture("source")).grid(row=0, column=2, rowspan=2, padx=(4, 8), pady=(10, 4))
 
-        self.shift_identifications_var = tk.BooleanVar(value=False)
         self.shift_all_spectra_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self, text="Shift Identifications", variable=self.shift_identifications_var).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 2))
+        ttk.Label(
+            self,
+            text=(
+                "Temporary: affects only spectra currently loaded. Saved per-window "
+                "profiles and NIST wavelengths are not changed."
+            ),
+            wraplength=430,
+        ).grid(row=2, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 2))
         ttk.Checkbutton(self, text="Shift all spectra", variable=self.shift_all_spectra_var).grid(row=3, column=0, columnspan=3, sticky="w", padx=8, pady=2)
 
         buttons = ttk.Frame(self)
@@ -3716,7 +4355,10 @@ class SpectrumShiftWindow(tk.Toplevel):
         self.master_app.shift_capture_window = self
         self._set_capture_topmost(True)
         self._raise_dialog()
-        self.master_app.status("Shift: click the spectrum to set " + ("Move Point at" if target == "source" else "to"))
+        self.master_app.status(
+            "Temporary wavelength shift: click the spectrum to set "
+            + ("the observed wavelength" if target == "source" else "the target wavelength")
+        )
 
     def set_from_plot(self, wavelength, intensity=None):
         if self.capture_target == "source":
@@ -3725,14 +4367,18 @@ class SpectrumShiftWindow(tk.Toplevel):
             self.master_app.shift_capture_window = self
             self._set_capture_topmost(True)
             self._raise_dialog()
-            self.master_app.status("Shift: click the spectrum to set target wavelength")
+            self.master_app.status(
+                "Temporary wavelength shift: click the spectrum to set the target wavelength"
+            )
         elif self.capture_target == "target":
             self.target_var.set(f"{wavelength:.6g}")
             self.capture_target = None
             self.master_app.shift_capture_window = None
             self._set_capture_topmost(False)
             self._raise_dialog()
-            self.master_app.status("Shift: source and target wavelengths selected")
+            self.master_app.status(
+                "Temporary wavelength shift: observed and target wavelengths selected"
+            )
 
     def _set_capture_topmost(self, enabled):
         try:
@@ -3751,78 +4397,37 @@ class SpectrumShiftWindow(tk.Toplevel):
             except Exception:
                 pass
 
-    def _shift_identifications(self, shift):
-        for line in self.master_app.template_lines:
-            line.wavelen += shift
-            if line.asswavelen:
-                line.asswavelen += shift
-            if line.fitwavelen:
-                fitwavelen = safe_float(getattr(line, "fitwavelen", 0.0), 0.0)
-                sign = -1.0 if fitwavelen < 0 else 1.0
-                line.fitwavelen = sign * (abs(fitwavelen) + shift)
-        for markers_name in ("element_markers", "trace_markers"):
-            for line in getattr(self.master_app, markers_name, []):
-                line.wavelen += shift
+    def _shift_measured_fit_centers(self, shift):
+        """Keep measured fit centers aligned while preserving NIST references."""
+        return shift_measured_fit_centers(self.master_app.template_lines, shift)
 
     def ok(self):
         if not self.master_app.spectra:
-            self.master_app.status("Shift: no spectrum loaded")
-            _showinfo(self, "Shift", "Load a spectrum before shifting.")
+            self.master_app.status("Temporary wavelength shift: no spectrum loaded")
+            _showinfo(self, "Temporary Wavelength Shift", "Load a spectrum before shifting.")
             return
         source = safe_float(self.source_var.get(), None)
         target = safe_float(self.target_var.get(), None)
         if source is None or target is None:
-            _showerror(self, "Shift", "Enter both source and target wavelengths.")
+            _showerror(
+                self,
+                "Temporary Wavelength Shift",
+                "Enter both observed and target wavelengths.",
+            )
             return
         shift = target - source
         if self.shift_all_spectra_var.get():
             spectra = [sp for sp in self.master_app.spectra if getattr(sp, "visible", True)]
         else:
             spectra = [self.master_app.spectra[0]]
-        for sp in spectra:
-            sp.x = [x + shift for x in sp.x]
-            shifted_sources = []
-            for source_window in sp.source_windows:
-                raw_axis = _source_raw_axis(source_window)
-                shifted_sources.append(
-                    SpectrumSourceWindow(
-                        tuple(x + shift for x in source_window.x),
-                        tuple(source_window.y),
-                        source_window.name,
-                        source_window.filename,
-                        source_window.dark_corrected,
-                        source_window.dark_source,
-                        source_window.signal_column,
-                        source_window.dark_columns,
-                        raw_axis,
-                        safe_float(
-                            getattr(source_window, "calibration_intercept", 0.0),
-                            0.0,
-                        )
-                        + shift,
-                        safe_float(
-                            getattr(source_window, "calibration_slope", 1.0),
-                            1.0,
-                        ),
-                        str(
-                            getattr(
-                                source_window, "calibration_model", ""
-                            )
-                            or "manual-offset"
-                        ),
-                        safe_float(
-                            getattr(source_window, "calibration_rms", 0.0),
-                            0.0,
-                        ),
-                        tuple(getattr(source_window, "replicate_files", ()) or ()),
-                    )
-                )
-            sp.source_windows = tuple(shifted_sources)
-        if self.shift_identifications_var.get():
-            self._shift_identifications(shift)
+        apply_wavelength_offset_to_spectra(spectra, shift)
+        if self._shift_measured_fit_centers(shift):
             self.master_app.notify_template_changed(redraw=False)
         self.master_app.redraw(preserve_view=True)
-        self.master_app.status(f"Shift: applied {shift:.6g} to {len(spectra)} spectrum/spectra")
+        self.master_app.status(
+            f"Temporary wavelength shift: applied {shift:.6g} nm to "
+            f"{len(spectra)} spectrum/spectra; NIST references unchanged"
+        )
         self.cancel()
 
     def cancel(self):
@@ -3830,6 +4435,397 @@ class SpectrumShiftWindow(tk.Toplevel):
             self.master_app.shift_capture_window = None
         self._set_capture_topmost(False)
         self.destroy()
+
+
+MERCURY_REFERENCE_LINES_NM = (
+    253.652100,
+    296.728296,
+    302.150391,
+    312.567407,
+    365.015796,
+    404.656494,
+    435.833496,
+    546.075000,
+    576.960986,
+    579.066992,
+    690.745996,
+)
+
+
+class MercuryWavelengthCalibrationWindow(tk.Toplevel):
+    """Dedicated single-line Hg wavelength check and offset calibration."""
+
+    def __init__(self, master: "MainWindow"):
+        super().__init__(master)
+        self.master_app = master
+        self.mercury_spectrum = None
+        self.profile = None
+        self.title("Mercury Wavelength Check")
+        self.geometry("920x650")
+        self.minsize(820, 560)
+
+        controls = ttk.Frame(self)
+        controls.pack(fill="x", padx=10, pady=(10, 5))
+        ttk.Button(
+            controls,
+            text="Load Hg spectrum...",
+            command=self.load_spectrum,
+        ).grid(row=0, column=0, padx=(0, 6), pady=3, sticky="w")
+        self.file_var = tk.StringVar(value="No Hg spectrum loaded")
+        ttk.Label(controls, textvariable=self.file_var).grid(
+            row=0, column=1, columnspan=5, padx=4, pady=3, sticky="w"
+        )
+
+        ttk.Label(controls, text="Hg I reference (NIST, nm)").grid(
+            row=1, column=0, padx=(0, 4), pady=3, sticky="w"
+        )
+        self.reference_var = tk.StringVar(value="546.075000")
+        self.reference_box = ttk.Combobox(
+            controls,
+            textvariable=self.reference_var,
+            values=tuple(f"{value:.6f}" for value in MERCURY_REFERENCE_LINES_NM),
+            width=17,
+        )
+        self.reference_box.grid(row=1, column=1, padx=4, pady=3, sticky="w")
+        ttk.Label(controls, text="Maximum shift (nm)").grid(
+            row=1, column=2, padx=(14, 4), pady=3, sticky="e"
+        )
+        self.max_shift_var = tk.StringVar(value="1.0")
+        ttk.Entry(controls, textvariable=self.max_shift_var, width=9).grid(
+            row=1, column=3, padx=4, pady=3, sticky="w"
+        )
+        ttk.Button(
+            controls,
+            text="Calculate shift",
+            command=self.calculate,
+        ).grid(row=1, column=4, padx=(12, 4), pady=3)
+        add_context_help_button(
+            controls,
+            self,
+            "Mercury wavelength check",
+            (
+                "Load a mercury-lamp spectrum acquired with the spectrometer to be checked. "
+                "The file remains separate from the analytical sample. Select the matching Hg I "
+                "NIST wavelength and calculate the center. A one-line result is an offset only; "
+                "it cannot determine a wavelength-dependent scale error."
+            ),
+        ).grid(row=1, column=5, padx=(8, 0))
+        controls.columnconfigure(1, weight=1)
+
+        result = ttk.LabelFrame(self, text="Single-line result")
+        result.pack(fill="x", padx=10, pady=5)
+        self.observed_var = tk.StringVar(value="Observed center: --")
+        self.shift_var = tk.StringVar(value="Offset: --")
+        self.quality_var = tk.StringVar(value="Peak prominence / SNR: --")
+        ttk.Label(result, textvariable=self.observed_var).grid(
+            row=0, column=0, padx=8, pady=5, sticky="w"
+        )
+        ttk.Label(result, textvariable=self.shift_var).grid(
+            row=0, column=1, padx=8, pady=5, sticky="w"
+        )
+        ttk.Label(result, textvariable=self.quality_var).grid(
+            row=0, column=2, padx=8, pady=5, sticky="w"
+        )
+
+        plot_frame = ttk.Frame(self)
+        plot_frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.fig = self.ax = self.canvas = None
+        if Figure is not None and FigureCanvasTkAgg is not None:
+            self.fig = Figure(figsize=(8.5, 4.2), dpi=100)
+            self.ax = self.fig.add_subplot(111)
+            self.canvas = FigureCanvasTkAgg(self.fig, master=plot_frame)
+            self.canvas.get_tk_widget().pack(fill="both", expand=True)
+        else:
+            ttk.Label(
+                plot_frame,
+                text="Matplotlib is not available; numerical calibration remains usable.",
+            ).pack(fill="both", expand=True, padx=10, pady=30)
+
+        actions = ttk.Frame(self)
+        actions.pack(fill="x", padx=10, pady=(5, 10))
+        self.apply_button = ttk.Button(
+            actions,
+            text="Apply temporarily to loaded spectra",
+            command=self.apply_to_loaded,
+            state="disabled",
+        )
+        self.apply_button.pack(side="left", padx=3)
+        self.save_button = ttk.Button(
+            actions,
+            text="Save offset for matching window",
+            command=self.save_profile,
+            state="disabled",
+        )
+        self.save_button.pack(side="left", padx=3)
+        ttk.Button(actions, text="Close", command=self.destroy).pack(
+            side="right", padx=3
+        )
+        self.info_var = tk.StringVar(
+            value="Load an Hg spectrum recorded on the raw wavelength axis."
+        )
+        ttk.Label(self, textvariable=self.info_var, wraplength=880).pack(
+            fill="x", padx=12, pady=(0, 8)
+        )
+        self._draw_plot()
+        center_window(self, master)
+
+    @staticmethod
+    def _parse_reference(text):
+        match = re.search(
+            r"[-+]?(?:\d+(?:[\.,]\d*)?|[\.,]\d+)(?:[Ee][-+]?\d+)?",
+            str(text or ""),
+        )
+        if not match:
+            return None
+        value = safe_float(match.group(0).replace(",", "."), None)
+        return value if value is not None and value > 0.0 else None
+
+    def _database_references(self, low, high, margin):
+        try:
+            self.master_app.libs_db.filename = self.master_app.options.libs_db_file
+            lines = self.master_app.libs_db.all_element_lines(
+                "Hg",
+                low - margin,
+                high + margin,
+                ions=[1],
+                wavelength_unit="nm",
+            )
+        except Exception:
+            lines = []
+        candidates = [line for line in lines if safe_float(line.inte, 0.0) > 0.0]
+        candidates.sort(
+            key=lambda line: (
+                safe_float(line.inte, 0.0),
+                abs(safe_float(line.aki, 0.0)) * max(1, safe_int(line.gk, 0)),
+            ),
+            reverse=True,
+        )
+        values = []
+        for line in candidates:
+            wavelength = safe_float(line.wavelen, 0.0)
+            if wavelength > 0.0 and not any(abs(wavelength - old) < 1.0e-7 for old in values):
+                values.append(wavelength)
+        return values
+
+    def load_spectrum(self):
+        filename = filedialog.askopenfilename(
+            parent=_prepare_messagebox_parent(self),
+            title="Load mercury spectrum (raw wavelength axis)",
+            initialdir=remembered_initial_dir(self.master_app.options),
+            filetypes=SPECTRUM_FILETYPES,
+        )
+        if not filename:
+            return False
+        remember_working_dir(self.master_app.options, filename)
+        try:
+            spectrum = load_spectrum_for_open(filename, self.master_app.options)
+            self.master_app.apply_auto_offset_if_enabled(spectrum)
+            spectrum.capture_source()
+        except Exception as exc:
+            _showerror(self, "Mercury spectrum", str(exc))
+            return False
+        finite_x = [float(value) for value in spectrum.x if math.isfinite(float(value))]
+        if not finite_x:
+            _showerror(self, "Mercury spectrum", "The file contains no valid wavelength samples.")
+            return False
+        if max(finite_x) > 1500.0:
+            _showerror(
+                self,
+                "Mercury spectrum",
+                "The Hg calibration tool requires a wavelength axis in nm. Convert the source file from Å to nm first.",
+            )
+            return False
+        self.mercury_spectrum = spectrum
+        self.profile = None
+        self.file_var.set(Path(filename).name)
+        self.apply_button.configure(state="disabled")
+        self.save_button.configure(state="disabled")
+        max_shift = max(0.0, safe_float(self.max_shift_var.get(), 1.0))
+        references = self._database_references(min(finite_x), max(finite_x), max_shift)
+        if references:
+            self.reference_box.configure(
+                values=tuple(f"{value:.6f}" for value in references)
+            )
+            self.reference_var.set(f"{references[0]:.6f}")
+        self.observed_var.set("Observed center: --")
+        self.shift_var.set("Offset: --")
+        self.quality_var.set("Peak prominence / SNR: --")
+        self.info_var.set(
+            "Hg spectrum loaded on its raw wavelength axis; saved sample calibrations were not applied."
+        )
+        self._draw_plot()
+        return True
+
+    @staticmethod
+    def _noise_sigma(y_values):
+        if np is None:
+            return 0.0
+        values = np.asarray(y_values, dtype=float)
+        values = values[np.isfinite(values)]
+        if values.size < 3:
+            return 0.0
+        differences = np.diff(values)
+        median = float(np.median(differences))
+        mad = float(np.median(np.abs(differences - median)))
+        return 1.4826 * mad / math.sqrt(2.0) if mad > 0.0 else 0.0
+
+    def calculate(self):
+        if self.mercury_spectrum is None:
+            _showinfo(self, "Mercury wavelength check", "Load an Hg spectrum first.")
+            return False
+        reference = self._parse_reference(self.reference_var.get())
+        if reference is None:
+            _showerror(self, "Mercury wavelength check", "Enter a valid Hg I NIST wavelength in nm.")
+            return False
+        max_shift = max(0.0, safe_float(self.max_shift_var.get(), 1.0))
+        if max_shift <= 0.0:
+            _showerror(self, "Mercury wavelength check", "Maximum shift must be positive.")
+            return False
+        spectrum = self.mercury_spectrum
+        try:
+            profile = estimate_window_calibration(
+                spectrum.x,
+                spectrum.y,
+                [reference],
+                name=spectrum.filename or spectrum.name,
+                max_shift=max_shift,
+                model="offset",
+            )
+        except Exception as exc:
+            _showerror(self, "Mercury wavelength check", str(exc))
+            return False
+        anchors = [anchor for anchor in profile.anchors if anchor.used]
+        if not anchors:
+            _showerror(self, "Mercury wavelength check", "No reliable Hg peak was identified.")
+            return False
+        anchor = anchors[0]
+        noise = self._noise_sigma(spectrum.y)
+        snr = anchor.prominence / noise if noise > 0.0 else math.inf
+        self.profile = profile
+        self.observed_var.set(f"Observed center: {anchor.observed:.6f} nm")
+        self.shift_var.set(f"Offset: {profile.intercept:+.6f} nm")
+        snr_text = f"{snr:.1f}" if math.isfinite(snr) else "not available"
+        self.quality_var.set(
+            f"Peak prominence / SNR: {anchor.prominence:.6g} / {snr_text}"
+        )
+        self.info_var.set(
+            "Single-line Hg offset calculated. This result corrects a constant displacement only, not wavelength scale or nonlinearity."
+        )
+        self.apply_button.configure(state="normal")
+        self.save_button.configure(state="normal")
+        self._draw_plot(anchor=anchor, reference=reference)
+        return True
+
+    def _draw_plot(self, anchor=None, reference=None):
+        if self.ax is None or self.canvas is None:
+            return
+        self.ax.clear()
+        spectrum = self.mercury_spectrum
+        if spectrum is None:
+            self.ax.set_title("Load an Hg spectrum")
+            self.ax.set_xlabel("Wavelength (nm)")
+            self.ax.set_ylabel("Intensity")
+            self.canvas.draw_idle()
+            return
+        self.ax.plot(spectrum.x, spectrum.y, color="black", linewidth=1.0, label="Hg spectrum")
+        if anchor is not None:
+            self.ax.axvline(anchor.observed, color="#d97706", linewidth=1.6, label="Observed center")
+        if reference is not None:
+            self.ax.axvline(reference, color="#15803d", linestyle="--", linewidth=1.4, label="NIST reference")
+            half_width = max(0.5, 1.5 * abs(safe_float(self.max_shift_var.get(), 1.0)))
+            self.ax.set_xlim(reference - half_width, reference + half_width)
+        self.ax.set_xlabel("Raw wavelength (nm)")
+        self.ax.set_ylabel("Intensity")
+        self.ax.grid(True, alpha=0.25)
+        self.ax.legend(loc="best")
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+
+    def apply_to_loaded(self):
+        if self.profile is None:
+            _showinfo(self, "Mercury wavelength check", "Calculate the Hg offset first.")
+            return False
+        spectra = [
+            spectrum
+            for spectrum in list(self.master_app.spectra or [])
+            if getattr(spectrum, "visible", True)
+        ]
+        if not spectra:
+            _showinfo(self, "Mercury wavelength check", "Load the sample spectra before applying the offset.")
+            return False
+        calibrated = [
+            spectrum
+            for spectrum in spectra
+            if str(getattr(spectrum, "wavelength_calibration_status", "") or "")
+            not in {"", "raw", "unmatched"}
+        ]
+        warning = ""
+        if calibrated:
+            warning = (
+                f"\n\n{len(calibrated)} spectrum/spectra already report a wavelength correction. "
+                "The Hg offset will be added to the current axes."
+            )
+        if not _askyesno(
+            self,
+            "Apply Hg offset",
+            f"Apply {self.profile.intercept:+.6f} nm to {len(spectra)} loaded spectrum/spectra?{warning}",
+        ):
+            return False
+        unit = self.master_app.current_wavelength_unit_label()
+        shift = self.profile.intercept if unit == "nm" else 10.0 * self.profile.intercept
+        shifted = apply_wavelength_offset_to_spectra(spectra, shift)
+        if shift_measured_fit_centers(self.master_app.template_lines, shift):
+            self.master_app.notify_template_changed(redraw=False)
+        self.master_app.invalidate_cflibs_results()
+        invalidate_self_absorption_analysis(self.master_app)
+        self.master_app.redraw(preserve_view=True)
+        self.master_app.status(
+            f"Hg single-line offset applied temporarily: {shift:+.6g} {unit} to {shifted} spectrum/spectra"
+        )
+        self.apply_button.configure(state="disabled")
+        self.info_var.set(
+            "Hg offset applied once to the currently loaded spectra. It was not saved as a persistent profile."
+        )
+        return True
+
+    def save_profile(self):
+        if self.profile is None:
+            _showinfo(self, "Mercury wavelength check", "Calculate the Hg offset first.")
+            return False
+        existing = list(self.master_app.wavelength_calibration_profiles())
+        probe = [self.profile.raw_min, self.profile.raw_max]
+        conflicts = [
+            profile
+            for profile in existing
+            if calibration_for_window([profile], probe, self.profile.name) is not None
+        ]
+        if conflicts and not _askyesno(
+            self,
+            "Replace matching calibration",
+            (
+                f"{len(conflicts)} saved calibration profile(s) match this wavelength window. "
+                "Replace them with the Hg single-line offset?"
+            ),
+        ):
+            return False
+        profiles = [profile for profile in existing if profile not in conflicts]
+        profiles.append(self.profile)
+        profiles.sort(key=lambda profile: (profile.raw_min, profile.raw_max, profile.name))
+        self.master_app.options.wavelength_calibrations = serialize_calibrations(profiles)
+        self.master_app.options.auto_wavelength_calibration = True
+        self.master_app.options.auto_shift = 0.0
+        path = save_pylibs_ini(self.master_app.options)
+        calibration_window = getattr(self.master_app, "wavelength_calibration_window", None)
+        if calibration_window is not None and calibration_window.winfo_exists():
+            calibration_window.profiles = list(profiles)
+            calibration_window.refresh()
+        self.master_app.status(
+            f"Hg offset profile saved in {path}; matching future windows use it automatically"
+        )
+        self.info_var.set(
+            f"Hg offset saved in {Path(path).name}. Replaced {len(conflicts)} compatible profile(s)."
+        )
+        return True
 
 
 class WavelengthCalibrationWindow(tk.Toplevel):
@@ -4002,11 +4998,11 @@ class WavelengthCalibrationWindow(tk.Toplevel):
         buttons = ttk.Frame(self)
         buttons.pack(fill="x", padx=10, pady=(4, 10))
         ttk.Button(
-            buttons, text="Apply to loaded spectra", command=self.apply_profiles
+            buttons, text="Apply to current spectra", command=self.apply_profiles
         ).pack(side="left", padx=3)
         ttk.Button(
             buttons,
-            text="Apply and remember",
+            text="Apply and use for future spectra",
             command=lambda: self.apply_profiles(save=True),
         ).pack(side="left", padx=3)
         ttk.Button(
@@ -4454,8 +5450,8 @@ class WavelengthCalibrationWindow(tk.Toplevel):
             )
         else:
             self.info_var.set(
-                "Calibration applied for this session. Use 'Apply and remember' "
-                "after reviewing the residuals."
+                "Calibration applied to the current spectra. Use 'Apply and use for "
+                "future spectra' after reviewing the residuals."
             )
         self.master_app.status(
             f"Per-window wavelength calibration applied ({len(self.profiles)} profiles)"
@@ -7216,8 +8212,8 @@ def _irsac_configuration_mismatch(app: "MainWindow") -> str:
         return ""
     workflow = getattr(app, "last_self_absorption_result", None)
     if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
-        if getattr(app, "irsac_algorithm", "IRSAC1") != "IRSAC2":
-            return "IRSAC2 factors are applied while IRSAC1 is selected"
+        if getattr(app, "irsac_algorithm", "IRSAC2") != "IRSAC2":
+            return "IRSAC2 factors do not match the active correction workflow"
         if not getattr(app, "last_irsac2_result", None):
             return "the applied IRSAC2 result is missing"
         return ""
@@ -7266,8 +8262,8 @@ def _self_absorption_quantification_blocker(app: "MainWindow") -> str:
         return ""
     workflow = getattr(app, "last_self_absorption_result", None)
     if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
-        if getattr(app, "irsac_algorithm", "IRSAC1") != "IRSAC2":
-            return "IRSAC2 factors are applied while IRSAC1 is selected"
+        if getattr(app, "irsac_algorithm", "IRSAC2") != "IRSAC2":
+            return "IRSAC2 factors do not match the active correction workflow"
         if not getattr(app, "last_irsac2_result", None):
             return "the applied IRSAC2 result is missing"
         invalid = [
@@ -8490,6 +9486,31 @@ def _template_line_intensity(line: TemplateLine) -> float:
     return inte
 
 
+def _aki_passes_threshold(app: "MainWindow", aki: float) -> bool:
+    """Return whether a transition probability passes the configured filter."""
+    value = safe_float(aki, 0.0)
+    threshold = max(
+        0.0,
+        safe_float(
+            getattr(getattr(app, "options", None), "aki_threshold", 1.0e5),
+            1.0e5,
+        ),
+    )
+    return math.isfinite(value) and value != 0.0 and abs(value) >= threshold
+
+
+def _wavelength_unit_is_angstrom(app: "MainWindow") -> bool:
+    """Return True when the current spectrum axis is expressed in angstrom."""
+    unit = str(getattr(app, "wavelength_unit", "") or "").strip().lower()
+    if unit:
+        return unit not in {"nm", "nanometer", "nanometers"}
+    try:
+        label = str(app.current_wavelength_unit_label() or "").strip().lower()
+    except Exception:
+        label = ""
+    return label not in {"nm", "nanometer", "nanometers"}
+
+
 def _is_template_error_value(value) -> bool:
     return isinstance(value, str) and value.strip().upper() == "ERROR"
 
@@ -8880,6 +9901,21 @@ def _selected_analysis_elements(app: "MainWindow") -> Optional[set[str]]:
     }
 
 
+def _legacy_stark_fwhm(
+    hwhm_nm_at_1e17: float,
+    electron_density_cm3: float,
+    output_unit: str = "angstrom",
+) -> float:
+    """Convert a legacy Stark.db HWHM in nm to FWHM in the requested unit."""
+    hwhm_nm = max(0.0, safe_float(hwhm_nm_at_1e17, 0.0))
+    electron_density = max(0.0, safe_float(electron_density_cm3, 0.0))
+    if hwhm_nm <= 0.0 or electron_density <= 0.0:
+        return 0.0
+    fwhm_nm = 2.0 * (electron_density / 1.0e17) * hwhm_nm
+    unit = str(output_unit or "").strip().lower()
+    return 10.0 * fwhm_nm if unit in {"a", "å", "angstrom", "angstroms"} else fwhm_nm
+
+
 def _stark_row_map(
     observations: list[LineObservation],
     tolerance: float,
@@ -8989,9 +10025,13 @@ def calculate_hybrid_self_absorption(
             return None
         w5000, w10000 = widths
         w_t = w5000 + (current_temperature - 5000.0) * (w10000 - w5000) / 5000.0
-        # Stark.db widths are Angstrom; compare them with the fitted width in
-        # the active spectrum unit.
-        stark_width = 2.0 * (ne / 1.0e17) * w_t / wavelength_scale
+        # Legacy Stark.db stores HWHM in nm at Ne=1e17 cm^-3. Convert it to
+        # FWHM in the active spectrum unit before comparing fitted widths.
+        stark_width = _legacy_stark_fwhm(
+            w_t,
+            ne,
+            app.current_wavelength_unit_label(),
+        )
         obs.line.sa_stark_width = _format_sa_numeric(stark_width)
         obs.line.sa_has_stark_data = stark_width > 0.0
         return palleschi_sac_multiplier(getattr(obs.line, "wl", 0.0), stark_width)
@@ -12571,7 +13611,11 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         ne = self._current_electron_density()
         if ne <= 0.0:
             return ""
-        width = 2.0 * (ne / 1.0e17) * w_t
+        width = _legacy_stark_fwhm(
+            w_t,
+            ne,
+            self.master_app.current_wavelength_unit_label(),
+        )
         return _format_sa_numeric(width)
 
     def _sa_value_for_line(self, wl_text, stark_text):
@@ -15544,7 +16588,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             self.prepare_initial_region()
         if self.automatic and not self.master_app.template_lines:
             self.msg_var.set(
-                "No peaks selected. Use 'Find visible peaks' or 'Add peak from graph'; no external line-list file is required."
+                "No measured peaks selected. Use 'Trace Lines > Assign', 'Find visible peaks', "
+                "or 'Add peak from graph'; no external line-list file is required."
             )
 
     def _build(self):
@@ -15844,6 +16889,11 @@ class RetroFitManagerWindow(tk.Toplevel):
         ]
         if not self.automatic:
             return lines
+        lines = [
+            line
+            for line in lines
+            if template_line_is_observed_selection(line)
+        ]
         selected_elements = _selected_analysis_elements(self.master_app)
         if selected_elements is None:
             return lines
@@ -16200,7 +17250,8 @@ class RetroFitManagerWindow(tk.Toplevel):
             else:
                 self.load_from_template([], preserve_user_values=False)
                 self.msg_var.set(
-                    "No peaks selected. Find visible peaks or add them from the graph; loading a line-list file is optional."
+                    "No measured peaks selected. Use Trace Lines > Assign, find visible peaks, "
+                    "or add them from the graph."
                 )
             return
         self._set_visible_fit_lines(self._visible_template_lines(), preserve_user_values=preserve_user_values)
@@ -18311,8 +19362,9 @@ class RetroFitManagerWindow(tk.Toplevel):
                     _showinfo(
                         self,
                         "Auto Fit",
-                        "Select peaks with 'Find visible peaks' or 'Add peak from graph'. "
-                        "An external template file is not required.",
+                        "No measured peaks are currently selected. Use 'Trace Lines > Assign', "
+                        "'Find visible peaks', or 'Add peak from graph'. An external template "
+                        "file is not required.",
                     )
                     return
             self._run_automatic_fit()
@@ -18753,6 +19805,7 @@ class MainWindow(tk.Tk):
         self.last_self_absorption_result: Optional[dict] = None
         self.last_theoretical_spectrum: Optional[dict] = None
         self.apply_sac_correction = False
+        self.irsac_algorithm = "IRSAC2"
         self.post_irsac_temperature: Optional[float] = None
         self.post_irsac_temperature_source: Optional[str] = None
         self.standard_refs: dict[str, str] = {}
@@ -18838,7 +19891,7 @@ class MainWindow(tk.Tk):
         self.fig=Figure(figsize=(8,5),dpi=_figure_dpi(self)); self.ax=self.fig.add_subplot(111)
         self.canvas=FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.get_tk_widget().pack(fill="both", expand=True)
-        # Navigation state: left drag zoom, right drag pan.
+        # Navigation state: left drag zoom, right drag pan, right click reset.
         self._nav_press = None
         self._nav_dragged = False
         self._zoom_rectangle = None
@@ -19384,6 +20437,10 @@ class MainWindow(tk.Tk):
         """Apply the legacy global offset after radiometric correction."""
         shift = safe_float(getattr(self.options, "auto_shift", 0.0), 0.0)
         if not shift:
+            spectrum.wavelength_calibration_status = "raw"
+            spectrum.wavelength_calibration_message = (
+                "No saved per-window calibration or legacy offset was applied."
+            )
             return spectrum
         sources = spectrum.source_windows or (
             SpectrumSourceWindow(
@@ -19398,6 +20455,10 @@ class MainWindow(tk.Tk):
             _calibrated_source_window(source, legacy_shift=shift)
             for source in sources
         )
+        spectrum.wavelength_calibration_status = "legacy-global-offset"
+        spectrum.wavelength_calibration_message = (
+            f"Legacy global wavelength offset applied: {shift:+.6g} nm."
+        )
         return spectrum
 
     def wavelength_calibration_profiles(self):
@@ -19406,14 +20467,11 @@ class MainWindow(tk.Tk):
         )
 
     def apply_wavelength_calibration_if_enabled(self, spectrum):
-        profiles = (
-            self.wavelength_calibration_profiles()
-            if _view_bool(
-                getattr(self.options, "auto_wavelength_calibration", True),
-                True,
-            )
-            else []
+        calibration_enabled = _view_bool(
+            getattr(self.options, "auto_wavelength_calibration", True),
+            True,
         )
+        profiles = self.wavelength_calibration_profiles() if calibration_enabled else []
         sources = spectrum.source_windows or (
             SpectrumSourceWindow(
                 tuple(spectrum.x), tuple(spectrum.y), spectrum.name, spectrum.filename,
@@ -19430,12 +20488,66 @@ class MainWindow(tk.Tk):
             profiles, raw_axis, source.filename or source.name
         )
         if calibration is None:
+            if calibration_enabled and profiles:
+                raw_min = min(raw_axis) if raw_axis else float("nan")
+                raw_max = max(raw_axis) if raw_axis else float("nan")
+                source_name = Path(source.filename or source.name or spectrum.name).name
+                message = (
+                    f"No saved per-window wavelength calibration matches {source_name} "
+                    f"({raw_min:.3f}-{raw_max:.3f} nm). The raw wavelength axis was "
+                    "kept; the legacy global offset was not applied."
+                )
+                spectrum.wavelength_calibration_status = "unmatched"
+                spectrum.wavelength_calibration_message = message
+                logging.warning(message)
+                self._queue_wavelength_calibration_warning(message)
+                return spectrum
             return self.apply_autoshift_if_enabled(spectrum)
         spectrum.x = [calibration.correct(x) for x in spectrum.x]
         spectrum.source_windows = (
             _calibrated_source_window(source, calibration=calibration),
         )
+        spectrum.wavelength_calibration_status = "per-window-profile"
+        spectrum.wavelength_calibration_message = (
+            f"Per-window calibration '{calibration.name}' applied: "
+            f"λcorrected={calibration.intercept:.6g}+"
+            f"{calibration.slope:.9g}·λraw."
+        )
         return spectrum
+
+    def _queue_wavelength_calibration_warning(self, message):
+        """Aggregate unmatched-window warnings from one multi-file GUI action."""
+        pending = getattr(self, "_pending_wavelength_calibration_warnings", None)
+        if pending is None:
+            pending = set()
+            self._pending_wavelength_calibration_warnings = pending
+        pending.add(str(message))
+        if getattr(self, "_wavelength_calibration_warning_scheduled", False):
+            return
+        self._wavelength_calibration_warning_scheduled = True
+        try:
+            self.after_idle(self._show_pending_wavelength_calibration_warnings)
+        except Exception:
+            self._wavelength_calibration_warning_scheduled = False
+
+    def _show_pending_wavelength_calibration_warnings(self):
+        self._wavelength_calibration_warning_scheduled = False
+        pending = sorted(
+            getattr(self, "_pending_wavelength_calibration_warnings", set())
+        )
+        self._pending_wavelength_calibration_warnings = set()
+        if not pending:
+            return
+        details = "\n".join(f"• {message}" for message in pending)
+        _showwarning(
+            self,
+            "Wavelength calibration not applied",
+            (
+                f"{details}\n\nOpen Utilities > Instrument Calibration > Wavelength "
+                "Calibration to create a compatible profile, or clear the saved "
+                "calibration if these spectra must remain on their raw axes."
+            ),
+        )
 
     def apply_wavelength_calibration_profiles(self, profiles):
         """Rebuild loaded spectra from raw source windows using new profiles."""
@@ -19451,11 +20563,19 @@ class MainWindow(tk.Tk):
                 ),
             )
             calibrated_sources = []
+            unmatched_sources = []
             for source in sources:
                 raw_axis = _source_raw_axis(source)
                 calibration = calibration_for_window(
                     profiles, raw_axis, source.filename or source.name
                 )
+                if profiles and calibration is None:
+                    raw_min = min(raw_axis) if raw_axis else float("nan")
+                    raw_max = max(raw_axis) if raw_axis else float("nan")
+                    source_name = Path(source.filename or source.name).name
+                    unmatched_sources.append(
+                        f"{source_name} ({raw_min:.3f}-{raw_max:.3f} nm)"
+                    )
                 calibrated_sources.append(
                     _calibrated_source_window(source, calibration=calibration)
                 )
@@ -19475,6 +20595,27 @@ class MainWindow(tk.Tk):
             rebuilt.filename = spectrum.filename
             rebuilt.color = spectrum.color
             rebuilt.visible = spectrum.visible
+            if unmatched_sources:
+                message = (
+                    "No saved per-window wavelength calibration matches "
+                    + ", ".join(unmatched_sources)
+                    + ". The raw wavelength axis was kept for those windows."
+                )
+                rebuilt.wavelength_calibration_status = "partial-unmatched"
+                rebuilt.wavelength_calibration_message = message
+                logging.warning(message)
+                self._queue_wavelength_calibration_warning(message)
+            elif profiles:
+                rebuilt.wavelength_calibration_status = "per-window-profile"
+                rebuilt.wavelength_calibration_message = (
+                    f"Per-window calibration applied to {len(calibrated_sources)} "
+                    "source window(s)."
+                )
+            else:
+                rebuilt.wavelength_calibration_status = "raw"
+                rebuilt.wavelength_calibration_message = (
+                    "Saved per-window wavelength calibration cleared; raw axes restored."
+                )
             rebuilt_spectra.append(rebuilt)
         self.spectra = rebuilt_spectra
         self.invalidate_cflibs_results()
@@ -19905,6 +21046,8 @@ class MainWindow(tk.Tk):
         h=ymax-ymin if ymax>ymin else 1
         selected_elements = _selected_analysis_elements(self)
         for line in (self.template_lines if self.spectra else []):
+            if not template_line_marker_is_visible(self, line):
+                continue
             if not template_line_is_acquired(self, line):
                 continue
             # Template markers and labels are persistent plot annotations.
@@ -20092,6 +21235,15 @@ class MainWindow(tk.Tk):
         )
         return self.wavelength_calibration_window
 
+    def show_mercury_wavelength_check(self):
+        self.mercury_wavelength_window = show_existing_or_create(
+            self,
+            "mercury_wavelength_window",
+            lambda: MercuryWavelengthCalibrationWindow(self),
+            parent=self,
+        )
+        return self.mercury_wavelength_window
+
     def show_template(self):
         return self.show_template_window()
 
@@ -20121,17 +21273,37 @@ class MainWindow(tk.Tk):
         template_line.gk = atomic.gk
         template_line.gi = atomic.gi
 
-    def assign_traced_lines(self):
-        """Assign all currently traced database lines to already marked template
-        peaks when |marked wavelength - traced wavelength| <= Options.Range.
-        Applies to all traced species, not only the last trace query.
-        """
-        trace_markers = getattr(self, "trace_markers", [])
-        if not self.template_lines or not trace_markers:
+    def assign_traced_lines(
+        self,
+        trace_markers=None,
+        *,
+        peak_matches=None,
+        tolerance=None,
+    ):
+        """Assign traced transitions and create rows for new measured peaks."""
+        trace_markers = list(
+            getattr(self, "trace_markers", [])
+            if trace_markers is None
+            else trace_markers
+        )
+        if not trace_markers:
+            self.last_trace_fit_ready_count = 0
             return 0
-        rg = max(0.0, safe_float(getattr(self.options, "search_range", 0.2), 0.2))
+        peak_matches = dict(peak_matches or {})
+        rg = max(
+            0.0,
+            safe_float(
+                tolerance,
+                safe_float(getattr(self.options, "search_range", 0.2), 0.2),
+            ),
+        )
         assigned = 0
+        fit_ready = 0
+        assigned_marker_ids = set()
         for t in self.template_lines:
+            observed_wavelength = template_line_plot_wavelength(t)
+            if observed_wavelength <= 0.0:
+                continue
             selected_species = str(
                 getattr(t, "specie", "") or ""
             ).strip().capitalize()
@@ -20139,7 +21311,7 @@ class MainWindow(tk.Tk):
             candidates = [
                 line
                 for line in trace_markers
-                if abs(line.wavelen - t.wavelen) <= rg
+                if abs(line.wavelen - observed_wavelength) <= rg
                 and (
                     not selected_species
                     or str(getattr(line, "specie", "") or "").strip().capitalize()
@@ -20152,7 +21324,12 @@ class MainWindow(tk.Tk):
             ]
             if not candidates:
                 continue
-            atomic = min(candidates, key=lambda l: abs(l.wavelen - t.wavelen))
+            marker = min(
+                candidates,
+                key=lambda line: abs(line.wavelen - observed_wavelength),
+            )
+            assigned_marker_ids.add(id(marker))
+            atomic = marker
             try:
                 atomic = self.libs_db.enrich_line_from_element_table(
                     atomic,
@@ -20161,11 +21338,110 @@ class MainWindow(tk.Tk):
                 )
             except Exception:
                 pass
+            match = peak_matches.get(id(marker))
+            if match is None:
+                match = measured_peak_near_wavelength(
+                    self,
+                    marker.wavelen,
+                    rg,
+                )
+            if match is not None:
+                observed = safe_float(match.get("wavelength"), math.nan)
+                if math.isfinite(observed):
+                    _clear_template_fit_measurements([t])
+                    t.wavelen = float(observed)
+                    t.templint = float(match.get("intensity", 0.0) or 0.0)
+                    t.trace_selected = True
+                    fit_ready += 1
             self.copy_atomic_line_to_template_line(t, atomic)
             assigned += 1
+        proposals = []
+        for marker in trace_markers:
+            if id(marker) in assigned_marker_ids:
+                continue
+            match = peak_matches.get(id(marker))
+            if match is None:
+                match = measured_peak_near_wavelength(
+                    self,
+                    marker.wavelen,
+                    rg,
+                )
+            if match is None:
+                continue
+            observed = safe_float(match.get("wavelength"), math.nan)
+            if not math.isfinite(observed):
+                continue
+            proposals.append(
+                (
+                    abs(marker.wavelen - observed),
+                    marker,
+                    match,
+                )
+            )
+        proposals.sort(key=lambda item: item[0])
+        used_peak_centers = []
+        duplicate_tolerance = max(1.0e-6, 0.25 * rg)
+        created = 0
+        for _distance, marker, match in proposals:
+            observed = float(match["wavelength"])
+            if any(
+                abs(observed - previous) <= duplicate_tolerance
+                for previous in used_peak_centers
+            ):
+                continue
+            atomic = marker
+            try:
+                atomic = self.libs_db.enrich_line_from_element_table(
+                    marker,
+                    tolerance=max(0.02, rg),
+                    wavelength_unit=getattr(self, "wavelength_unit", "angstrom"),
+                )
+            except Exception:
+                pass
+            template = TemplateLine(
+                wavelen=observed,
+                templint=float(match.get("intensity", 0.0) or 0.0),
+                inte=None,
+                wg=None,
+                wl=None,
+                fitwavelen=None,
+            )
+            self.copy_atomic_line_to_template_line(template, atomic)
+            template.trace_selected = True
+            self.template_lines.append(template)
+            used_peak_centers.append(observed)
+            assigned += 1
+            created += 1
+            fit_ready += 1
+        selected = set(getattr(self, "analysis_elements", set()) or set())
+        for marker in trace_markers:
+            species = str(getattr(marker, "specie", "") or "").strip().capitalize()
+            if species:
+                selected.add(species)
+        self.analysis_elements = selected
+        self.last_trace_fit_ready_count = fit_ready
         self.notify_template_changed(redraw=False)
+        auto_fit_window = getattr(self, "auto_fit_window", None)
+        try:
+            auto_fit_open = (
+                auto_fit_window is not None
+                and auto_fit_window.winfo_exists()
+            )
+        except Exception:
+            auto_fit_open = False
+        if auto_fit_open and not bool(
+            getattr(auto_fit_window, "_fit_running", False)
+        ):
+            try:
+                auto_fit_window.refresh_content()
+            except Exception:
+                pass
         self.redraw(preserve_view=True)
-        self.status(f"Trace Assign: {assigned} analytical lines assigned")
+        self.status(
+            f"Trace Assign: {assigned} analytical lines assigned; "
+            f"{fit_ready} measured peak(s) selected for fitting; "
+            f"{created} new template row(s) created"
+        )
         return assigned
 
     def assign_atomic_line_to_nearest_template(self, atomic, redraw=True):
@@ -20186,6 +21462,11 @@ class MainWindow(tk.Tk):
         idx = min(range(len(self.template_lines)), key=lambda i: abs(self.template_lines[i].wavelen - target_wave))
         t = self.template_lines[idx]
         self.copy_atomic_line_to_template_line(t, atomic)
+        selected = set(getattr(self, "analysis_elements", set()) or set())
+        species = str(getattr(atomic, "specie", "") or "").strip().capitalize()
+        if species:
+            selected.add(species)
+            self.analysis_elements = selected
         self.notify_template_changed(redraw=False)
         if redraw:
             self.redraw(preserve_view=True)
@@ -20251,7 +21532,23 @@ class MainWindow(tk.Tk):
         return self.show_retro_fit_manager()
     def show_ne_halpha(self): self.ne_halpha_window = _show_persistent_window(self, "ne_halpha_window", lambda: NeHalphaWindow(self), "HAlpha", parent=self, center_on_create=True)
     def show_sac(self): self.sac_window = show_existing_or_create(self, "sac_window", lambda: SACWindow(self), parent=self)
-    def show_saha(self): self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self, center_on_create=True)
+    def show_saha(self):
+        existing = self.saha_window is not None
+        try:
+            existing = existing and self.saha_window.winfo_exists()
+        except Exception:
+            existing = False
+        self.saha_window = _show_persistent_window(
+            self,
+            "saha_window",
+            lambda: SahaBoltzmannWindow(self),
+            "SahaBoltzmann",
+            parent=self,
+            center_on_create=True,
+        )
+        if existing:
+            self.saha_window.compute()
+        return self.saha_window
     def show_cflibs(self): self.cflibs_window = _show_persistent_window(self, "cflibs_window", lambda: CFLibsWindow(self), "CFLIBS", parent=self, center_on_create=True)
     def show_standard_correction(self): self.standard_correction_window = show_existing_or_create(self, "standard_correction_window", lambda: StandardCorrectionWindow(self), parent=self)
     def show_theoretical_spectrum(self):
@@ -20260,20 +21557,9 @@ class MainWindow(tk.Tk):
         )
         return self.theoretical_window
     def show_sac_check(self):
-        self.sac_check_window = _show_persistent_window(
-            self,
-            "sac_check_window",
-            lambda: SelfAbsorptionCheckWindow(self),
-            "ShowSA",
-            refresh=lambda w: w.refresh(show_message=False),
-            parent=self,
-            center_on_create=True,
-        )
-        try:
-            self.sac_check_window.refresh(show_message=False)
-        except Exception:
-            pass
-        return self.sac_check_window
+        """Compatibility alias: the supported workflow is IRSAC2 only."""
+        self.irsac_algorithm = "IRSAC2"
+        return self.show_self_absorption()
 
     def _mouse(self,event):
         if event.inaxes is not getattr(self, "ax", None) or event.xdata is None or event.ydata is None:
@@ -20493,7 +21779,17 @@ def build_retro_menu(self):
         "",
         "calibration.png",
     )
-    _add_menu_command(self, calibration_menu, shortcut_items, "Manual Wavelength Shift...", self.show_spectrum_shift, "Ctrl+F1", "<Control-F1>", "calibration.png")
+    _add_menu_command(
+        self,
+        calibration_menu,
+        shortcut_items,
+        "Mercury Wavelength Check...",
+        lambda: self.show_mercury_wavelength_check(),
+        "",
+        "",
+        "calibration.png",
+    )
+    _add_menu_command(self, calibration_menu, shortcut_items, "Temporary Wavelength Shift...", self.show_spectrum_shift, "Ctrl+F1", "<Control-F1>", "calibration.png")
 
     processing_menu = tk.Menu(util_menu, tearoff=0)
     _add_menu_cascade(self, util_menu, "Signal Processing", processing_menu, "fit.png")
@@ -20539,12 +21835,11 @@ def build_retro_menu(self):
     _add_menu_command(self, plasma_menu, shortcut_items, "Electron Density from Hα...", self.show_ne_halpha, "", "", "H_alpha.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "Saha-Boltzmann Plot...", self.show_saha_boltzmann, "", "", "calculator.png")
     plasma_menu.add_separator()
-    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption / IRSAC...", self.show_sac_check, "", "", "calibration.png")
+    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption Correction (IRSAC2)...", self.show_self_absorption, "", "", "self_absorption.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "SAC Factors...", self.show_sac_window, "", "", "calibration.png")
     plasma_menu.add_separator()
     _add_menu_command(self, plasma_menu, shortcut_items, "LTE Check (McWhirter)...", lambda: self.show_lte_check(), "", "", "lte.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "Self-Consistent T–Ne Fit...", lambda: self.show_selfconsistent(), "", "", "tne.png")
-    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption IRSAC2...", lambda: self.show_self_absorption(), "", "", "self_absorption.png")
 
     quantitative_menu = tk.Menu(analysis_menu, tearoff=0)
     _add_menu_cascade(self, analysis_menu, "Quantitative Analysis", quantitative_menu, "database.png")
@@ -20884,22 +22179,22 @@ def compare_spectrum(self):
     self.redraw()
 
 def clear_all_spectra(self):
-    if _askyesno(self, "Clear", "Clear all spectra?"):
+    if _askyesno(
+        self,
+        "Clear",
+        "Clear all spectra and the current fitted-line analysis?\n\n"
+        "The persistent main analytical-line library will be preserved.",
+    ):
         self.spectra.clear()
         self.independent_window_mode = False
-        self.clear_plot_annotations()
-        self._replace_analysis_lines_from_library(
-            redraw=False,
-            preserve_analysis_elements=True,
-        )
+        _previous_count, line_count = clear_current_line_analysis(self)
         ne_status = reset_measurement_session(self)
         self.redraw()
         if self.active_window and self.active_window.winfo_exists():
             self.active_window.refresh()
-        line_count = len(getattr(self, "template_lines", []) or [])
         self.status(
-            f"Clear Graph: spectra cleared; analytical list restored "
-            f"({line_count} lines); {ne_status}."
+            f"Clear Graph: spectra and previous line analysis cleared; "
+            f"analytical list restored ({line_count} clean lines); {ne_status}."
         )
 
 def save_with_labels(self):
@@ -22386,7 +23681,20 @@ def show_auto_element_identification(self):
     return AutoElementIdentificationWindow(self)
 
 def show_saha_boltzmann(self):
-    self.saha_window = _show_persistent_window(self, "saha_window", lambda: SahaBoltzmannWindow(self), "SahaBoltzmann", parent=self)
+    existing = getattr(self, "saha_window", None) is not None
+    try:
+        existing = existing and self.saha_window.winfo_exists()
+    except Exception:
+        existing = False
+    self.saha_window = _show_persistent_window(
+        self,
+        "saha_window",
+        lambda: SahaBoltzmannWindow(self),
+        "SahaBoltzmann",
+        parent=self,
+    )
+    if existing:
+        self.saha_window.compute()
     return self.saha_window
 
 def show_cf_libs(self):
@@ -22534,6 +23842,11 @@ def show_sac_window(self):
 
 def load_template_file(self, filename):
     self.template_lines = load_template_lines(filename, RetroTemplateManager.columns)
+    self.analysis_elements = {
+        str(getattr(line, "specie", "") or "").strip().capitalize()
+        for line in self.template_lines
+        if str(getattr(line, "specie", "") or "").strip()
+    }
     self.notify_template_changed(redraw=False)
     self.redraw()
 
@@ -22613,6 +23926,10 @@ def _release(self, event):
     button, x0, y0, px0, py0, old_xlim, old_ylim = press
     dxpix = (event.x or px0) - px0
     dypix = (event.y or py0) - py0
+    if button == 3 and abs(dxpix) < 6 and abs(dypix) < 6:
+        self._nav_dragged = False
+        self.full_scale()
+        return
     if abs(dxpix) < 6 or abs(dypix) < 6:
         self._nav_dragged = False
         self.canvas.draw_idle()
@@ -22759,7 +24076,7 @@ def _cflibs_export_tables(self):
                      "atomic_mass", "line_population_factor", "LOO_max_relative_change", "replicate_composition_CV"], result_rows),
         "info": info_rows(self.master_app, [["kT (eV)", getattr(self, "last_kt", None)],
                                              ["Ne (cm-3)", getattr(self, "last_ne", None)],
-                                             ["IRSAC implementation", getattr(self.master_app, "irsac_algorithm", "IRSAC1")],
+                                             ["IRSAC implementation", getattr(self.master_app, "irsac_algorithm", "IRSAC2")],
                                              ["Skipped lines", getattr(self, "last_skipped", None)]]),
     }
 

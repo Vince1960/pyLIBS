@@ -7,9 +7,21 @@ ROOT = Path(__file__).resolve().parents[1]
 ITALIAN_MANUAL = ROOT / "docs" / "pyLIBS_Manual.md"
 ENGLISH_MANUAL = ROOT / "docs" / "pyLIBS_Manual_EN.md"
 PROGRAM = ROOT / "pyLIBS.py"
+PUBLIC_TEXT_FILES = (
+    ROOT / "README.md",
+    PROGRAM,
+    *sorted((ROOT / "docs").glob("*.md")),
+    *sorted((ROOT / "pylibs").rglob("*.py")),
+)
 
 
 class EditorialConsistencyTests(unittest.TestCase):
+    def test_public_text_does_not_use_internal_colloquial_names(self):
+        for path in PUBLIC_TEXT_FILES:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.relative_to(ROOT)):
+                self.assertIsNone(re.search(r"\blistone\b", text, re.IGNORECASE))
+
     def test_italian_manual_uses_required_accents(self):
         text = ITALIAN_MANUAL.read_text(encoding="utf-8")
         unaccented = (

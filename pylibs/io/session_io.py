@@ -115,8 +115,6 @@ def collect_state(app, program_version: str = "") -> dict:
         "reason": "Saved result summaries are documentary; analysis is invalidated on restore and must be recomputed.",
         "cflibs": bool(getattr(app, "last_cflibs_rows", None)),
         "saha_boltzmann": bool(getattr(app, "last_saha_boltzmann", None)),
-        "irsac1": bool(getattr(app, "last_self_absorption_result", None)
-                       and getattr(app, "last_self_absorption_result", {}).get("algorithm") != "IRSAC2"),
         "irsac2": bool(getattr(app, "last_irsac2_result", None)),
         "monte_carlo": getattr(app, "last_cflibs_uncertainty", None) is not None,
     }
@@ -232,6 +230,9 @@ def apply_state(app, state: dict, spectrum_cls, template_cls, response_cls=None,
     app.apply_sac_correction = False
     for k, v in state.get("session", {}).items():
         setattr(app, k, _restore_float(v))
+    # Historical sessions may store a superseded algorithm selection. Results
+    # are invalidated below; every recomputation uses the supported IRSAC2 path.
+    app.irsac_algorithm = "IRSAC2"
     if restore_options and getattr(app, "options", None) is not None:
         for k, v in state.get("options", {}).items():
             if k in OPTION_SKIP or not hasattr(app.options, k):

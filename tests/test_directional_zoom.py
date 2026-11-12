@@ -97,6 +97,17 @@ class DirectionalZoomTests(unittest.TestCase):
         self.assertEqual(app.ax.get_xlim(), (10.0, 70.0))
         self.assertEqual(app.ax.get_ylim(), (-10.0, 50.0))
 
+    def test_right_click_restores_full_scale(self):
+        app = self.make_app(button=3, x0=20, y0=20)
+        app.ax.set_xlim(40.0, 50.0)
+        app.ax.set_ylim(45.0, 55.0)
+        app._nav_press = (3, 45.0, 50.0, 20, 20, app.ax.get_xlim(), app.ax.get_ylim())
+
+        self.release(app, 22, 22, 45.0, 50.0, button=3)
+
+        self.assertEqual(app.ax.get_xlim(), (0.0, 100.0))
+        self.assertEqual(app.ax.get_ylim(), (0.0, 100.0))
+
 
 if __name__ == "__main__":
     unittest.main()

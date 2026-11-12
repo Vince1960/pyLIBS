@@ -4,6 +4,7 @@ import random
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tests import _synthetic_data as S  # noqa: E402
@@ -16,6 +17,9 @@ except ImportError:
 
 from pylibs.core.self_absorption_irsac2 import (SALine, StarkRef, assess, choose_reference, irsac_species,  # noqa: E402
                                          same_level_test, slope_check, stark_assessment, tau_proxy)
+from pylibs.core.dev_adapters import self_absorption_lines  # noqa: E402
+from pylibs.gui.sa_dialog import MODES  # noqa: E402
+from pyLIBS import AppOptions, TemplateLine  # noqa: E402
 
 
 def absorbed(tau0):
@@ -39,6 +43,12 @@ class TestElSherbini(unittest.TestCase):
 
 
 class TestIRSAC(unittest.TestCase):
+    def test_visible_modes_expose_irsac2_only(self):
+        labels = tuple(MODES)
+
+        self.assertIn("IRSAC2 (recommended)", labels)
+        self.assertFalse(any("IRSAC1" in label for label in labels))
+
     def lines(self, attenuate=None, kt=0.9, noise=0.0, seed=1):
         rng = random.Random(seed)
         spec = [(4226.7, 0.0, 2.93, 3 * 2.18e8), (4302.5, 1.90, 4.78, 5 * 1.36e8), (6162.2, 1.90, 3.91, 3 * 3.5e7),
@@ -69,6 +79,44 @@ class TestIRSAC(unittest.TestCase):
     def test_no_correction_for_thin_lines(self):
         res = irsac_species(self.lines(noise=0.01, seed=2), 0.9, 0.0, 0.05)
         self.assertTrue(all(v["irsac_sac"] == 1.0 for v in res.values()))
+
+
+class TestIRSACAdapter(unittest.TestCase):
+    @staticmethod
+    def line(aki):
+        return TemplateLine(
+            wavelen=340.36521,
+            specie="Cd",
+            ion=1,
+            asswavelen=340.36521,
+            inte=1.0,
+            ei=10000.0,
+            ek=30000.0,
+            aki=aki,
+            gk=3,
+            gi=1,
+            fitwavelen=340.36,
+            wg=0.05,
+            wl=0.05,
+            fit_profile="voigt",
+        )
+
+    @staticmethod
+    def app(line):
+        return SimpleNamespace(
+            template_lines=[line],
+            options=AppOptions(aki_threshold=1.0e5, apply_response=False),
+            wavelength_unit="nm",
+            current_wavelength_unit_label=lambda: "nm",
+        )
+
+    def test_adapter_applies_aki_threshold_and_converts_nm_to_angstrom(self):
+        self.assertEqual(self_absorption_lines(self.app(self.line(9.0e4))), [])
+
+        rows = self_absorption_lines(self.app(self.line(1.0e7)))
+
+        self.assertEqual(len(rows), 1)
+        self.assertAlmostEqual(rows[0].wavelength_A, 3403.6521, places=6)
 
 
 class TestIRSACExtensions(unittest.TestCase):

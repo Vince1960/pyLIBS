@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 
 from pyLIBS import (
+    _legacy_stark_fwhm,
     _stark_row_map,
     _sync_self_absorption_temperature,
     calculate_hybrid_self_absorption,
@@ -33,6 +34,23 @@ def observation(name, wavelength, intensity, ei, ek, aki):
 
 
 class SelfAbsorptionTests(unittest.TestCase):
+    def test_legacy_stark_hwhm_nm_is_converted_to_fwhm(self):
+        self.assertAlmostEqual(
+            _legacy_stark_fwhm(0.003815, 1.0e17, "angstrom"),
+            0.0763,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            _legacy_stark_fwhm(0.003815, 1.0e17, "nm"),
+            0.00763,
+            places=12,
+        )
+        self.assertAlmostEqual(
+            _legacy_stark_fwhm(0.003815, 5.0e16, "angstrom"),
+            0.03815,
+            places=12,
+        )
+
     def test_photon_counting_thermometry_does_not_reapply_wavelength_factor(self):
         temperature = 10000.0
         intercept = 12.0

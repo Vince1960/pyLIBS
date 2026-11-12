@@ -13,8 +13,8 @@ from pylibs.gui.helpers import _showerror, _showinfo, center_window
 from pylibs.gui.lte_dialog import ToolbarTooltip, session_kt_sigma, session_ne_sigma
 
 MODES = {
-    "IRSAC (recommended)": "irsac",
-    "Stark where available, else IRSAC": "stark_then_irsac",
+    "IRSAC2 (recommended)": "irsac",
+    "Stark where available, else IRSAC2": "stark_then_irsac",
     "Stark only": "stark",
 }
 AUTO = "auto (least optically thick)"
@@ -31,10 +31,10 @@ HELP = {
     "aki": "Relative uncertainty of g·A (and of other line-to-line factors) for IRSAC, combined with the\n"
            "intensity fit error of each line when available.",
     "nsig": "Significance threshold: a line is corrected only if SA differs from 1 by more than nsig·σ.",
-    "maxsac": "Largest admissible correction factor (default 3.33, i.e. SA ≥ 0.3, Yang et al. 2018). Larger factors\n"
+    "maxsac": "Largest admissible correction factor (default 3.33, i.e. SA ≥ 0.3). Larger factors\n"
               "are flagged 'unsafe' and not applied: they usually indicate a blend, a wrong assignment, wrong Ne\n"
               "or Stark data, rather than a measurable self-absorption. 0 = no limit.",
-    "fref": "Estimate the self-absorption of the IRSAC reference line itself (Yang et al. 2018): if other lines of\n"
+    "fref": "Estimate the self-absorption of the IRSAC2 reference line itself: if other lines of\n"
             "the species appear significantly less absorbed than the reference, the reference is scaled so that the\n"
             "least absorbed line is optically thin. This changes the species intercept and therefore the concentration.",
 }
@@ -43,14 +43,14 @@ HELP = {
 
 
 class SelfAbsorptionWindow(tk.Toplevel):
-    COLS = ("Line", "Ei eV", "Ek eV", "τ/τref", "w_L Å", "w0 Å", "Stark", "SAC Stark", "IRSAC SA", "SAC IRSAC",
-            "IRSAC", "Same-Ek test", "Applied")
+    COLS = ("Line", "Ei eV", "Ek eV", "τ/τref", "w_L Å", "w0 Å", "Stark", "SAC Stark", "IRSAC2 SA", "SAC IRSAC2",
+            "IRSAC2", "Same-Ek test", "Applied")
 
     def __init__(self, master, lines_provider):
         super().__init__(master)
         self.master_app = master
         self.lines_provider = lines_provider
-        self.title("Self-absorption correction (Stark width + internal reference line)")
+        self.title("Self-absorption correction")
         self.geometry("1260x700")
         self.minsize(1000, 560)
         self.results = []
@@ -63,7 +63,6 @@ class SelfAbsorptionWindow(tk.Toplevel):
         ttk.Button(top, text="Compute", command=self.compute).pack(side="left")
         ttk.Button(top, text="Apply SAC", command=self.apply).pack(side="left", padx=4)
         ttk.Button(top, text="Remove SAC", command=self.remove).pack(side="left")
-        ttk.Button(top, text="Compare IRSAC1 / IRSAC2", command=self.compare_methods).pack(side="left", padx=4)
         it_btn = ttk.Button(top, text="Iterate SAC ⇄ T–Ne", command=self.iterate_with_tne)
         it_btn.pack(side="left", padx=4)
         self._tips.append(ToolbarTooltip(it_btn,
@@ -73,7 +72,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             "global Saha-Boltzmann fit."))
         ttk.Button(top, text="Save CSV...", command=self.save_csv).pack(side="left")
         ttk.Label(top, text="Mode").pack(side="left", padx=(14, 2))
-        self.mode = tk.StringVar(value="IRSAC (recommended)")
+        self.mode = tk.StringVar(value="IRSAC2 (recommended)")
         ttk.Combobox(top, textvariable=self.mode, values=list(MODES), width=32, state="readonly").pack(side="left")
         self.status_var = tk.StringVar(value="")
         ttk.Label(top, textvariable=self.status_var).pack(side="left", padx=10)
@@ -92,11 +91,16 @@ class SelfAbsorptionWindow(tk.Toplevel):
             ent.grid(row=0, column=c); c += 1
             self._tips += [ToolbarTooltip(lab, HELP[key]), ToolbarTooltip(ent, HELP[key])]
         self.fref = tk.BooleanVar(value=True)
-        cb = ttk.Checkbutton(par, text="reference absorption (Yang)", variable=self.fref, command=self.compute)
+        cb = ttk.Checkbutton(
+            par,
+            text="Estimate reference-line absorption",
+            variable=self.fref,
+            command=self.compute,
+        )
         cb.grid(row=0, column=c, padx=(10, 2))
         self._tips.append(ToolbarTooltip(cb, HELP["fref"]))
 
-        self.ref_frame = ttk.LabelFrame(self, text="IRSAC reference line per species (hover for the criterion)", padding=4)
+        self.ref_frame = ttk.LabelFrame(self, text="IRSAC2 reference line per species (hover for the criterion)", padding=4)
         self.ref_frame.pack(fill="x", padx=6, pady=4)
         self._tips.append(ToolbarTooltip(self.ref_frame,
             "Automatic choice: among lines with ≥ 5 % of the strongest intensity of the species, the one with the\n"
@@ -210,7 +214,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             try:
                 db = StarkDatabase(self._db_path())
             except Exception as e:  # noqa: BLE001
-                self.status_var.set(f"Stark database unavailable ({e}); IRSAC only")
+                self.status_var.set(f"Stark database unavailable ({e}); IRSAC2 only")
             try:
                 self.results = assess(self.lines, db, references=self._references(), **self.params)
             finally:
@@ -255,7 +259,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         fr = sorted({(r.line.element, r.line.ion, r.irsac_fref) for r in self.results
                      if r.irsac_status.startswith("reference") and r.irsac_fref is not None and r.irsac_fref < 1.0})
         if fr:
-            out.append("Reference line self-absorbed (Yang f_ref): " + "; ".join(
+            out.append("Reference line self-absorbed (f_ref): " + "; ".join(
                 f"{e} {'I' if i == 1 else 'II'} f_ref = {v:.3g}" for e, i, v in fr))
         unsafe = [r.line.label for r in self.results if "unsafe" in r.irsac_status or "unsafe" in r.stark_status]
         if unsafe:
@@ -285,7 +289,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         unres = sum(1 for r in self.results if r.stark_status.startswith("unresolved"))
         if unres:
             out.append(f"{unres} line(s) have Stark widths below the resolvable limit: the Stark method is not applied to them.")
-        out.append("IRSAC gives SA relative to the reference line; if the reference is slightly absorbed, all lines of the "
+        out.append("IRSAC2 gives SA relative to the reference line; if the reference is slightly absorbed, all lines of the "
                    "species share that factor, which cancels in the Boltzmann slope (T) but not in absolute concentrations "
                    "between species.")
         out.append("Stark widths: Stark_extended.db (Konjević et al., J. Phys. Chem. Ref. Data 1984, 1990, 2002 and the "
@@ -414,50 +418,6 @@ class SelfAbsorptionWindow(tk.Toplevel):
                             r.irsac_sa, r.irsac_sac, r.irsac_sac_rel, r.irsac_status, r.irsac_fref, r.level_test,
                             sac, meth])
 
-    def compare_methods(self):
-        if not self.results:
-            self.compute()
-        try:
-            from pylibs.core.dev_adapters import compare_irsac
-            result = compare_irsac(self.master_app, self)
-        except Exception as exc:  # noqa: BLE001
-            _showerror(self, "IRSAC comparison", str(exc))
-            return
-        lines = [
-            "IRSAC comparison on the current fitted line set", "",
-            (f"IRSAC1: {result['irsac1_seconds']:.6g} s; converged={result['irsac1_converged']}; "
-             f"iterations={result['irsac1_iterations']}; T={result['irsac1_temperature_k']:.7g} K; "
-             f"RMSE={result['irsac1_rmse']:.6g}"),
-            f"IRSAC2: {result['irsac2_seconds']:.6g} s; {result['irsac2_method']}",
-            "", "Line correction factors:",
-            f"{'Line':34} {'IRSAC1':>13} {'IRSAC2':>13}",
-        ]
-        for key, label in sorted(result["line_labels"].items(), key=lambda pair: pair[1]):
-            a, b = result["irsac1_factors"].get(key), result["irsac2_factors"].get(key)
-            lines.append(f"{label[:34]:34} {a if a is not None else '—':>13} {b if b is not None else '—':>13}")
-        lines += ["", "CF-LIBS composition (molar % / mass %):",
-                  f"{'Element':12} {'IRSAC1 molar/mass':>28} {'IRSAC2 molar/mass':>28}"]
-        c1, c2 = result["composition1"], result["composition2"]
-        for element in sorted(set(c1) | set(c2)):
-            a, b = c1.get(element), c2.get(element)
-            fa = f"{a[0]:.6g} / {a[1]:.6g}" if a else "—"
-            fb = f"{b[0]:.6g} / {b[1]:.6g}" if b else "—"
-            lines.append(f"{element:12} {fa:>28} {fb:>28}")
-        self.master_app.last_irsac_comparison = result
-        win = tk.Toplevel(self)
-        win.title("IRSAC1 / IRSAC2 comparison")
-        win.geometry("980x620")
-        text = tk.Text(win, wrap="none", font=("TkFixedFont", 9))
-        ybar = ttk.Scrollbar(win, orient="vertical", command=text.yview)
-        xbar = ttk.Scrollbar(win, orient="horizontal", command=text.xview)
-        text.configure(yscrollcommand=ybar.set, xscrollcommand=xbar.set)
-        ybar.pack(side="right", fill="y")
-        xbar.pack(side="bottom", fill="x")
-        text.pack(fill="both", expand=True)
-        text.insert("1.0", "\n".join(lines))
-        text.configure(state="disabled")
-
-
 def report_rows(app):
     """Rows for the CF-LIBS report: (summary list, table rows)."""
     sa = getattr(app, "last_self_absorption", None)
@@ -471,7 +431,7 @@ def report_rows(app):
         ["Ne / σ (rel)", f"{p['ne']:.3e} cm-3 / {100 * p['ne_rel']:.0f} %"],
         ["Instrumental FWHM / Lorentzian part / resolve ratio", f"{p['inst_fwhm']:g} / {p['inst_lorentz']:g} Å / {p['resolve_ratio']:g}"],
         ["σ gA (rel) / significance", f"{p['sigma_y']:g} / {p['nsig']:g}σ"],
-        ["Max SAC / reference absorption (Yang)", f"{p.get('max_sac', MAX_SAC):.3g} / {'yes' if p.get('ref_absorption', True) else 'no'}"],
+        ["Max SAC / reference-line absorption estimate", f"{p.get('max_sac', MAX_SAC):.3g} / {'yes' if p.get('ref_absorption', True) else 'no'}"],
         ["Lines corrected", str(sa["applied"])],
     ]
     if sa.get("history"):

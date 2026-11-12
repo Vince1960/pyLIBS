@@ -5,21 +5,373 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from pyLIBS import (
+    AtomicLine,
     AppOptions,
     MainWindow,
     Spectrum,
     TemplateLine,
+    acquired_wavelength_intervals,
     active_electron_density,
+    automatic_trace_peak_match,
     clear_all_spectra,
+    clear_current_line_analysis,
     load_template_lines,
+    measured_peak_near_wavelength,
     merge_analytical_line_libraries,
     save_analytical_line_library,
+    selected_observed_peak_wavelengths,
     set_session_electron_density,
     spectrum_contains_halpha,
+    template_line_marker_is_visible,
+    trace_lines_from_analytical_library,
 )
 
 
 class AnalyticalLineLibraryTests(unittest.TestCase):
+    def test_complete_trace_scope_uses_all_acquired_intervals(self):
+        spectrum = Spectrum(
+            [300.0, 301.0, 400.0, 401.0],
+            [1.0, 2.0, 3.0, 4.0],
+        )
+        app = SimpleNamespace(
+            spectra=[spectrum],
+            independent_window_mode=False,
+        )
+
+        self.assertEqual(
+            acquired_wavelength_intervals(app),
+            [(300.0, 301.0), (400.0, 401.0)],
+        )
+
+    def test_complete_trace_uses_only_real_peaks_and_allows_reidentification(self):
+        app = SimpleNamespace(
+            template_lines=[
+                TemplateLine(340.36521, "Cd", 1),
+                TemplateLine(341.0, templint=12.0),
+                TemplateLine(
+                    344.626,
+                    "Ni",
+                    1,
+                    inte=3.2e-4,
+                    fitwavelen=344.71,
+                    fit_profile="voigt",
+                ),
+                TemplateLine(
+                    326.10548,
+                    "Cd",
+                    1,
+                    inte=2.1e-4,
+                    fitwavelen=326.12,
+                    fit_profile="voigt",
+                ),
+            ]
+        )
+
+        complete = selected_observed_peak_wavelengths(
+            app,
+            "Cd",
+            allow_alternative_assignments=True,
+        )
+        curated = selected_observed_peak_wavelengths(
+            app,
+            "Cd",
+            allow_alternative_assignments=False,
+        )
+
+        self.assertEqual(complete, [326.12, 341.0, 344.71])
+        self.assertEqual(curated, [326.12, 341.0])
+
+    def test_trace_assign_uses_shifted_fitted_center(self):
+        selected = TemplateLine(
+            340.70,
+            templint=10.0,
+            fitwavelen=340.365,
+            fit_profile="voigt",
+        )
+        atomic = AtomicLine(340.365, "Cd", 1, aki=1.0)
+
+        class Database:
+            @staticmethod
+            def enrich_line_from_element_table(line, **_kwargs):
+                return line
+
+        app = SimpleNamespace(
+            template_lines=[selected],
+            trace_markers=[atomic],
+            options=SimpleNamespace(search_range=0.10),
+            libs_db=Database(),
+            wavelength_unit="nm",
+            analysis_elements=set(),
+            last_saha_boltzmann=None,
+        )
+        app.copy_atomic_line_to_template_line = (
+            lambda template, line: MainWindow.copy_atomic_line_to_template_line(
+                app, template, line
+            )
+        )
+        app.notify_template_changed = lambda redraw=False: None
+        app.redraw = lambda preserve_view=False: None
+        app.status = lambda _message: None
+
+        assigned = MainWindow.assign_traced_lines(app)
+
+        self.assertEqual(assigned, 1)
+        self.assertEqual(selected.specie, "Cd")
+        self.assertAlmostEqual(selected.asswavelen, 340.365)
+
+    def test_complete_trace_locates_a_real_peak_after_wavelength_shift(self):
+        spectrum = Spectrum(
+            [
+                340.15,
+                340.19,
+                340.23,
+                340.27,
+                340.31,
+                340.35,
+                340.39,
+                340.43,
+                340.47,
+            ],
+            [1.0, 1.0, 2.0, 5.0, 10.0, 7.0, 3.0, 1.0, 1.0],
+        )
+        app = SimpleNamespace(
+            spectra=[spectrum],
+            independent_window_mode=False,
+            active_window=None,
+        )
+
+        match = measured_peak_near_wavelength(app, 340.365, 0.10)
+
+        self.assertIsNotNone(match)
+        self.assertAlmostEqual(match["wavelength"], 340.31)
+        self.assertEqual(match["intensity"], 10.0)
+
+    def test_complete_trace_rejects_a_tiny_noise_maximum_near_a_line(self):
+        x_values = [390.0 + 0.01 * index for index in range(1001)]
+        y_values = [1.0 + (0.002 if index % 2 else 0.0) for index in range(1001)]
+        y_values[336] = 50.0
+        y_values[337] = 100.0
+        y_values[338] = 45.0
+        app = SimpleNamespace(
+            spectra=[Spectrum(x_values, y_values)],
+            independent_window_mode=False,
+            active_window=None,
+        )
+
+        self.assertIsNone(measured_peak_near_wavelength(app, 391.005, 0.02))
+        strong = measured_peak_near_wavelength(app, 393.37, 0.02)
+        self.assertIsNotNone(strong)
+        self.assertAlmostEqual(strong["wavelength"], 393.37)
+
+    def test_strong_transition_recovers_a_small_residual_wavelength_offset(self):
+        x_values = [392.8 + 0.01 * index for index in range(121)]
+        y_values = [1.0 for _ in x_values]
+        peak_index = min(
+            range(len(x_values)),
+            key=lambda index: abs(x_values[index] - 393.25),
+        )
+        y_values[peak_index - 1:peak_index + 2] = [25.0, 100.0, 30.0]
+        app = SimpleNamespace(
+            spectra=[Spectrum(x_values, y_values)],
+            independent_window_mode=False,
+            active_window=None,
+        )
+        line = AtomicLine(393.365991, "Ca", 2, inte=230.0)
+
+        self.assertIsNone(
+            automatic_trace_peak_match(
+                app, line, 0.10, strong_transition=False
+            )
+        )
+        recovered = automatic_trace_peak_match(
+            app, line, 0.10, strong_transition=True
+        )
+
+        self.assertIsNotNone(recovered)
+        self.assertAlmostEqual(recovered["wavelength"], 393.25)
+        self.assertTrue(recovered["recovered_strong_transition"])
+        self.assertAlmostEqual(recovered["recovery_tolerance"], 0.15)
+
+    def test_trace_assign_creates_a_fittable_row_for_an_element_not_in_list(self):
+        spectrum = Spectrum(
+            [
+                340.15,
+                340.19,
+                340.23,
+                340.27,
+                340.31,
+                340.35,
+                340.39,
+                340.43,
+                340.47,
+            ],
+            [1.0, 1.0, 2.0, 5.0, 10.0, 7.0, 3.0, 1.0, 1.0],
+        )
+        atomic = AtomicLine(340.365, "Cd", 1, aki=1.0)
+
+        class Database:
+            @staticmethod
+            def enrich_line_from_element_table(line, **_kwargs):
+                return line
+
+        app = SimpleNamespace(
+            spectra=[spectrum],
+            independent_window_mode=False,
+            active_window=None,
+            template_lines=[],
+            trace_markers=[atomic],
+            options=SimpleNamespace(search_range=0.10),
+            libs_db=Database(),
+            wavelength_unit="nm",
+            analysis_elements=set(),
+        )
+        app.copy_atomic_line_to_template_line = (
+            lambda template, line: MainWindow.copy_atomic_line_to_template_line(
+                app, template, line
+            )
+        )
+        app.notify_template_changed = lambda redraw=False: None
+        app.redraw = lambda preserve_view=False: None
+        app.status = lambda _message: None
+
+        assigned = MainWindow.assign_traced_lines(
+            app,
+            [atomic],
+            tolerance=0.10,
+        )
+
+        self.assertEqual(assigned, 1)
+        self.assertEqual(len(app.template_lines), 1)
+        self.assertAlmostEqual(app.template_lines[0].wavelen, 340.31)
+        self.assertAlmostEqual(app.template_lines[0].asswavelen, 340.365)
+        self.assertEqual(app.template_lines[0].specie, "Cd")
+        self.assertGreater(app.template_lines[0].templint, 0.0)
+
+    def test_trace_assign_moves_existing_library_row_to_measured_peak(self):
+        spectrum = Spectrum(
+            [340.20, 340.25, 340.30, 340.35, 340.40],
+            [1.0, 4.0, 12.0, 5.0, 1.0],
+        )
+        atomic = AtomicLine(340.365, "Cd", 1, aki=1.0)
+        template = TemplateLine(340.365, "Cd", 1)
+
+        class Database:
+            @staticmethod
+            def enrich_line_from_element_table(line, **_kwargs):
+                return line
+
+        class FitWindow:
+            _fit_running = False
+
+            def __init__(self):
+                self.refreshes = 0
+
+            @staticmethod
+            def winfo_exists():
+                return True
+
+            def refresh_content(self):
+                self.refreshes += 1
+
+        fit_window = FitWindow()
+        app = SimpleNamespace(
+            spectra=[spectrum],
+            independent_window_mode=False,
+            active_window=None,
+            template_lines=[template],
+            trace_markers=[atomic],
+            options=SimpleNamespace(search_range=0.10),
+            libs_db=Database(),
+            wavelength_unit="nm",
+            analysis_elements=set(),
+            auto_fit_window=fit_window,
+        )
+        app.copy_atomic_line_to_template_line = (
+            lambda target, line: MainWindow.copy_atomic_line_to_template_line(
+                app, target, line
+            )
+        )
+        app.notify_template_changed = lambda redraw=False: None
+        app.redraw = lambda preserve_view=False: None
+        app.status = lambda _message: None
+        match = {
+            "wavelength": 340.30,
+            "intensity": 12.0,
+            "prominence": 11.0,
+            "spectrum": spectrum,
+        }
+
+        assigned = MainWindow.assign_traced_lines(
+            app,
+            [atomic],
+            peak_matches={id(atomic): match},
+            tolerance=0.10,
+        )
+
+        self.assertEqual(assigned, 1)
+        self.assertAlmostEqual(template.wavelen, 340.30)
+        self.assertAlmostEqual(template.asswavelen, 340.365)
+        self.assertEqual(template.templint, 12.0)
+        self.assertTrue(template.trace_selected)
+        self.assertEqual(app.analysis_elements, {"Cd"})
+        self.assertEqual(app.last_trace_fit_ready_count, 1)
+        self.assertEqual(fit_window.refreshes, 1)
+
+    def test_trace_lines_can_use_only_the_persistent_main_list(self):
+        library = [
+            TemplateLine(326.10548, "Cd", 1),
+            TemplateLine(340.36521, "Cd", 1),
+            TemplateLine(214.438, "Cd", 2),
+            TemplateLine(349.296, "Ni", 1),
+        ]
+
+        lines = trace_lines_from_analytical_library(
+            library,
+            "cd",
+            [1],
+            300.0,
+            350.0,
+            wavelength_unit="nm",
+            selected_wavelengths=[340.40],
+            tolerance=0.05,
+        )
+
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0].specie, "Cd")
+        self.assertEqual(lines[0].ion, 1)
+        self.assertAlmostEqual(lines[0].wavelen, 340.36521)
+
+    def test_trace_lines_converts_the_persistent_list_to_angstrom(self):
+        lines = trace_lines_from_analytical_library(
+            [TemplateLine(340.36521, "Cd", 1)],
+            "Cd",
+            [1],
+            3400.0,
+            3410.0,
+            wavelength_unit="angstrom",
+        )
+
+        self.assertEqual(len(lines), 1)
+        self.assertAlmostEqual(lines[0].wavelen, 3403.6521)
+
+    def test_trace_lines_all_includes_every_ion_stage_in_main_list(self):
+        library = [
+            TemplateLine(340.36521, "Cd", 1),
+            TemplateLine(214.438, "Cd", 2),
+            TemplateLine(155.0, "Cd", 3),
+        ]
+
+        lines = trace_lines_from_analytical_library(
+            library,
+            "Cd",
+            None,
+            100.0,
+            400.0,
+            wavelength_unit="nm",
+        )
+
+        self.assertEqual({line.ion for line in lines}, {1, 2, 3})
+
     @staticmethod
     def _clear_graph_app(*, remember_ne=False):
         library = [
@@ -132,6 +484,20 @@ class AnalyticalLineLibraryTests(unittest.TestCase):
         self.assertEqual(loaded[0].inte, 0.0)
         self.assertEqual(loaded[0].fitwavelen, 0.0)
 
+    def test_persistent_library_markers_require_explicit_element_selection(self):
+        app = SimpleNamespace(
+            analysis_elements=set(),
+            last_saha_boltzmann=None,
+        )
+        cadmium = TemplateLine(340.36521, "Cd", 1)
+        manual = TemplateLine(340.4)
+
+        self.assertFalse(template_line_marker_is_visible(app, cadmium))
+        self.assertTrue(template_line_marker_is_visible(app, manual))
+
+        app.analysis_elements.add("Cd")
+        self.assertTrue(template_line_marker_is_visible(app, cadmium))
+
     def test_halpha_window_is_recognized_in_nm_and_angstrom(self):
         nm = Spectrum([637.892, 656.28, 673.903], [0.0, 1.0, 0.0])
         angstrom = Spectrum([6378.92, 6562.8, 6739.03], [0.0, 1.0, 0.0])
@@ -168,7 +534,7 @@ class AnalyticalLineLibraryTests(unittest.TestCase):
         self.assertTrue(routed)
         self.assertEqual(calls, ["656.txt"])
 
-    def test_clear_graph_restores_persistent_list_and_clears_active_ne_by_default(self):
+    def test_clear_graph_restores_clean_library_and_clears_previous_analysis(self):
         app = self._clear_graph_app(remember_ne=False)
 
         with patch("pyLIBS._askyesno", return_value=True):
@@ -176,13 +542,69 @@ class AnalyticalLineLibraryTests(unittest.TestCase):
 
         self.assertEqual(app.spectra, [])
         self.assertEqual(len(app.template_lines), 2)
-        self.assertEqual(app.analysis_elements, {"Cd", "Pb"})
+        self.assertEqual(app.analysis_elements, set())
         self.assertTrue(all(line.inte == 0.0 for line in app.template_lines))
         self.assertTrue(all(line.fitwavelen == 0.0 for line in app.template_lines))
         self.assertIsNone(app.session_ne)
         self.assertEqual(app.last_known_ne, 1.0589e16)
         self.assertIsNone(app.last_halpha_result)
-        self.assertIn("analytical list restored (2 lines)", app.status_messages[-1])
+        self.assertIn("analytical list restored (2 clean lines)", app.status_messages[-1])
+
+    def test_trace_clear_removes_dynamic_fits_and_saha_state(self):
+        library = [TemplateLine(340.36521, "Cd", 1)]
+        app = SimpleNamespace(
+            analytical_line_library=library,
+            template_lines=[
+                TemplateLine(
+                    340.36521,
+                    "Cd",
+                    1,
+                    inte=2.0e-4,
+                    fitwavelen=340.41,
+                    fit_profile="voigt",
+                ),
+                TemplateLine(
+                    393.25,
+                    "Ca",
+                    2,
+                    inte=8.0e-4,
+                    fitwavelen=393.25,
+                    asswavelen=393.365991,
+                    fit_profile="voigt",
+                ),
+            ],
+            atomic_lines=[AtomicLine(393.365991, "Ca", 2)],
+            element_markers=[AtomicLine(393.365991, "Ca", 2)],
+            trace_markers=[AtomicLine(393.365991, "Ca", 2)],
+            analysis_elements={"Cd", "Ca"},
+            fit_overlay=([1.0], [2.0]),
+            fit_baseline_overlay=([1.0], [0.0]),
+            fit_component_overlays=[([1.0], [2.0])],
+            fit_integration_bounds=[(339.0, 341.0)],
+            last_saha_boltzmann={"selected_element": "Ca"},
+            session_temperature=1.0,
+            session_temperature_source="Saha-Boltzmann",
+            post_irsac_temperature=0.9,
+            post_irsac_temperature_source="IRSAC",
+            saha_window=None,
+        )
+        app.notify_template_changed = lambda redraw=False: None
+
+        removed, restored = clear_current_line_analysis(app)
+
+        self.assertEqual((removed, restored), (2, 1))
+        self.assertEqual(len(app.template_lines), 1)
+        self.assertEqual(app.template_lines[0].specie, "Cd")
+        self.assertEqual(app.template_lines[0].inte, 0.0)
+        self.assertEqual(app.template_lines[0].fitwavelen, 0.0)
+        self.assertEqual(app.atomic_lines, [])
+        self.assertEqual(app.element_markers, [])
+        self.assertEqual(app.trace_markers, [])
+        self.assertEqual(app.analysis_elements, set())
+        self.assertIsNone(app.last_saha_boltzmann)
+        self.assertIsNone(app.session_temperature)
+        self.assertIsNone(app.fit_overlay)
+        self.assertEqual(app.fit_component_overlays, [])
 
     def test_clear_graph_can_retain_ne_explicitly_for_measurement_series(self):
         app = self._clear_graph_app(remember_ne=True)

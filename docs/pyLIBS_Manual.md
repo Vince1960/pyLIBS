@@ -16,7 +16,7 @@ Origine: LIBS++ di Vincenzo Palleschi e collaboratori
 6. File spettrali e caricamento
 7. Dark, fondo e funzione strumentale
 8. Calibrazione in lunghezza d'onda
-9. Listone e righe selezionate
+9. Libreria analitica e righe selezionate
 10. Ricerca dei picchi e identificazione
 11. Fit Voigt automatico e manuale
 12. Densità elettronica da Hα
@@ -65,7 +65,7 @@ Nel programma possono comparire tre valori distinti:
 - `fitwavelen`: centro osservato ricavato dal fit Voigt;
 - asse spettrale: lunghezza d'onda letta dal file, eventualmente corretta dalla calibrazione.
 
-Il listone deve contenere preferibilmente le lunghezze d'onda NIST. Il fit cerca il massimo osservato nell'intorno e determina il suo centro. Non sostituire sistematicamente il valore NIST con il centro osservato.
+La libreria analitica principale deve contenere preferibilmente le lunghezze d'onda NIST. Il fit cerca il massimo osservato nell'intorno e determina il suo centro. Non sostituire sistematicamente il valore NIST con il centro osservato.
 
 ### 2.2 Area, altezza e larghezza
 
@@ -120,15 +120,15 @@ Questa è la procedura minima per un campione incognito.
 3. Caricare tutte le finestre del campione con `File > Load independent windows...` quando si vogliono evitare completamente i raccordi. Usare `File > Append...` solo se si desidera esplicitamente lo spettro unito.
 4. Controllare che il grafico mostri solo gli intervalli realmente acquisiti e che non siano presenti segmenti obliqui nei vuoti tra finestre.
 5. Aprire `Utilities > Instrument Calibration > Instrument Response...`, caricare tutte le curve di risposta e applicare `signal / response` se non sono già memorizzate.
-6. Aprire `Utilities > Instrument Calibration > Wavelength Calibration...`, caricare o incollare righe NIST note, stimare ogni finestra e usare `Apply and remember`.
-7. Aprire `Utilities > Analytical Line Lists > Main Analytical-Line Library...` e verificare che il listone principale sia caricato.
+6. Aprire `Utilities > Instrument Calibration > Wavelength Calibration...`, caricare o incollare righe NIST note, stimare ogni finestra e usare `Apply and use for future spectra`.
+7. Aprire `Utilities > Analytical Line Lists > Main Analytical-Line Library...` e verificare che la libreria analitica principale sia caricata.
 8. In `Analyse > Spectral Fitting > Automatic Fit...`, usare `Find visible peaks`; aggiungere manualmente eventuali massimi mancanti con `Add peak from graph`.
-9. Aprire `Analyse > Peak and Line Detection > Trace Lines...`, inserire un elemento alla volta, mantenere `Only near selected peaks`, scegliere stato ionico e tolleranza, quindi `OK` e `Assign`.
+9. Aprire `Analyse > Peak and Line Detection > Trace Lines...`, inserire un elemento alla volta, scegliere `Main analytical list` oppure `Complete element database`, mantenere `Only lines with a measured peak`, scegliere stato ionico e tolleranza, quindi `OK` e `Assign`.
 10. Ripetere il punto 9 esclusivamente per gli elementi che si vogliono analizzare. Se un elemento è stato inserito per errore, selezionarlo e premere `Canc` oppure `Remove element (Del)`.
 11. Tornare ad `Auto Fit`, impostare o verificare le ROI e premere `Fit selected peaks (Voigt)`. Controllare centri, area, larghezze, CV delle repliche e qualità.
 12. Caricare separatamente H-alpha con `Analyse > Plasma Diagnostics > Electron Density from Hα...`; verificare il massimo corretto, eseguire il fit e confermare Ne.
 13. Aprire `Analyse > Plasma Diagnostics > Saha-Boltzmann Plot...`, scegliere `Most reliable element` oppure una specie esplicita e calcolare. Controllare numero di righe, livelli, Delta Ek, R2 e stabilità leave-one-out.
-14. Aprire `Analyse > Plasma Diagnostics > Self-Absorption / IRSAC...`. Leggere prima la diagnosi. Applicare la correzione solo se esistono evidenze sperimentali che la giustifichino.
+14. Aprire `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Leggere prima la diagnosi. Applicare la correzione solo se esistono evidenze sperimentali che la giustifichino.
 15. Aprire `Analyse > Quantitative Analysis > CF-LIBS...`, usare la T e Ne correnti, calcolare e controllare `Robustness` e `Show Report` prima di accettare le percentuali.
 16. Salvare il report con tutte le informazioni della misura.
 
@@ -186,9 +186,10 @@ La modalità energetica è predefinita per preservare la configurazione attuale.
 
 ### 4.6 Wavelength calibration
 
-- `Legacy global Delta lambda`: traslazione unica storica. Non è adeguata quando lo shift cambia tra finestre.
-- `Use saved per-window calibration`: applica il profilo salvato in modo indipendente a ciascuna finestra.
-- `Per-window calibration...`: apre la procedura descritta al capitolo 8.
+- `Apply saved per-window calibration on load`: applica il profilo salvato in modo indipendente a ciascuna finestra.
+- `Manage per-window calibration...`: apre la procedura descritta al capitolo 8.
+
+L'offset globale precedente resta leggibile soltanto per compatibilità con configurazioni storiche e non è più una normale impostazione dell'interfaccia. Se sono presenti profili per finestra ma nessuno è compatibile con un file caricato, il programma mantiene l'asse grezzo e mostra un avviso: non combina silenziosamente il profilo mancante con l'offset storico.
 
 ### 4.7 H-alpha parameters
 
@@ -245,11 +246,11 @@ La finestra principale contiene menu, barra rapida, grafico e barra di stato.
 
 - `Open`: apre un singolo spettro come spettro principale.
 - `Append`: carica più file o finestre nella stessa sessione.
-- `Clear`: pulisce il grafico e lo stato della misura; il listone persistente viene ricaricato.
+- `Clear`: pulisce il grafico e lo stato della misura; la libreria analitica principale viene ricaricata.
 - `Active Spectra`: mostra, nasconde, scala o combina gli spettri caricati.
 - `Response`: gestisce le curve radiometriche.
 - `Full Scale`: ripristina l'intera vista.
-- `Selected Lines`: apre il listone operativo.
+- `Selected Lines`: apre l'elenco operativo delle righe analitiche.
 - `Trace`: identifica le righe degli elementi richiesti.
 - `Ne from H`: calcola Ne da H-alpha.
 - `Auto Fit` e `Manual Fit`: eseguono il fit Voigt.
@@ -301,7 +302,7 @@ Aprire `Edit > Spectrum Management > Show Active Spectra`.
 
 ### 6.5 Clear Graph e memoria della sessione
 
-`Edit > Spectrum Management > Clear Graph` rimuove spettri, fit, marcatori e risultati della misura corrente. Il listone principale persistente resta disponibile e viene ripristinato. Ne viene cancellata, salvo che `Keep active Ne after Clear Graph` sia stato esplicitamente attivato per una serie omogenea.
+`Edit > Spectrum Management > Clear Graph` rimuove spettri, fit, marcatori e risultati della misura corrente. La libreria analitica principale resta disponibile e viene ripristinata. Ne viene cancellata, salvo che `Keep active Ne after Clear Graph` sia stato esplicitamente attivato per una serie omogenea.
 
 ## 7. Dark, fondo e funzione strumentale
 
@@ -348,7 +349,7 @@ Usare lunghezze d'onda NIST certe e presenti nel campione. Si può:
 
 - premere `Load NIST line list...` e caricare un file;
 - incollare una serie di valori in `or paste wavelengths` e premere `Add`;
-- usare righe NIST già presenti nel listone selezionato.
+- usare righe NIST già presenti nell'elenco delle righe selezionate.
 
 Sono accettati valori con punto o virgola decimale. Una lista può contenere intestazioni di elemento e stato ionico.
 
@@ -368,20 +369,60 @@ Selezionare una finestra nella tabella superiore. Nella tabella inferiore selezi
 
 ### 8.4 Applicare e ricordare
 
-- `Apply to loaded spectra`: applica soltanto ai dati correnti.
-- `Apply and remember`: applica e salva i profili per misure successive con finestre compatibili.
+- `Apply to current spectra`: applica soltanto ai dati correnti.
+- `Apply and use for future spectra`: applica e salva i profili per misure successive con finestre compatibili.
 - `Clear saved calibration`: cancella i profili persistenti.
 
 Una calibrazione per finestra è preferibile a uno shift globale quando lo scostamento cambia tra i rivelatori.
 
-### 8.5 Shift manuale e altri interventi sull'asse
+Se una finestra caricata non corrisponde ad alcun profilo salvato, compare un avviso con nome e intervallo del file. Quella finestra resta sull'asse grezzo finché non viene creato un profilo compatibile; il programma non applica automaticamente un altro tipo di shift.
 
-`Utilities > Instrument Calibration > Manual Wavelength Shift...` serve per una correzione controllata quando è nota una singola riga. In `Move Point at` inserire la posizione osservata; in `to` inserire la posizione di riferimento. Il programma applica `shift = riferimento - osservato`.
+### 8.5 Controllo dedicato con lampada al mercurio
 
-1. Premere `Pick` e fare clic prima sul punto osservato, poi sulla posizione di destinazione, oppure digitare entrambi i valori.
-2. Attivare `Shift all spectra` solo se lo stesso offset è valido per tutti gli spettri visualizzati.
-3. Attivare `Shift Identifications` solo se anche marcatori, righe assegnate e centri di fit devono seguire lo spostamento.
-4. Premere `OK`, controllare una seconda riga indipendente e salvare il profilo per finestra quando possibile.
+Aprire `Utilities > Instrument Calibration > Mercury Wavelength Check...` per misurare lo shift da uno spettro Hg senza aggiungere la lampada allo spettro analitico.
+
+1. Caricare prima gli eventuali spettri del campione ai quali si vuole applicare temporaneamente lo stesso offset.
+2. Aprire `Mercury Wavelength Check...` e premere `Load Hg spectrum...`. Il file Hg viene letto separatamente sull'asse grezzo. L'eventuale trattamento del dark segue le normali regole di importazione supportate dal formato; non vengono invece applicati né la risposta radiometrica né un profilo di calibrazione in lunghezza d'onda già salvato.
+3. Selezionare in `Hg I reference (NIST, nm)` la transizione realmente acquisita. L'elenco viene ricavato dalla libreria NIST attiva e limitato alle righe Hg I comprese nella finestra caricata.
+4. Impostare `Maximum shift` a un valore maggiore dello spostamento atteso e premere `Calculate shift`.
+5. Controllare `Observed center`, `Offset`, prominenza e rapporto segnale/rumore. Il centro osservato è raffinato con il metodo Voigt della calibrazione generale.
+
+`Apply temporarily to loaded spectra` aggiunge una sola volta l'offset calcolato agli spettri del campione già caricati. Non modifica `pyLIBS.ini`; se gli spettri dichiarano già una correzione in lunghezza d'onda, compare una conferma per evitare un doppio conteggio.
+
+`Save offset for matching window` salva invece un profilo persistente `offset` nella sezione `[WavelengthCalibration]` di `pyLIBS.ini`. Le future finestre con intervallo compatibile lo useranno automaticamente. Se esiste già un profilo compatibile, il programma chiede conferma e lo sostituisce: il file di configurazione mantiene così un solo profilo attivo per quello specifico intervallo, evitando una scelta ambigua tra due spettrometri.
+
+Una sola riga Hg misura esclusivamente una traslazione costante. Per verificare o correggere anche la scala, usare almeno tre righe distribuite nell'intervallo e la finestra generale `Wavelength Calibration...`.
+
+### 8.6 Shift manuale e altri interventi sull'asse
+
+Con una lampada Hg è preferibile usare la procedura dedicata della sezione 8.5. La funzione seguente resta disponibile come alternativa generica quando si conoscono direttamente una lunghezza d'onda osservata e la corrispondente lunghezza d'onda di riferimento.
+
+`Utilities > Instrument Calibration > Temporary Wavelength Shift...` (`Ctrl+F1`) serve per una correzione controllata dei soli spettri già caricati quando è nota una singola riga, per esempio una riga di una lampada al mercurio. Non modificare la `Tolerance` di `Trace Lines` per compensare una calibrazione errata: la tolleranza amplia soltanto l'intervallo di associazione e non corregge l'asse.
+
+Procedura con una riga Hg nota:
+
+1. Caricare lo spettro da correggere prima di eseguire `Trace Lines`, `Assign` o il fitting.
+2. Aprire `Temporary Wavelength Shift...`.
+3. In `Observed wavelength` inserire il centro misurato della riga Hg. Si può premere `Pick` e fare clic sul massimo osservato oppure digitare il valore.
+4. In `Target wavelength (NIST)` inserire la lunghezza d'onda di riferimento della stessa transizione.
+5. Attivare `Shift all spectra` soltanto se tutti gli spettri caricati provengono dallo stesso spettrometro e lo stesso offset è valido per ciascuno.
+6. Premere `OK`, ripetere `Trace Lines > Find lines` e controllare almeno una seconda riga indipendente.
+
+Il programma calcola e applica a ogni campione dell'asse X:
+
+`Delta lambda = lambda_NIST - lambda_osservata`
+
+`lambda_corretta = lambda_misurata + Delta lambda`
+
+Esempio: se la riga Hg di riferimento della libreria attiva è `546.075 nm` e il massimo osservato è `546.400 nm`, `Delta lambda = -0.325 nm`; tutto l'asse viene quindi traslato di `-0.325 nm`.
+
+La lunghezza d'onda osservata e quella NIST devono usare la stessa unità e la stessa convenzione aria/vuoto. Nel visibile lo spettrometro è normalmente riferito alle lunghezze d'onda in aria: usare perciò il corrispondente valore NIST in aria, salvo diversa calibrazione dichiarata dallo strumento.
+
+Lo shift temporaneo aggiorna l'asse misurato e gli eventuali centri di fit già calcolati, ma non modifica mai le lunghezze NIST, i marcatori teorici o i profili persistenti. È valido soltanto per gli spettri attualmente caricati.
+
+Quando si cambia spettrometro, verificare in `Options > Wavelength calibration` che non venga applicato automaticamente un profilo creato per lo strumento precedente. Disattivare `Apply saved per-window calibration on load` oppure usare `Clear saved calibration` prima di creare i nuovi profili. Non applicare contemporaneamente un profilo persistente precedente e lo shift Hg, perché la correzione verrebbe conteggiata due volte.
+
+Una sola riga determina esclusivamente un offset costante. Se lo scostamento cambia con la lunghezza d'onda, acquisire almeno tre righe Hg affidabili distribuite nell'intervallo e creare una calibrazione lineare da `Wavelength Calibration...`; salvare un profilo per finestra quando la correzione deve essere riutilizzata su misure future.
 
 `Utilities > Signal Processing > Intensity Offset...` applica allo spettro principale lo spostamento verticale `valore desiderato - valore corrente`. Non è una sottrazione fisica del dark e non deve essere usato per mascherare un fondo errato.
 
@@ -389,13 +430,13 @@ Una calibrazione per finestra è preferibile a uno shift globale quando lo scost
 
 `Utilities > Signal Processing > Convert nm to Å` moltiplica l'asse per 10. Usarlo una sola volta e solo quando l'asse corrente è realmente in nanometri. `Go To Wavelength...` cambia soltanto la vista del grafico.
 
-## 9. Listone e righe selezionate
+## 9. Libreria analitica e righe selezionate
 
 Aprire `Utilities > Analytical Line Lists > Main Analytical-Line Library...` o il pulsante `Selected Lines`.
 
-### 9.1 Che cosa contiene il listone
+### 9.1 Contenuto della libreria analitica principale
 
-Il listone persistente contiene righe analitiche candidate, normalmente con lunghezze d'onda NIST e metadati atomici. La tabella aperta è lo spazio di lavoro della misura corrente: oltre all'assegnazione può contenere centro, larghezze e area Voigt osservati.
+La libreria analitica principale contiene righe analitiche candidate, normalmente con lunghezze d'onda NIST e metadati atomici. La tabella aperta è lo spazio di lavoro della misura corrente: oltre all'assegnazione può contenere centro, larghezze e area Voigt osservati.
 
 ### 9.2 Comandi principali
 
@@ -413,13 +454,13 @@ Il listone persistente contiene righe analitiche candidate, normalmente con lung
 
 Nel menu `Manage library`:
 
-- `Reload main library`: ricarica il listone principale dal disco;
+- `Reload main library`: ricarica la libreria analitica principale dal disco;
 - `Add secondary list...`: fonde una lista aggiuntiva evitando duplicati;
-- `Replace main library...`: sostituisce il listone principale;
+- `Replace main library...`: sostituisce la libreria analitica principale;
 - `Save current lines as main`: rende persistenti le righe correnti, rimuovendo risultati di fit e intensità specifici della misura;
 - `Restore included library`: ripristina la lista distribuita col programma.
 
-Il listone non autorizza automaticamente tutti gli elementi alla quantificazione. L'insieme degli elementi analizzati è definito esplicitamente da `Trace Lines` nella sessione corrente.
+La presenza di una riga nella libreria analitica principale non autorizza automaticamente il relativo elemento alla quantificazione. L'insieme degli elementi analizzati è definito esplicitamente da `Trace Lines` nella sessione corrente.
 
 ## 10. Ricerca dei picchi e identificazione
 
@@ -429,17 +470,18 @@ Il listone non autorizza automaticamente tutti gli elementi alla quantificazione
 
 ### 10.2 Trace Lines: procedura corretta
 
-1. Se necessario, ingrandire il grafico sull'intervallo da analizzare.
+1. Se si usa la libreria analitica principale, ingrandire il grafico sull'intervallo da analizzare. La ricerca nel database completo usa invece tutte le finestre realmente acquisite.
 2. Aprire `Analyse > Peak and Line Detection > Trace Lines...`.
 3. Inserire il simbolo in `Trace Species`, per esempio `Cu`, `Sn` o `Pb`.
-4. Scegliere `I`, `II`, `Both` oppure `All`.
-5. Lasciare attivo `Only near selected peaks` per accettare soltanto transizioni vicine a massimi osservati già selezionati.
-6. Impostare `Tolerance` nell'unità mostrata.
-7. Premere `OK` e controllare la tabella.
-8. Premere `Assign` soltanto se le righe sono coerenti.
-9. Ripetere per ogni elemento effettivamente richiesto.
+4. In `Line source`, scegliere `Main analytical list` per usare esclusivamente le righe della libreria analitica principale nell'intervallo visibile, oppure `Complete element database` per interrogare tutte le transizioni disponibili per quell'elemento in tutte le finestre realmente acquisite.
+5. Scegliere `I`, `II`, `Both` oppure `All`.
+6. Lasciare attivo `Only lines with a measured peak`: il programma cerca automaticamente un vero massimo locale misurato vicino a ogni transizione.
+7. Impostare `Tolerance` nell'unità mostrata.
+8. Premere `OK` e controllare la tabella.
+9. Premere `Assign` soltanto se le righe sono coerenti.
+10. Ripetere per ogni elemento effettivamente richiesto.
 
-`Max Lines (all mode)` limita il numero di righe quando si esplora `All`. Disattivare `Only near selected peaks` soltanto per consultare il database: le righe attese ma prive di massimo non devono diventare aree analitiche.
+Il filtro `Only lines with a measured peak` si applica a entrambe le sorgenti. Le righe teoriche precaricate dalla libreria analitica principale non contano come osservazioni: per ogni transizione deve esistere un massimo misurato entro `Tolerance`. Con il database completo il confronto può proporre anche un'identificazione alternativa per un picco già assegnato. `Assign` aggiunge automaticamente i massimi corrispondenti all'elenco delle righe analitiche, anche quando l'elemento non era presente nella libreria analitica principale, rendendoli disponibili al fit e all'integrazione. Disattivare il filtro soltanto per consultare tutte le righe teoriche della sorgente.
 
 ### 10.3 Rimuovere un elemento errato
 
@@ -501,7 +543,7 @@ Nel risultato quantitativo entrano esclusivamente le righe selezionate. Il progr
 `Analyse > Spectral Fitting > Manual Fit...` permette di modificare centro, componente gaussiana e lorentziana e di fissare singoli parametri. Usarlo per regioni problematiche, non per forzare un risultato desiderato.
 
 - `Fit`: esegue la regione corrente.
-- `Next Region` e `Previous Region`: scorrono le regioni del listone.
+- `Next Region` e `Previous Region`: scorrono le regioni della libreria analitica.
 - `Refresh`: rilegge i dati correnti.
 - `Show Residuals`: apre i residui del fit.
 - casella `Fix` accanto a un parametro: impedisce all'ottimizzatore di modificarlo.
@@ -613,17 +655,17 @@ Una variazione di 0.02 eV corrisponde a circa 232 K.
 
 L'autoassorbimento non deve essere applicato automaticamente a ogni campione. Prima si valuta l'evidenza, poi si sceglie la correzione.
 
-### 14.1 modalità
+### 14.1 Modalità
 
-- `Combined Stark-width and IRSAC correction`: combina il controllo basato sulla larghezza Stark con IRSAC per le righe supportate.
-- `Stark-linewidth correction`: usa soltanto la correzione basata sulla larghezza Stark prevista e osservata.
-- `IRSAC internal-reference correction`: applica l'IRSAC a riferimenti interni di ciascuna specie; la specie termometrica determina la temperatura corretta congelata usata nelle correzioni successive.
+- `IRSAC2 (recommended)`: usa esclusivamente la valutazione a riferimento interno IRSAC2.
+- `Stark where available, else IRSAC2`: usa il controllo Stark quando la riga dispone di dati risolti e affidabili; altrimenti usa IRSAC2.
+- `Stark only`: usa soltanto il controllo basato sulla larghezza Stark prevista e osservata.
 
-La correzione basata sulla larghezza Stark richiede una corrispondenza specifica di riga nel database `Stark.db`. L'assenza di quella riga non dimostra assenza di autoassorbimento: significa che quel controllo non è disponibile per quella transizione.
+IRSAC2 è l'unico percorso IRSAC selezionabile. La correzione Stark richiede una corrispondenza specifica di riga in `Stark_extended.db`; l'assenza della riga significa soltanto che quel controllo indipendente non è disponibile.
 
 ### 14.2 Diagnosi prima della correzione
 
-Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-Absorption / IRSAC...`. Controllare:
+Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Entrambi aprono la stessa finestra IRSAC2. Controllare:
 
 - coerenza di righe con stesso livello superiore;
 - andamento dell'ordinata rispetto a Ek;
@@ -634,48 +676,42 @@ Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-
 
 `Not assessable` non equivale a `no autoassorbimento`. Significa che i dati non consentono una decisione solida.
 
-### 14.3 Temperatura iniziale di fallback
+### 14.3 Stato del plasma e incertezze
 
-`Initial-T fallback` può essere:
+IRSAC2 usa `kT`, la sua incertezza, `Ne`, l'incertezza relativa di Ne, la FWHM strumentale, l'eventuale componente Lorentziana strumentale, l'incertezza relativa di `gA` e la soglia di significatività `nσ`. I valori iniziali sono presi dalla sessione Saha-Boltzmann/H-alpha quando disponibili e restano modificabili nella finestra.
 
-- `Auto (from Saha)`: riusa la riga di riferimento selezionata in Saha-Boltzmann solo quando serve una T iniziale di ripiego;
-- una specie esplicita, per esempio `Cd I`, `Sn I` o `Pb I`.
+### 14.4 Riga di riferimento IRSAC2
 
-La specie termometrica selezionata determina sia la T grezza sia la T corretta che viene poi congelata durante IRSAC. In `Auto (from Saha)` viene riutilizzata la specie di riferimento Saha-Boltzmann; una scelta esplicita, per esempio `Cd I`, resta fissa. Conviene usare una specie con ampio intervallo Ek, almeno tre livelli superiori indipendenti e fit stabile. Le altre specie non possono spostare la T IRSAC.
+Per ogni specie atomica o ionica serve una riga di riferimento interna. La scelta automatica considera anzitutto righe con intensità almeno pari al 5% della più intensa, esclude quando possibile i fit non affidabili e minimizza il proxy di profondità ottica
 
-### 14.4 Riga di riferimento IRSAC
+`tau_proxy = gk Aki lambda^3 exp(-Ei/kT)`.
 
-Per ogni specie atomica o ionica, una riga funge da riferimento interno. `Automatic line references` applica l'equazione (7) di Yang: scarta le accuratezze Aki peggiori del 50%, considera i candidati con l'accuratezza migliore e assegna peso 0,5 al rango crescente di Ei e 0,5 al rango decrescente di Aki. Per imporre un riferimento, selezionare la riga nella tabella e premere `Use selected line as IRSAC reference`. Una scelta manuale deve essere documentata e rende più severo il controllo quantitativo.
+La tendina per specie permette una scelta manuale. Una reference manuale deve essere motivata e documentata; una riga di risonanza con `Ei circa 0` è spesso una scelta fragile.
 
-### 14.5 Metodo IRSAC a T termometrica congelata
+### 14.5 Matematica IRSAC2
 
-La modalità quantitativa è `Staged Aslam IRSAC (internal references)`. Mantiene le aree integrate già misurate e applica questa sequenza una sola volta:
+IRSAC2 conserva le aree integrate misurate. Per una riga `k` e la reference `r` della stessa specie calcola
 
-1. calcola la temperatura grezza dalla retta della sola specie termometrica, `y = ln(lambda_NIST I / Aki gk)`; usa il valore di fallback soltanto se questa retta non è calcolabile;
-2. sceglie per ogni specie una riga di riferimento interna con l'equazione (7), oppure usa quella impostata manualmente;
-3. alla T grezza calcola per ogni riga della specie termometrica `f_k = I_k (A_ref g_ref)/(I_ref A_k g_k) exp[-(E_ref-E_k)/(0,69503476 T)]`;
-4. corregge l'area con `I_corr,k = I_k/f_k`; per la riga di riferimento `f_ref=1` per costruzione;
-5. esegue nuovamente il fit del solo Boltzmann plot corretto della specie termometrica e ottiene la T IRSAC finale;
-6. congela questa T e calcola, con la stessa equazione, i fattori di tutte le altre specie usando per ciascuna la propria riga di riferimento interna;
-7. non aggiorna più la T con le altre specie e non forza le loro pendenze libere a diventare parallele;
-8. nel CF-LIBS finale impone a tutti la pendenza fisica comune `m=-1/(kB T_IRSAC)` e stima soltanto l'intercetta `q = media(y_corr - m E)`.
+`d_k = ln(I_k/gA_k) - ln(I_r/gA_r) + (Ek_k-Ek_r)/kT`.
 
-La lambda NIST assegnata compare nell'ordinata di Boltzmann e nella risposta strumentale, ma non viene introdotta una seconda volta nell'equazione (6). Il centro osservato resta un risultato del fit e non sostituisce la lambda della transizione. Un moltiplicatore relativo `1/f_k` inferiore a 1 è ammesso: descrive la normalizzazione rispetto alla riga di riferimento scelta, non una misura assoluta della profondità ottica.
+Propaga l'incertezza delle due intensità, di `gA` e di `kT`. Il fattore relativo è `SA_k = exp(d_k + ln(f_ref))`; quando l'assorbimento è significativo, il moltiplicatore di area è `SAC_k = 1/SA_k`. Nessuna correzione viene applicata se il risultato è compatibile con uno entro `nσ`, se il fit è scadente o se `SAC` supera il limite configurato, predefinito `3,33`.
 
-Per confrontare pyLIBS con un foglio esterno occorrono le stesse aree integrate, risposta strumentale, lambda NIST, Aki, gk, Ek, righe di riferimento e specie termometrica.
+Con `Estimate reference-line absorption`, `f_ref` viene ridotto sotto uno soltanto quando almeno due righe indipendenti risultano significativamente meno assorbite della reference; una sola riga anomala viene trattata come possibile blend.
 
-### 14.6 Ricalcolo
+Il controllo Stark indipendente usa `w0 = w(10^17,T) Ne/10^17`. In `Stark_extended.db`, `w` è già una FWHM in Angstrom. Il database storico `Stark.db` conserva invece HWHM in nm a `10^17 cm^-3`; nei percorsi di compatibilità il programma applica quindi `FWHM(Angstrom) = 20 * HWHM(nm) * Ne/10^17`, oppure divide il risultato per 10 se lo spettro è espresso in nm. Dopo l'eventuale sottrazione della componente Lorentziana strumentale, con `r=wL/w0` calcola `SA=r^(-1/0,54)` e `SAC_area=r^(0,46/0,54)`, applicandoli soltanto quando la differenza è risolta e significativa.
 
-- `Recalculate IRSAC`: riusa le aree già misurate e ricalcola soltanto la correzione. IRSAC non rifitta mai lo spettro e non modifica le aree.
-- Se cambiano baseline o ROI, ripetere esplicitamente il fit nella finestra di fitting e solo dopo ricalcolare IRSAC.
-- `Apply correction`: rende attivi i fattori accettati.
-- `Remove correction`: torna alle aree non corrette.
+### 14.6 Calcolo e applicazione
 
-La finestra mostra T grezza, T IRSAC finale, specie termometrica, reference, fattori relativi e controlli diagnostici. Se la T corretta della specie termometrica non è calcolabile, i fattori non possono essere applicati. I controlli di qualità restano visibili, ma non modificano di nascosto l'equazione o le aree.
+- `Compute`: ricalcola diagnosi e fattori dalle aree già misurate; non rifitta lo spettro e non modifica le aree Voigt.
+- `Apply SAC`: applica soltanto i fattori validi secondo la modalità selezionata.
+- `Remove SAC`: torna alle aree non corrette.
+- `Iterate SAC <-> T-Ne`: alterna IRSAC2 e il fit T-Ne fino alla convergenza configurata.
+
+La tabella mostra reference, proxy ottico, controlli Stark, `SA`, `SAC`, test a stesso livello superiore e metodo realmente applicato. I controlli diagnostici non cambiano di nascosto baseline, ROI o area misurata.
 
 ### 14.7 Quando non usare la correzione
 
-Non applicare IRSAC se:
+Non applicare IRSAC2 se:
 
 - la diagnosi non mostra evidenza significativa;
 - le righe sono interferite o il fit è instabile;
@@ -690,7 +726,7 @@ Una correzione può essere visualizzata a scopo diagnostico ma essere bloccata p
 
 `Analyse > Plasma Diagnostics > SAC Factors...` calcola fattori diagnostici con `kT`, `Ne`, cammino ottico `path lu` e densità totale `N total`. Se esiste un risultato CF-LIBS, usa le sue `Number %`; altrimenti assegna percentuali uguali agli elementi presenti. La tabella restituisce `SAC`, larghezze e coefficiente al centro riga.
 
-Questa finestra non sostituisce `Self-Absorption / IRSAC` e non costituisce da sola una misura della concentrazione o del cammino ottico. Usarla soltanto come strumento specialistico quando `lu` e `N total` sono giustificati sperimentalmente.
+Questa finestra non sostituisce `Self-Absorption Correction (IRSAC2)` e non costituisce da sola una misura della concentrazione o del cammino ottico. Usarla soltanto come strumento specialistico quando `lu` e `N total` sono giustificati sperimentalmente.
 
 ## 15. Concentrazioni CF-LIBS
 
@@ -805,7 +841,7 @@ Lo spettro teorico è una verifica a valle. Non sostituisce IRSAC e non fornisce
 Aprire `Utilities > Batch and Statistics > Batch Operations...`.
 
 - `Add Files`: carica una lista di file; si possono scegliere tutti, dispari o pari.
-- `MultiFit`: applica il listone corrente ai file e salva una cartella di lavoro Excel.
+- `MultiFit`: applica la libreria analitica corrente ai file e salva una cartella di lavoro Excel.
 - `Join`: unisce i file a coppie e crea `.jnd`.
 - `Average`: interpola su una griglia comune, calcola la media e crea `.avg`.
 - `Calculate SD`: aggiunge la deviazione standard `.sd`.
@@ -824,7 +860,7 @@ Per rendere l'analisi riproducibile conservare insieme:
 - file dark o descrizione delle colonne dark;
 - curve di risposta radiometrica e data della loro misura;
 - profili di calibrazione in lunghezza d'onda;
-- listone analitico e versione del database atomico;
+- libreria analitica e versione del database atomico;
 - file medio eventualmente prodotto, senza eliminare le repliche;
 - report CF-LIBS, T, Ne, decisione SA e opzioni usate;
 - identificativo del campione, energia laser, delay, gate, numero di colpi e data.
@@ -856,7 +892,7 @@ Non riusare automaticamente T e Ne tra potenze diverse. Cambiano grado di ionizz
 
 ### 18.4 Campione incognito, standard e serie
 
-Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Standard Correction. Per uno standard certificato eseguire prima lo stesso flusso senza calibrazione, quindi valutare separatamente OPC o Standard Correction. Per una serie dello stesso campione e identiche condizioni si possono riusare listone, risposta e calibrazione per finestra; Ne può essere mantenuta solo con scelta esplicita e deve comunque essere verificata quando il plasma cambia.
+Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Standard Correction. Per uno standard certificato eseguire prima lo stesso flusso senza calibrazione, quindi valutare separatamente OPC o Standard Correction. Per una serie dello stesso campione e identiche condizioni si possono riusare la libreria analitica, la risposta e la calibrazione per finestra; Ne può essere mantenuta solo con scelta esplicita e deve comunque essere verificata quando il plasma cambia.
 
 <!-- pagebreak -->
 
@@ -864,10 +900,10 @@ Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Stan
 
 | Problema | Causa probabile | Azione |
 |---|---|---|
-| Una riga appare dove non esiste una finestra acquisita | listone o marcatori non filtrati, sessione sporca | Clear Graph, ricaricare le finestre e verificare il report; la riga non deve entrare nei calcoli |
+| Una riga appare dove non esiste una finestra acquisita | libreria analitica o marcatori non filtrati, sessione non inizializzata | Clear Graph, ricaricare le finestre e verificare il report; la riga non deve entrare nei calcoli |
 | Compare un elemento non richiesto | elemento tracciato in precedenza o assegnazione residua | Trace Lines, selezionare l'elemento e premere Canc; poi ricalcolare |
 | Il picco evidente non viene selezionato | soglia, zoom o lista osservata incompleta | ingrandire la zona, Auto Fit > Add peak from graph, poi Trace Lines |
-| Viene selezionata una riga senza picco | filtro `Only near selected peaks` disattivato | riattivarlo e cancellare l'assegnazione |
+| Viene mostrata una riga senza picco | filtro `Only lines with a measured peak` disattivato | riattivarlo e cancellare l'assegnazione |
 | Il programma sembra bloccato nel fit | ROI troppo ampia, troppi parametri o poche informazioni | premere Stop, restringere ROI, controllare componenti e riprovare |
 | R2 = 1 con due punti | una retta passa esattamente per due punti | non considerarlo prova di buona temperatura; servono più righe e livelli |
 | Le rette sono parallele in CF-LIBS | pendenza comune imposta da T | comportamento previsto dopo la scelta della T comune |
@@ -927,13 +963,14 @@ Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Stan
 | Instrument Calibration > Instrument Response... | Ctrl+Alt+R | carica e controlla le risposte |
 | Instrument Calibration > Apply Instrument Response | - | applica il rapporto segnale/risposta |
 | Instrument Calibration > Wavelength Calibration... | - | calibra ogni finestra |
-| Instrument Calibration > Manual Wavelength Shift... | Ctrl+F1 | applica uno spostamento scelto |
+| Instrument Calibration > Mercury Wavelength Check... | - | calcola da una riga Hg un offset temporaneo o persistente |
+| Instrument Calibration > Temporary Wavelength Shift... | Ctrl+F1 | applica uno spostamento ai dati correnti senza cambiare NIST o profili salvati |
 | Signal Processing > Intensity Offset... | Ctrl+F2 | modifica il livello verticale |
 | Signal Processing > Smooth Spectrum | Ctrl+F3 | leviga lo spettro visualizzato |
 | Signal Processing > Convert nm to Å | Ctrl+F4 | converte i nanometri in ångström |
 | Batch and Statistics > Batch Operations... | - | esegue elaborazioni batch, medie, unioni e MultiFit |
 | Analytical Line Lists > Import Lines for Current Analysis... | Ctrl+F5 | importa la lista corrente |
-| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F6 | gestisce il listone e le righe operative |
+| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F6 | gestisce la libreria analitica principale e le righe operative |
 | Analytical Line Lists > Selected-Line Summary | Ctrl+F7 | riepiloga le righe selezionate |
 | Analytical Line Lists > Clear Selected Lines | - | svuota le righe correnti |
 | Batch and Statistics > Statistics | Shift+Ctrl+F4 | mostra le statistiche X/Y |
@@ -949,13 +986,13 @@ Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Stan
 | Spectral Fitting > Automatic Fit... | seleziona e adatta automaticamente i profili Voigt |
 | Plasma Diagnostics > Electron Density from Hα... | calcola la densità elettronica |
 | Plasma Diagnostics > Saha-Boltzmann Plot... | calcola la temperatura e gli stadi di ionizzazione |
-| Plasma Diagnostics > Self-Absorption / IRSAC... | diagnostica e corregge l'autoassorbimento |
+| Plasma Diagnostics > Self-Absorption Correction (IRSAC2)... | diagnostica e corregge l'autoassorbimento con IRSAC2 |
 | Plasma Diagnostics > SAC Factors... | apre la finestra storica dei fattori SAC |
 | Quantitative Analysis > CF-LIBS... | calcola concentrazioni e robustezza |
 | Quantitative Analysis > Theoretical Spectrum... | genera il confronto teorico diagnostico |
 | Quantitative Analysis > Standard Correction... | applica la correzione con uno standard esterno |
 
-`SAC Factors` e `Standard Correction` sono strumenti specialistici o storici. Nel flusso ordinario usare `Self-Absorption / IRSAC`; applicare la correzione con standard solo quando esiste uno standard appropriato e documentato.
+`SAC Factors` e `Standard Correction` sono strumenti specialistici o storici. Nel flusso ordinario usare `Self-Absorption Correction (IRSAC2)`; applicare la correzione con standard solo quando esiste uno standard appropriato e documentato.
 
 ### 20.6 Help
 
