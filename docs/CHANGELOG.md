@@ -2,6 +2,12 @@
 
 ------------------------------------------------------------
 
+## 1.3.1 — 2026-11-12
+
+### Maintenance release
+
+This maintenance release incorporates the fixes merged through PR #3, including improvements to wavelength calibration and line tracing, corrections to Stark handling, and fixes across IRSAC and related analysis workflows.
+
 ## 1.3.0 — 2026-11-01
 
 ### What's New in pyLIBS 1.3.0
