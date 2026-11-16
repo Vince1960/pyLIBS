@@ -128,7 +128,7 @@ Questa è la procedura minima per un campione incognito.
 11. Tornare ad `Auto Fit`, impostare o verificare le ROI e premere `Fit selected peaks (Voigt)`. Controllare centri, area, larghezze, CV delle repliche e qualità.
 12. Caricare separatamente H-alpha con `Analyse > Plasma Diagnostics > Electron Density from Hα...`; verificare il massimo corretto, eseguire il fit e confermare Ne.
 13. Aprire `Analyse > Plasma Diagnostics > Saha-Boltzmann Plot...`, scegliere `Most reliable element` oppure una specie esplicita e calcolare. Controllare numero di righe, livelli, Delta Ek, R2 e stabilità leave-one-out.
-14. Aprire `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Leggere prima la diagnosi. Applicare la correzione solo se esistono evidenze sperimentali che la giustifichino.
+14. Aprire `Analyse > Plasma Diagnostics > Self-absorption compensation (IRSAC)...`. Leggere prima la diagnosi. Applicare la correzione solo se esistono evidenze sperimentali che la giustifichino.
 15. Aprire `Analyse > Quantitative Analysis > CF-LIBS...`, usare la T e Ne correnti, calcolare e controllare `Robustness` e `Show Report` prima di accettare le percentuali.
 16. Salvare il report con tutte le informazioni della misura.
 
@@ -338,6 +338,14 @@ Il programma elimina i bordi non affidabili della curva e non prolunga artificia
 `FWHM_L,corr = max(FWHM_L,fit - FWHM_strumento^2 / FWHM_L,fit, 0)`
 
 Lo stesso valore resta disponibile come approssimazione globale per lo spettro teorico. Non inserire la FWHM totale H-alpha dominata da Stark. Se la larghezza strumentale non è nota, usare 0.
+
+### 7.5 Rimozione della linea di base
+
+La rimozione della linea di base stima il fondo spettrale lentamente variabile e lo sottrae punto per punto. `Utilities > Signal Processing > Baseline Removal...` mostra lo spettro originale, la linea stimata e lo spettro corretto. Si può scegliere AsLS (Asymmetric Least Squares; λ = 1.000.000 e p = 0,01 sono valori iniziali) oppure airPLS (λ = 1.000.000 e 50 iterazioni sono valori iniziali). λ controlla la regolarità: valori maggiori producono una linea più regolare. Il parametro p di AsLS regola il peso dei punti sopra la linea di base. Il limite di iterazioni e la tolleranza controllano l'arresto del calcolo adattivo.
+
+Per impostazione predefinita, le intensità corrette negative vengono conservate perché possono rappresentare rumore attorno o sotto il fondo stimato. L'opzione di clipping le sostituisce con zero. Apply modifica lo spettro principale preservando le lunghezze d'onda; Cancel lo lascia invariato. Batch Operations usa gli stessi algoritmi e parametri e scrive file con suffisso `_baseline_corrected` nella cartella scelta.
+
+La rimozione della linea di base può modificare le aree dei picchi e quindi i risultati quantitativi. Applicare lo stesso metodo e gli stessi parametri agli standard di calibrazione e ai campioni incogniti, conservando gli spettri originali per il confronto.
 
 ## 8. Calibrazione in lunghezza d'onda
 
@@ -657,15 +665,15 @@ L'autoassorbimento non deve essere applicato automaticamente a ogni campione. Pr
 
 ### 14.1 Modalità
 
-- `IRSAC2 (recommended)`: usa esclusivamente la valutazione a riferimento interno IRSAC2.
-- `Stark where available, else IRSAC2`: usa il controllo Stark quando la riga dispone di dati risolti e affidabili; altrimenti usa IRSAC2.
+- `IRSAC (recommended)`: usa esclusivamente la valutazione a riferimento interno IRSAC.
+- `Stark where available, else IRSAC`: usa il controllo Stark quando la riga dispone di dati risolti e affidabili; altrimenti usa IRSAC.
 - `Stark only`: usa soltanto il controllo basato sulla larghezza Stark prevista e osservata.
 
-IRSAC2 è l'unico percorso IRSAC selezionabile. La correzione Stark richiede una corrispondenza specifica di riga in `Stark_extended.db`; l'assenza della riga significa soltanto che quel controllo indipendente non è disponibile.
+IRSAC è l'unico percorso IRSAC selezionabile. La correzione Stark richiede una corrispondenza specifica di riga in `Stark_extended.db`; l'assenza della riga significa soltanto che quel controllo indipendente non è disponibile.
 
 ### 14.2 Diagnosi prima della correzione
 
-Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Entrambi aprono la stessa finestra IRSAC2. Controllare:
+Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-absorption compensation (IRSAC)...`. Entrambi aprono la stessa finestra IRSAC. Controllare:
 
 - coerenza di righe con stesso livello superiore;
 - andamento dell'ordinata rispetto a Ek;
@@ -678,9 +686,9 @@ Aprire `Check SA` da Saha-Boltzmann oppure `Analyse > Plasma Diagnostics > Self-
 
 ### 14.3 Stato del plasma e incertezze
 
-IRSAC2 usa `kT`, la sua incertezza, `Ne`, l'incertezza relativa di Ne, la FWHM strumentale, l'eventuale componente Lorentziana strumentale, l'incertezza relativa di `gA` e la soglia di significatività `nσ`. I valori iniziali sono presi dalla sessione Saha-Boltzmann/H-alpha quando disponibili e restano modificabili nella finestra.
+IRSAC usa `kT`, la sua incertezza, `Ne`, l'incertezza relativa di Ne, la FWHM strumentale, l'eventuale componente Lorentziana strumentale, l'incertezza relativa di `gA` e la soglia di significatività `nσ`. I valori iniziali sono presi dalla sessione Saha-Boltzmann/H-alpha quando disponibili e restano modificabili nella finestra.
 
-### 14.4 Riga di riferimento IRSAC2
+### 14.4 Riga di riferimento IRSAC
 
 Per ogni specie atomica o ionica serve una riga di riferimento interna. La scelta automatica considera anzitutto righe con intensità almeno pari al 5% della più intensa, esclude quando possibile i fit non affidabili e minimizza il proxy di profondità ottica
 
@@ -688,9 +696,9 @@ Per ogni specie atomica o ionica serve una riga di riferimento interna. La scelt
 
 La tendina per specie permette una scelta manuale. Una reference manuale deve essere motivata e documentata; una riga di risonanza con `Ei circa 0` è spesso una scelta fragile.
 
-### 14.5 Matematica IRSAC2
+### 14.5 Matematica IRSAC
 
-IRSAC2 conserva le aree integrate misurate. Per una riga `k` e la reference `r` della stessa specie calcola
+IRSAC conserva le aree integrate misurate. Per una riga `k` e la reference `r` della stessa specie calcola
 
 `d_k = ln(I_k/gA_k) - ln(I_r/gA_r) + (Ek_k-Ek_r)/kT`.
 
@@ -705,13 +713,13 @@ Il controllo Stark indipendente usa `w0 = w(10^17,T) Ne/10^17`. In `Stark_extend
 - `Compute`: ricalcola diagnosi e fattori dalle aree già misurate; non rifitta lo spettro e non modifica le aree Voigt.
 - `Apply SAC`: applica soltanto i fattori validi secondo la modalità selezionata.
 - `Remove SAC`: torna alle aree non corrette.
-- `Iterate SAC <-> T-Ne`: alterna IRSAC2 e il fit T-Ne fino alla convergenza configurata.
+- `Iterate SAC <-> T-Ne`: alterna IRSAC e il fit T-Ne fino alla convergenza configurata.
 
 La tabella mostra reference, proxy ottico, controlli Stark, `SA`, `SAC`, test a stesso livello superiore e metodo realmente applicato. I controlli diagnostici non cambiano di nascosto baseline, ROI o area misurata.
 
 ### 14.7 Quando non usare la correzione
 
-Non applicare IRSAC2 se:
+Non applicare IRSAC se:
 
 - la diagnosi non mostra evidenza significativa;
 - le righe sono interferite o il fit è instabile;
@@ -726,7 +734,7 @@ Una correzione può essere visualizzata a scopo diagnostico ma essere bloccata p
 
 `Analyse > Plasma Diagnostics > SAC Factors...` calcola fattori diagnostici con `kT`, `Ne`, cammino ottico `path lu` e densità totale `N total`. Se esiste un risultato CF-LIBS, usa le sue `Number %`; altrimenti assegna percentuali uguali agli elementi presenti. La tabella restituisce `SAC`, larghezze e coefficiente al centro riga.
 
-Questa finestra non sostituisce `Self-Absorption Correction (IRSAC2)` e non costituisce da sola una misura della concentrazione o del cammino ottico. Usarla soltanto come strumento specialistico quando `lu` e `N total` sono giustificati sperimentalmente.
+Questa finestra non sostituisce `Self-absorption compensation (IRSAC)` e non costituisce da sola una misura della concentrazione o del cammino ottico. Usarla soltanto come strumento specialistico quando `lu` e `N total` sono giustificati sperimentalmente.
 
 ## 15. Concentrazioni CF-LIBS
 
@@ -849,6 +857,7 @@ Aprire `Utilities > Batch and Statistics > Batch Operations...`.
 - `Convert Andor SIF to ASCII XY`: seleziona più file SIF e una cartella di destinazione, quindi crea un `.txt` senza intestazione per ogni file, con colonne tabulate di lunghezza d'onda e intensità e lo stesso nome base. Gli errori sono riportati per singolo file.
 - `Convert ARYELLE to ASCII XY`: seleziona più file `.ary` oppure una cartella che li contiene e una cartella di destinazione. Crea un `.txt` senza intestazione per ogni file, con colonne tabulate di lunghezza d'onda e intensità e lo stesso nome base. Gli errori sono riportati per singolo file e i file esistenti non vengono sovrascritti.
 - `Convert CSV to ASCII XY`: seleziona più file CSV e una cartella di destinazione, quindi crea un `.txt` senza intestazione per ogni file, con colonne tabulate di lunghezza d'onda e intensità e lo stesso nome base. Gli errori sono riportati per singolo file.
+- `Baseline Removal`: applica AsLS o airPLS indipendentemente a ogni spettro e scrive i risultati con suffisso `_baseline_corrected` nella cartella scelta. Confermare esplicitamente prima di sovrascrivere file esistenti.
 
 Le medie tra acquisizioni sono corrette solo se i file appartengono alla stessa finestra e hanno condizioni sperimentali equivalenti. Non mediare insieme finestre centrali diverse.
 
@@ -986,13 +995,13 @@ Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Stan
 | Spectral Fitting > Automatic Fit... | seleziona e adatta automaticamente i profili Voigt |
 | Plasma Diagnostics > Electron Density from Hα... | calcola la densità elettronica |
 | Plasma Diagnostics > Saha-Boltzmann Plot... | calcola la temperatura e gli stadi di ionizzazione |
-| Plasma Diagnostics > Self-Absorption Correction (IRSAC2)... | diagnostica e corregge l'autoassorbimento con IRSAC2 |
+| Plasma Diagnostics > Self-absorption compensation (IRSAC)... | diagnostica e corregge l'autoassorbimento con IRSAC |
 | Plasma Diagnostics > SAC Factors... | apre la finestra storica dei fattori SAC |
 | Quantitative Analysis > CF-LIBS... | calcola concentrazioni e robustezza |
 | Quantitative Analysis > Theoretical Spectrum... | genera il confronto teorico diagnostico |
 | Quantitative Analysis > Standard Correction... | applica la correzione con uno standard esterno |
 
-`SAC Factors` e `Standard Correction` sono strumenti specialistici o storici. Nel flusso ordinario usare `Self-Absorption Correction (IRSAC2)`; applicare la correzione con standard solo quando esiste uno standard appropriato e documentato.
+`SAC Factors` e `Standard Correction` sono strumenti specialistici o storici. Nel flusso ordinario usare `Self-absorption compensation (IRSAC)`; applicare la correzione con standard solo quando esiste uno standard appropriato e documentato.
 
 ### 20.6 Help
 

@@ -1413,7 +1413,7 @@ def assess_self_absorption(
         status = "No significant evidence"
         message = (
             "The available independent checks do not justify an automatic "
-            "self-absorption correction."
+            "self-absorption compensation."
         )
     else:
         status = "Not assessable"

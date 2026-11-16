@@ -15,10 +15,10 @@ try:
 except ImportError:
     HAS_NUMPY = False
 
-from pylibs.core.self_absorption_irsac2 import (SALine, StarkRef, assess, choose_reference, irsac_species,  # noqa: E402
+from pylibs.core.self_absorption_irsac2 import (SALine, StarkRef, assess, choose_reference, chosen_sac, irsac_species,  # noqa: E402
                                          same_level_test, slope_check, stark_assessment, tau_proxy)
 from pylibs.core.dev_adapters import self_absorption_lines  # noqa: E402
-from pylibs.gui.sa_dialog import MODES  # noqa: E402
+from pylibs.gui.sa_dialog import DEFAULT_MODE, MODES, mode_id  # noqa: E402
 from pyLIBS import AppOptions, TemplateLine  # noqa: E402
 
 
@@ -43,11 +43,35 @@ class TestElSherbini(unittest.TestCase):
 
 
 class TestIRSAC(unittest.TestCase):
-    def test_visible_modes_expose_irsac2_only(self):
-        labels = tuple(MODES)
+    def test_visible_modes_have_requested_order_default_and_stable_mapping(self):
+        self.assertEqual(
+            tuple(MODES),
+            (
+                "Stark where available, else IRSAC (recommended)",
+                "Stark only",
+                "IRSAC",
+            ),
+        )
+        self.assertEqual(DEFAULT_MODE, tuple(MODES)[0])
+        self.assertEqual(mode_id(DEFAULT_MODE), "stark_then_irsac")
+        self.assertEqual(mode_id("Stark only"), "stark")
+        self.assertEqual(mode_id("IRSAC"), "irsac")
+        self.assertEqual(mode_id("IRSAC (recommended)"), "irsac")
+        self.assertEqual(
+            mode_id("Stark where available, else IRSAC"),
+            "stark_then_irsac",
+        )
 
-        self.assertIn("IRSAC2 (recommended)", labels)
-        self.assertFalse(any("IRSAC1" in label for label in labels))
+    def test_all_mode_ids_keep_their_existing_method_selection(self):
+        result = SimpleNamespace(stark_sac=1.5, irsac_sac=2.0)
+        self.assertEqual(chosen_sac(result, mode_id(DEFAULT_MODE)), (1.5, "Stark"))
+        self.assertEqual(chosen_sac(result, mode_id("Stark only")), (1.5, "Stark"))
+        self.assertEqual(chosen_sac(result, mode_id("IRSAC")), (2.0, "IRSAC"))
+        unavailable_stark = SimpleNamespace(stark_sac=None, irsac_sac=2.0)
+        self.assertEqual(
+            chosen_sac(unavailable_stark, mode_id(DEFAULT_MODE)),
+            (2.0, "IRSAC"),
+        )
 
     def lines(self, attenuate=None, kt=0.9, noise=0.0, seed=1):
         rng = random.Random(seed)

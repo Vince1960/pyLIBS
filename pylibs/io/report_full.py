@@ -98,7 +98,7 @@ def _sec_options(app):
              ["session Ne (cm-3)", _num(getattr(app, "session_ne", None))],
              ["session σ Ne (cm-3)", _sig(getattr(app, "session_ne_sigma", None))],
              ["session Ne source", getattr(app, "session_ne_source", "") or ""],
-             ["self-absorption correction applied", "yes" if getattr(app, "apply_sac_correction", False) else "no"]]
+             ["Self-absorption compensation applied", "yes" if getattr(app, "apply_sac_correction", False) else "no"]]
     s.table("options", ["Option", "Value"], rows)
     return s
 
@@ -321,7 +321,7 @@ def _sec_new_diagnostics(app):
             rows.append([getattr(line, "label", ""), _num(getattr(r, "stark_sac", None)),
                          _num(getattr(r, "irsac_sa", None)), _num(getattr(r, "irsac_sac", None)),
                          getattr(r, "irsac_status", ""), getattr(r, "level_test", "")])
-        s.note("Applied correction algorithm: IRSAC2.")
+        s.note("Applied correction algorithm: IRSAC.")
         s.table("irsac2_lines", ["Line", "Stark SAC", "IRSAC SA", "IRSAC SAC", "IRSAC status", "Same-level test"], rows)
     return s
 

@@ -59,15 +59,15 @@ Additional functionality and documentation will be added in future releases.
 - Plasma Diagnostics
 - Saha–Boltzmann analysis
 - Calibration-Free LIBS (CF-LIBS)
-- Self-absorption correction tools
+- Self-absorption compensation tools
 - Stark broadening analysis
-- IRSAC2 self-absorption assessment with optional Stark-width evidence
+- IRSAC self-absorption assessment with optional Stark-width evidence
 - Electron density estimation
 - Plasma temperature evaluation
 - LTE plasma diagnostics
 - Monte Carlo uncertainty estimation
 - Outlier and spectral-line influence diagnostics
-- IRSAC2 reference-line selection, uncertainty checks and correction limits
+- IRSAC reference-line selection, uncertainty checks and correction limits
 - Data Management
 - Persistent user preferences
 - Automatic restoration of window positions
@@ -189,7 +189,7 @@ The implemented analysis order is: select the signal column, subtract the dark
 trace pixel by pixel, divide each window by its own instrumental response,
 apply the saved wavelength calibration to each window, join overlapping
 windows, fit single or multiple Voigt profiles, calculate electron density from
-H-alpha, and assess self-absorption with IRSAC2. IRSAC2 keeps fitted Voigt areas
+H-alpha, and assess self-absorption with IRSAC. IRSAC keeps fitted Voigt areas
 fixed, selects the least optically thick usable reference for each species,
 propagates intensity and temperature uncertainties, and rejects insignificant,
 unsafe or poor-fit corrections. Stark-width evidence can be used independently

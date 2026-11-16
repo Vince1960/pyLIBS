@@ -62,7 +62,7 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
             "toggle_log", "full_x", "full_y", "expand_x_50", "full_scale",
             "save_window_positions", "load_window_positions", "show_response_window",
             "apply_response_now", "show_wavelength_calibration", "show_spectrum_shift",
-            "show_spectrum_offset", "smooth_main_spectrum", "convert_nm_to_angstrom",
+            "show_spectrum_offset", "show_baseline_removal", "smooth_main_spectrum", "convert_nm_to_angstrom",
             "load_template_from_menu", "show_template_manager", "template_info_from_menu",
             "close_template_from_menu", "show_batch_statistics", "show_statistics",
             "show_goto_dialog", "find_peaks_basic", "show_trace_lines",
@@ -115,6 +115,8 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
                 "Batch and Statistics",
             ],
         )
+        processing = cascade(utilities, "Signal Processing")
+        self.assertIn("Baseline Removal...", labels(processing, "command"))
         self.assertEqual(
             labels(analysis, "cascade"),
             [
@@ -132,7 +134,7 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
         quantitative = cascade(analysis, "Quantitative Analysis")
         self.assertIn("Electron Density from Hα...", labels(plasma, "command"))
         self.assertIn(
-            "Self-Absorption Correction (IRSAC2)...",
+            "Self-absorption compensation...",
             labels(plasma, "command"),
         )
         self.assertIn("SAC Factors...", labels(plasma, "command"))
@@ -160,6 +162,36 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
                 "compound": "left",
             }],
         )
+
+    def test_batch_layout_aligns_baseline_button_with_multifit(self):
+        class Widget:
+            def __init__(self, x=0, width=0):
+                self.x = x
+                self.width = width
+                self.configured_width = None
+
+            def winfo_rootx(self):
+                return self.x
+
+            def winfo_width(self):
+                return self.width
+
+            def configure(self, **kwargs):
+                self.configured_width = kwargs["width"]
+
+        window = SimpleNamespace(
+            multifit_button=Widget(150),
+            baseline_correction_button=Widget(80),
+            time_resolved_spacer=Widget(width=10),
+            update_idletasks=lambda: None,
+            winfo_rootx=lambda: 50,
+            winfo_reqwidth=lambda: 900,
+            winfo_reqheight=lambda: 500,
+            minsize=lambda width, height: setattr(window, "minimum", (width, height)),
+        )
+        pyLIBS.BatchStatisticsWindow._fit_batch_layout(window)
+        self.assertEqual(window.time_resolved_spacer.configured_width, 80)
+        self.assertEqual(window.minimum, (900, 500))
 
 
 if __name__ == "__main__":
