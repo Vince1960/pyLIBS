@@ -2,6 +2,18 @@
 
 ------------------------------------------------------------
 
+## 1.4.0 — 2026-11-16
+
+### What's New
+
+- Added sparse AsLS and airPLS baseline removal with configurable parameters, preview, optional negative-intensity clipping, and reusable processing for individual and batch spectra.
+- Added Baseline Removal to Signal Processing and Baseline correction to Batch Operations, with `_baseline_corrected` output files.
+- Improved Batch Operations layout, including the 15-point gap between Baseline correction and Time-Resolved Spectra.
+- Standardized the user-facing terminology to **Self-absorption compensation** and **IRSAC**.
+- Updated the self-absorption compensation mode order and default to **Stark where available, else IRSAC (recommended)**.
+
+------------------------------------------------------------
+
 ## 1.3.1 — 2026-11-12
 
 ### Maintenance release
