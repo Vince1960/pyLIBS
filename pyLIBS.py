@@ -3702,6 +3702,10 @@ class BatchStatisticsWindow(tk.Toplevel):
         ttk.Button(bottom,text="Save List",command=self.save_list).pack(side="left", padx=3)
         self.time_resolved_spacer = ttk.Frame(bottom, width=0)
         self.time_resolved_spacer.pack(side="left")
+        self.baseline_correction_button = ttk.Button(
+            bottom, text="Baseline correction", command=self.baseline_removal
+        )
+        self.baseline_correction_button.pack(side="left", padx=3)
         self.time_resolved_button = ttk.Button(bottom,text="Time-Resolved Spectra",command=self.time_resolved_spectra)
         self.time_resolved_button.pack(side="left")
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
@@ -3710,7 +3714,6 @@ class BatchStatisticsWindow(tk.Toplevel):
         self.operation_row = operation_row
         self.convert_csv_button = ttk.Button(operation_row,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii)
         self.convert_csv_button.pack(side="left")
-        ttk.Button(operation_row, text="Baseline Removal", command=self.baseline_removal).pack(side="left", padx=3)
         ttk.Button(operation_row,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
         ttk.Button(operation_row,text="Convert ARYELLE to ASCII XY",command=self.convert_aryelle_to_ascii).pack(side="left", padx=3)
         self.listbox=tk.Listbox(self)
@@ -3720,7 +3723,7 @@ class BatchStatisticsWindow(tk.Toplevel):
 
     def _fit_batch_layout(self):
         target_offset = self.multifit_button.winfo_rootx() - self.winfo_rootx()
-        current_offset = self.time_resolved_button.winfo_rootx() - self.winfo_rootx()
+        current_offset = self.baseline_correction_button.winfo_rootx() - self.winfo_rootx()
         self.time_resolved_spacer.configure(width=max(0, self.time_resolved_spacer.winfo_width() + target_offset - current_offset))
         self.update_idletasks()
         required_width = max(800, self.winfo_reqwidth())

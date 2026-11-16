@@ -163,6 +163,36 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
             }],
         )
 
+    def test_batch_layout_aligns_baseline_button_with_multifit(self):
+        class Widget:
+            def __init__(self, x=0, width=0):
+                self.x = x
+                self.width = width
+                self.configured_width = None
+
+            def winfo_rootx(self):
+                return self.x
+
+            def winfo_width(self):
+                return self.width
+
+            def configure(self, **kwargs):
+                self.configured_width = kwargs["width"]
+
+        window = SimpleNamespace(
+            multifit_button=Widget(150),
+            baseline_correction_button=Widget(80),
+            time_resolved_spacer=Widget(width=10),
+            update_idletasks=lambda: None,
+            winfo_rootx=lambda: 50,
+            winfo_reqwidth=lambda: 900,
+            winfo_reqheight=lambda: 500,
+            minsize=lambda width, height: setattr(window, "minimum", (width, height)),
+        )
+        pyLIBS.BatchStatisticsWindow._fit_batch_layout(window)
+        self.assertEqual(window.time_resolved_spacer.configured_width, 80)
+        self.assertEqual(window.minimum, (900, 500))
+
 
 if __name__ == "__main__":
     unittest.main()

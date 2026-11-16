@@ -13,10 +13,20 @@ from pylibs.gui.helpers import _showerror, _showinfo, center_window
 from pylibs.gui.lte_dialog import ToolbarTooltip, session_kt_sigma, session_ne_sigma
 
 MODES = {
+    "Stark where available, else IRSAC (recommended)": "stark_then_irsac",
+    "Stark only": "stark",
+    "IRSAC": "irsac",
+}
+DEFAULT_MODE = "Stark where available, else IRSAC (recommended)"
+_LEGACY_MODE_IDS = {
     "IRSAC (recommended)": "irsac",
     "Stark where available, else IRSAC": "stark_then_irsac",
-    "Stark only": "stark",
 }
+
+
+def mode_id(label):
+    """Map visible or historical labels to the stable internal mode token."""
+    return MODES.get(label, _LEGACY_MODE_IDS.get(label, "irsac"))
 AUTO = "auto (least optically thick)"
 
 HELP = {
@@ -72,7 +82,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             "global Saha-Boltzmann fit."))
         ttk.Button(top, text="Save CSV...", command=self.save_csv).pack(side="left")
         ttk.Label(top, text="Mode").pack(side="left", padx=(14, 2))
-        self.mode = tk.StringVar(value="IRSAC (recommended)")
+        self.mode = tk.StringVar(value=DEFAULT_MODE)
         ttk.Combobox(top, textvariable=self.mode, values=list(MODES), width=32, state="readonly").pack(side="left")
         self.status_var = tk.StringVar(value="")
         ttk.Label(top, textvariable=self.status_var).pack(side="left", padx=10)
@@ -226,7 +236,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         self._show()
 
     def _show(self):
-        mode = MODES[self.mode.get()]
+        mode = mode_id(self.mode.get())
         self.tree.delete(*self.tree.get_children())
         f = lambda x, s=".3g": "—" if x is None else format(x, s)  # noqa: E731
         n_abs = 0
@@ -255,7 +265,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         if both:
             out.append("Lines with both methods (Stark vs IRSAC SAC): " + "; ".join(
                 f"{r.line.label}: {r.stark_sac:.2f} vs {r.irsac_sac:.2f}" for r in both[:8]))
-        mode = MODES[self.mode.get()]
+        mode = mode_id(self.mode.get())
         fr = sorted({(r.line.element, r.line.ion, r.irsac_fref) for r in self.results
                      if r.irsac_status.startswith("reference") and r.irsac_fref is not None and r.irsac_fref < 1.0})
         if fr:
@@ -300,7 +310,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
     def apply(self, quiet=False):
         if not self.results:
             return 0
-        mode = MODES[self.mode.get()]
+        mode = mode_id(self.mode.get())
         n = 0
         for r in self.results:
             t = getattr(r.line, "template_line", None)
@@ -405,7 +415,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         fn = filedialog.asksaveasfilename(parent=self, defaultextension=".csv", filetypes=[("CSV", "*.csv")])
         if not fn:
             return
-        mode = MODES[self.mode.get()]
+        mode = mode_id(self.mode.get())
         with open(fn, "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
             w.writerow(["line", "Ei_eV", "Ek_eV", "tau_rel", "wL_A", "w0_A", "w0_rel_unc", "stark_status", "stark_SA",
@@ -424,7 +434,7 @@ def report_rows(app):
     if not sa or not getattr(app, "apply_sac_correction", False) or not sa.get("applied"):
         return None
     p = sa["params"]
-    mode = MODES.get(sa["mode"], "irsac")
+    mode = mode_id(sa["mode"])
     summary = [
         ["Mode", sa["mode"]],
         ["kT / σ kT used", f"{p['kt']:.4g} / {p['kt_sigma']:.2g} eV"],
