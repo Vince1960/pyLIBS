@@ -21893,21 +21893,21 @@ def build_retro_menu(self):
     _add_menu_cascade(self, util_menu, "Signal Processing", processing_menu, "fit.png")
     _add_menu_command(self, processing_menu, shortcut_items, "Intensity Offset...", self.show_spectrum_offset, "Ctrl+F2", "<Control-F2>", "")
     _add_menu_command(self, processing_menu, shortcut_items, "Smooth Spectrum", self.smooth_main_spectrum, "Ctrl+F3", "<Control-F3>", "")
-    _add_menu_command(self, processing_menu, shortcut_items, "Baseline Removal...", self.show_baseline_removal, "", "", "fit.png")
-    _add_menu_command(self, processing_menu, shortcut_items, "Convert nm to Å", self.convert_nm_to_angstrom, "Ctrl+F4", "<Control-F4>", "")
+    _add_menu_command(self, processing_menu, shortcut_items, "Baseline Removal...", self.show_baseline_removal, "Ctrl+F4", "<Control-F4>", "fit.png")
+    _add_menu_command(self, processing_menu, shortcut_items, "Convert nm to Å", self.convert_nm_to_angstrom, "Ctrl+F5", "<Control-F5>", "")
 
     line_menu = tk.Menu(util_menu, tearoff=0)
     _add_menu_cascade(self, util_menu, "Analytical Line Lists", line_menu, "show_Template.png")
     _add_menu_command(
         self, line_menu, shortcut_items, "Import Lines for Current Analysis...",
-        self.load_template_from_menu, "Ctrl+F5", "<Control-F5>", "load_template.png"
+        self.load_template_from_menu, "Ctrl+F6", "<Control-F6>", "load_template.png"
     )
     _add_menu_command(
         self, line_menu, shortcut_items, "Main Analytical-Line Library...",
-        self.show_template_manager, "Ctrl+F6", "<Control-F6>", "show_Template.png"
+        self.show_template_manager, "Ctrl+F7", "<Control-F7>", "show_Template.png"
     )
     line_menu.add_separator()
-    _add_menu_command(self, line_menu, shortcut_items, "Selected-Line Summary", self.template_info_from_menu, "Ctrl+F7", "<Control-F7>", "show_Template.png")
+    _add_menu_command(self, line_menu, shortcut_items, "Selected-Line Summary", self.template_info_from_menu, "Ctrl+F8", "<Control-F8>", "show_Template.png")
     _add_menu_command(self, line_menu, shortcut_items, "Clear Selected Lines", self.close_template_from_menu, "", "", "clear.png")
 
     batch_menu = tk.Menu(util_menu, tearoff=0)

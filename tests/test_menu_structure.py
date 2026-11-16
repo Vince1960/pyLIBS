@@ -77,10 +77,17 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
             view_grid_y=True,
             view_log_x=False,
             view_log_y=False,
+            actions=[],
+            bound_events={},
+            bind_counts={},
         )
         for name in command_names:
-            setattr(owner, name, lambda *args, **kwargs: None)
-        owner.bind = lambda *args, **kwargs: None
+            setattr(owner, name, lambda *args, _name=name, **kwargs: owner.actions.append(_name))
+        owner.focus_get = lambda: None
+        def bind(sequence, callback):
+            owner.bind_counts[sequence] = owner.bind_counts.get(sequence, 0) + 1
+            owner.bound_events[sequence] = callback
+        owner.bind = bind
         owner.config = lambda **kwargs: setattr(owner, "root_menu", kwargs["menu"])
         with (
             patch.object(pyLIBS.tk, "Menu", FakeMenu),
@@ -192,6 +199,41 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
         pyLIBS.BatchStatisticsWindow._fit_batch_layout(window)
         self.assertEqual(window.time_resolved_spacer.configured_width, 80)
         self.assertEqual(window.minimum, (900, 500))
+
+    def test_signal_processing_and_following_shortcuts_bind_exact_commands(self):
+        owner = self.build_menu()
+        expected = {
+            "<Control-F2>": ("Ctrl+F2", "Intensity Offset...", "show_spectrum_offset"),
+            "<Control-F3>": ("Ctrl+F3", "Smooth Spectrum", "smooth_main_spectrum"),
+            "<Control-F4>": ("Ctrl+F4", "Baseline Removal...", "show_baseline_removal"),
+            "<Control-F5>": ("Ctrl+F5", "Convert nm to Å", "convert_nm_to_angstrom"),
+            "<Control-F6>": ("Ctrl+F6", "Import Lines for Current Analysis...", "load_template_from_menu"),
+            "<Control-F7>": ("Ctrl+F7", "Main Analytical-Line Library...", "show_template_manager"),
+            "<Control-F8>": ("Ctrl+F8", "Selected-Line Summary", "template_info_from_menu"),
+        }
+        shortcuts = {
+            item["event"]: item
+            for item in owner.menu_shortcuts
+            if item.get("event") in expected
+        }
+        self.assertEqual(set(shortcuts), set(expected))
+        utilities = cascade(owner.root_menu, "Utilities")
+        menu_entries = []
+        for submenu_name in ("Signal Processing", "Analytical Line Lists"):
+            menu_entries.extend(cascade(utilities, submenu_name).entries)
+        displayed = {
+            entry["label"]: entry["accelerator"]
+            for entry in menu_entries
+            if entry.get("type") == "command" and entry.get("accelerator")
+        }
+        for sequence, (accelerator, label, action) in expected.items():
+            with self.subTest(sequence=sequence):
+                item = shortcuts[sequence]
+                self.assertEqual((item["accelerator"], item["label"]), (accelerator, label))
+                self.assertEqual(displayed[label], accelerator)
+                self.assertEqual(owner.bind_counts[sequence], 1)
+                owner.bound_events[sequence]()
+                self.assertEqual(owner.actions[-1], action)
 
 
 if __name__ == "__main__":

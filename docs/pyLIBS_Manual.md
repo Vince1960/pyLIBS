@@ -976,11 +976,12 @@ Per un campione completamente incognito usare il flusso CF-LIBS senza OPC o Stan
 | Instrument Calibration > Temporary Wavelength Shift... | Ctrl+F1 | applica uno spostamento ai dati correnti senza cambiare NIST o profili salvati |
 | Signal Processing > Intensity Offset... | Ctrl+F2 | modifica il livello verticale |
 | Signal Processing > Smooth Spectrum | Ctrl+F3 | leviga lo spettro visualizzato |
-| Signal Processing > Convert nm to Å | Ctrl+F4 | converte i nanometri in ångström |
+| Signal Processing > Baseline Removal... | Ctrl+F4 | stima e sottrae un fondo spettrale regolare |
+| Signal Processing > Convert nm to Å | Ctrl+F5 | converte i nanometri in ångström |
 | Batch and Statistics > Batch Operations... | - | esegue elaborazioni batch, medie, unioni e MultiFit |
-| Analytical Line Lists > Import Lines for Current Analysis... | Ctrl+F5 | importa la lista corrente |
-| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F6 | gestisce la libreria analitica principale e le righe operative |
-| Analytical Line Lists > Selected-Line Summary | Ctrl+F7 | riepiloga le righe selezionate |
+| Analytical Line Lists > Import Lines for Current Analysis... | Ctrl+F6 | importa la lista corrente |
+| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F7 | gestisce la libreria analitica principale e le righe operative |
+| Analytical Line Lists > Selected-Line Summary | Ctrl+F8 | riepiloga le righe selezionate |
 | Analytical Line Lists > Clear Selected Lines | - | svuota le righe correnti |
 | Batch and Statistics > Statistics | Shift+Ctrl+F4 | mostra le statistiche X/Y |
 | Go To Wavelength... | Ctrl+F9 | centra una lunghezza d'onda |

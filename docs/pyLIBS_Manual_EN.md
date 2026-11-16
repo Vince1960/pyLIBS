@@ -976,11 +976,12 @@ For a completely unknown sample, use the CF-LIBS workflow without OPC or Standar
 | Instrument Calibration > Temporary Wavelength Shift... | Ctrl+F1 | shifts current data without changing NIST references or saved profiles |
 | Signal Processing > Intensity Offset... | Ctrl+F2 | changes the vertical level |
 | Signal Processing > Smooth Spectrum | Ctrl+F3 | smooths the displayed spectrum |
-| Signal Processing > Convert nm to Å | Ctrl+F4 | converts nanometers to angstroms |
+| Signal Processing > Baseline Removal... | Ctrl+F4 | estimates and subtracts a smooth spectral background |
+| Signal Processing > Convert nm to Å | Ctrl+F5 | converts nanometers to angstroms |
 | Batch and Statistics > Batch Operations... | - | performs batch processing, averaging, joining and MultiFit |
-| Analytical Line Lists > Import Lines for Current Analysis... | Ctrl+F5 | imports the current list |
-| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F6 | manages the main library and working lines |
-| Analytical Line Lists > Selected-Line Summary | Ctrl+F7 | summarizes selected lines |
+| Analytical Line Lists > Import Lines for Current Analysis... | Ctrl+F6 | imports the current list |
+| Analytical Line Lists > Main Analytical-Line Library... | Ctrl+F7 | manages the main library and working lines |
+| Analytical Line Lists > Selected-Line Summary | Ctrl+F8 | summarizes selected lines |
 | Analytical Line Lists > Clear Selected Lines | - | clears current lines |
 | Batch and Statistics > Statistics | Shift+Ctrl+F4 | displays X/Y statistics |
 | Go To Wavelength... | Ctrl+F9 | centers a wavelength |
