@@ -13,8 +13,8 @@ from pylibs.gui.helpers import _showerror, _showinfo, center_window
 from pylibs.gui.lte_dialog import ToolbarTooltip, session_kt_sigma, session_ne_sigma
 
 MODES = {
-    "IRSAC2 (recommended)": "irsac",
-    "Stark where available, else IRSAC2": "stark_then_irsac",
+    "IRSAC (recommended)": "irsac",
+    "Stark where available, else IRSAC": "stark_then_irsac",
     "Stark only": "stark",
 }
 AUTO = "auto (least optically thick)"
@@ -34,7 +34,7 @@ HELP = {
     "maxsac": "Largest admissible correction factor (default 3.33, i.e. SA ≥ 0.3). Larger factors\n"
               "are flagged 'unsafe' and not applied: they usually indicate a blend, a wrong assignment, wrong Ne\n"
               "or Stark data, rather than a measurable self-absorption. 0 = no limit.",
-    "fref": "Estimate the self-absorption of the IRSAC2 reference line itself: if other lines of\n"
+    "fref": "Estimate the self-absorption of the IRSAC reference line itself: if other lines of\n"
             "the species appear significantly less absorbed than the reference, the reference is scaled so that the\n"
             "least absorbed line is optically thin. This changes the species intercept and therefore the concentration.",
 }
@@ -43,14 +43,14 @@ HELP = {
 
 
 class SelfAbsorptionWindow(tk.Toplevel):
-    COLS = ("Line", "Ei eV", "Ek eV", "τ/τref", "w_L Å", "w0 Å", "Stark", "SAC Stark", "IRSAC2 SA", "SAC IRSAC2",
-            "IRSAC2", "Same-Ek test", "Applied")
+    COLS = ("Line", "Ei eV", "Ek eV", "τ/τref", "w_L Å", "w0 Å", "Stark", "SAC Stark", "IRSAC SA", "SAC IRSAC",
+            "IRSAC", "Same-Ek test", "Applied")
 
     def __init__(self, master, lines_provider):
         super().__init__(master)
         self.master_app = master
         self.lines_provider = lines_provider
-        self.title("Self-absorption correction")
+        self.title("Self-absorption compensation")
         self.geometry("1260x700")
         self.minsize(1000, 560)
         self.results = []
@@ -72,7 +72,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             "global Saha-Boltzmann fit."))
         ttk.Button(top, text="Save CSV...", command=self.save_csv).pack(side="left")
         ttk.Label(top, text="Mode").pack(side="left", padx=(14, 2))
-        self.mode = tk.StringVar(value="IRSAC2 (recommended)")
+        self.mode = tk.StringVar(value="IRSAC (recommended)")
         ttk.Combobox(top, textvariable=self.mode, values=list(MODES), width=32, state="readonly").pack(side="left")
         self.status_var = tk.StringVar(value="")
         ttk.Label(top, textvariable=self.status_var).pack(side="left", padx=10)
@@ -100,7 +100,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         cb.grid(row=0, column=c, padx=(10, 2))
         self._tips.append(ToolbarTooltip(cb, HELP["fref"]))
 
-        self.ref_frame = ttk.LabelFrame(self, text="IRSAC2 reference line per species (hover for the criterion)", padding=4)
+        self.ref_frame = ttk.LabelFrame(self, text="IRSAC reference line per species (hover for the criterion)", padding=4)
         self.ref_frame.pack(fill="x", padx=6, pady=4)
         self._tips.append(ToolbarTooltip(self.ref_frame,
             "Automatic choice: among lines with ≥ 5 % of the strongest intensity of the species, the one with the\n"
@@ -214,7 +214,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             try:
                 db = StarkDatabase(self._db_path())
             except Exception as e:  # noqa: BLE001
-                self.status_var.set(f"Stark database unavailable ({e}); IRSAC2 only")
+                self.status_var.set(f"Stark database unavailable ({e}); IRSAC only")
             try:
                 self.results = assess(self.lines, db, references=self._references(), **self.params)
             finally:
@@ -289,7 +289,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
         unres = sum(1 for r in self.results if r.stark_status.startswith("unresolved"))
         if unres:
             out.append(f"{unres} line(s) have Stark widths below the resolvable limit: the Stark method is not applied to them.")
-        out.append("IRSAC2 gives SA relative to the reference line; if the reference is slightly absorbed, all lines of the "
+        out.append("IRSAC gives SA relative to the reference line; if the reference is slightly absorbed, all lines of the "
                    "species share that factor, which cancels in the Boltzmann slope (T) but not in absolute concentrations "
                    "between species.")
         out.append("Stark widths: Stark_extended.db (Konjević et al., J. Phys. Chem. Ref. Data 1984, 1990, 2002 and the "
@@ -325,7 +325,7 @@ class SelfAbsorptionWindow(tk.Toplevel):
             "corrected_lines": sum(1 for r in self.results if r.irsac_sac is not None),
             "enabled_lines": n, "applied": n > 0,
             "temperature_k": self.params["kt"] * 11604.518,
-            "assessment_status": "IRSAC2 assessment",
+            "assessment_status": "IRSAC assessment",
         }
         try:
             app.invalidate_cflibs_results()

@@ -154,6 +154,6 @@ def info_rows(app, extra: list) -> tuple:
     rows = [
         ["Date/time", datetime.now().isoformat(timespec="seconds")],
         ["Spectrum", getattr(sp, "filename", "") or getattr(sp, "name", "") if sp else ""],
-        ["Self-absorption correction applied", "yes" if getattr(app, "apply_sac_correction", False) else "no"],
+        ["Self-absorption compensation applied", "yes" if getattr(app, "apply_sac_correction", False) else "no"],
     ]
     return ["Field", "Value"], rows + extra

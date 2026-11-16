@@ -128,7 +128,7 @@ This is the minimum procedure for an unknown sample.
 11. Return to `Auto Fit`, set or verify the ROIs and press `Fit selected peaks (Voigt)`. Check centers, areas, widths, replicate CV and quality.
 12. Load H-alpha separately with `Analyse > Plasma Diagnostics > Electron Density from Hα...`; verify the correct maximum, run the fit and confirm Ne.
 13. Open `Analyse > Plasma Diagnostics > Saha-Boltzmann Plot...`, select `Most reliable element` or an explicit species and calculate. Check the number of lines, levels, Delta Ek, R2 and leave-one-out stability.
-14. Open `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Read the diagnosis first. Apply the correction only when experimental evidence supports it.
+14. Open `Analyse > Plasma Diagnostics > Self-absorption compensation (IRSAC)...`. Read the diagnosis first. Apply the correction only when experimental evidence supports it.
 15. Open `Analyse > Quantitative Analysis > CF-LIBS...`, use the current T and Ne, calculate, and inspect `Robustness` and `Show Report` before accepting the percentages.
 16. Save the report with all measurement information.
 
@@ -338,6 +338,14 @@ The program removes unreliable curve edges and does not artificially extrapolate
 `FWHM_L,corr = max(FWHM_L,fit - FWHM_instrument^2 / FWHM_L,fit, 0)`
 
 The same value remains available as a global approximation for theoretical-spectrum synthesis. Do not enter the total H-alpha FWHM dominated by Stark broadening. If the instrumental width is unknown, use 0.
+
+### 7.5 Baseline removal
+
+Baseline removal estimates a slowly varying spectral background and subtracts it point by point. `Utilities > Signal Processing > Baseline Removal...` previews the original spectrum, estimated baseline and corrected spectrum. Choose AsLS (Asymmetric Least Squares; λ = 1,000,000 and p = 0.01 are starting values) or airPLS (λ = 1,000,000 and 50 iterations are starting values). λ controls smoothness; larger values produce a smoother baseline. AsLS p controls the weight assigned to points above the baseline. The iteration limit and tolerance control when the adaptive solver stops.
+
+Negative corrected intensities are retained by default because they can represent noise around or below the estimated background. The optional clipping setting replaces them with zero. Apply changes the main spectrum while preserving its wavelength coordinates; Cancel leaves it unchanged. Batch Operations provides the same algorithms and parameters and writes files ending in `_baseline_corrected` to a selected output directory.
+
+Baseline removal can change peak areas and therefore quantitative results. Apply the same method and parameters to calibration standards and unknown samples, and retain the original spectra for comparison.
 
 ## 8. Wavelength calibration
 
@@ -657,15 +665,15 @@ Self-absorption must not be corrected automatically for every sample. Evidence i
 
 ### 14.1 Modes
 
-- `IRSAC2 (recommended)`: uses only the IRSAC2 internal-reference assessment.
-- `Stark where available, else IRSAC2`: uses the Stark check when resolved, reliable line data are available; otherwise it uses IRSAC2.
+- `IRSAC (recommended)`: uses only the IRSAC internal-reference assessment.
+- `Stark where available, else IRSAC`: uses the Stark check when resolved, reliable line data are available; otherwise it uses IRSAC.
 - `Stark only`: uses only the correction based on predicted and observed Stark width.
 
-IRSAC2 is the only selectable IRSAC workflow. The Stark correction requires a line-specific match in `Stark_extended.db`; a missing line only means that this independent check is unavailable.
+IRSAC is the only selectable IRSAC workflow. The Stark correction requires a line-specific match in `Stark_extended.db`; a missing line only means that this independent check is unavailable.
 
 ### 14.2 Diagnosis before correction
 
-Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-Absorption Correction (IRSAC2)...`. Both commands open the same IRSAC2 window. Check:
+Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-absorption compensation (IRSAC)...`. Both commands open the same IRSAC window. Check:
 
 - consistency of lines sharing the same upper level;
 - behavior of the ordinate as a function of Ek;
@@ -678,9 +686,9 @@ Open `Check SA` from Saha-Boltzmann or `Analyse > Plasma Diagnostics > Self-Abso
 
 ### 14.3 Plasma state and uncertainties
 
-IRSAC2 uses `kT`, its uncertainty, `Ne`, the relative uncertainty of Ne, instrumental FWHM, any instrumental Lorentzian component, relative `gA` uncertainty and the significance threshold `nσ`. Initial values come from the Saha-Boltzmann/H-alpha session when available and remain editable in the window.
+IRSAC uses `kT`, its uncertainty, `Ne`, the relative uncertainty of Ne, instrumental FWHM, any instrumental Lorentzian component, relative `gA` uncertainty and the significance threshold `nσ`. Initial values come from the Saha-Boltzmann/H-alpha session when available and remain editable in the window.
 
-### 14.4 IRSAC2 reference line
+### 14.4 IRSAC reference line
 
 Every neutral or ionic species needs an internal reference. Automatic selection first considers lines whose intensity is at least 5% of the strongest line, excludes unreliable fits when possible, and minimizes the optical-depth proxy
 
@@ -688,9 +696,9 @@ Every neutral or ionic species needs an internal reference. Automatic selection 
 
 The per-species selector permits a manual reference. A manual reference must be justified and documented; a resonance line with `Ei approximately 0` is often fragile.
 
-### 14.5 IRSAC2 mathematics
+### 14.5 IRSAC mathematics
 
-IRSAC2 preserves the measured integrated areas. For a line `k` and reference `r` of the same species it calculates
+IRSAC preserves the measured integrated areas. For a line `k` and reference `r` of the same species it calculates
 
 `d_k = ln(I_k/gA_k) - ln(I_r/gA_r) + (Ek_k-Ek_r)/kT`.
 
@@ -705,13 +713,13 @@ The independent Stark check uses `w0 = w(10^17,T) Ne/10^17`. In `Stark_extended.
 - `Compute`: recalculates diagnosis and factors from measured areas; it never refits the spectrum or changes Voigt areas.
 - `Apply SAC`: applies only valid factors according to the selected mode.
 - `Remove SAC`: returns to uncorrected areas.
-- `Iterate SAC <-> T-Ne`: alternates IRSAC2 and the T-Ne fit until the configured convergence criterion is met.
+- `Iterate SAC <-> T-Ne`: alternates IRSAC and the T-Ne fit until the configured convergence criterion is met.
 
 The table reports the reference, optical-depth proxy, Stark checks, `SA`, `SAC`, same-upper-level test and the method actually applied. Diagnostics never silently change the baseline, ROI or measured area.
 
 ### 14.7 When correction must not be used
 
-Do not apply IRSAC2 when:
+Do not apply IRSAC when:
 
 - the diagnosis shows no significant evidence;
 - lines are interfered or the fit is unstable;
@@ -726,7 +734,7 @@ A correction may be displayed for diagnosis but blocked from producing percentag
 
 `Analyse > Plasma Diagnostics > SAC Factors...` calculates diagnostic factors using `kT`, `Ne`, optical path `path lu` and total density `N total`. When a CF-LIBS result exists, it uses its `Number %`; otherwise it assigns equal percentages to the elements present. The table reports `SAC`, widths and the line-center coefficient.
 
-This window does not replace `Self-Absorption Correction (IRSAC2)` and does not by itself measure concentration or optical path. Use it only as a specialist tool when `lu` and `N total` are experimentally justified.
+This window does not replace `Self-absorption compensation (IRSAC)` and does not by itself measure concentration or optical path. Use it only as a specialist tool when `lu` and `N total` are experimentally justified.
 
 ## 15. CF-LIBS concentrations
 
@@ -821,7 +829,7 @@ OPC is not autonomous for completely unknown samples and must not be used to for
 
 `Display-only least-squares scale` rescales the model for visual comparison and does not change CF-LIBS. In the detector domain, instrumental response is applied to the model in the forward direction; in the corrected domain, radiometric intensities are compared.
 
-The theoretical spectrum is a downstream check. It does not replace IRSAC and does not by itself provide a quantitative self-absorption correction.
+The theoretical spectrum is a downstream check. It does not replace IRSAC and does not by itself provide a quantitative self-absorption compensation.
 
 ## 17. Reports, saving and batch operations
 
@@ -849,6 +857,7 @@ Open `Utilities > Batch and Statistics > Batch Operations...`.
 - `Convert Andor SIF to ASCII XY`: selects multiple SIF files and an output directory, then writes one headerless tab-separated wavelength/intensity `.txt` per input, retaining the original basename. Conversion errors are reported per file.
 - `Convert CSV to ASCII XY`: selects multiple CSV files and an output directory, then writes one headerless tab-separated wavelength/intensity `.txt` per input, retaining the original basename. Conversion errors are reported per file.
 - `Convert ARYELLE to ASCII XY`: selects multiple `.ary` files, or a directory containing them, and an output directory. It writes one headerless tab-separated wavelength/intensity `.txt` per input, retaining the original basename; conversion errors are reported per file and existing outputs are not overwritten.
+- `Baseline Removal`: applies AsLS or airPLS independently to every spectrum, preserves multi-column ASCII organization where available, and writes `_baseline_corrected` outputs to the selected directory. Existing outputs require confirmation before replacement.
 
 Averaging acquisitions is valid only when the files belong to the same window and were acquired under equivalent experimental conditions. Do not average different central windows together.
 
@@ -986,13 +995,13 @@ For a completely unknown sample, use the CF-LIBS workflow without OPC or Standar
 | Spectral Fitting > Automatic Fit... | performs automatic peak selection and Voigt fitting |
 | Plasma Diagnostics > Electron Density from Hα... | calculates electron density |
 | Plasma Diagnostics > Saha-Boltzmann Plot... | calculates temperature and ionization stages |
-| Plasma Diagnostics > Self-Absorption Correction (IRSAC2)... | diagnoses and corrects self-absorption with IRSAC2 |
+| Plasma Diagnostics > Self-absorption compensation (IRSAC)... | diagnoses and corrects self-absorption with IRSAC |
 | Plasma Diagnostics > SAC Factors... | opens the historical SAC-factor window |
 | Quantitative Analysis > CF-LIBS... | calculates concentrations and robustness |
 | Quantitative Analysis > Theoretical Spectrum... | provides a diagnostic theoretical comparison |
 | Quantitative Analysis > Standard Correction... | applies an external-standard correction |
 
-`SAC Factors` and `Standard Correction` are specialist or historical tools. In the ordinary workflow, use `Self-Absorption Correction (IRSAC2)`; apply standard correction only when an appropriate documented standard exists.
+`SAC Factors` and `Standard Correction` are specialist or historical tools. In the ordinary workflow, use `Self-absorption compensation (IRSAC)`; apply standard correction only when an appropriate documented standard exists.
 
 ### 20.6 Help
 
@@ -1037,7 +1046,7 @@ The ratio between ionized and neutral populations depends on T, Ne, ionization e
 | FWHM | full width at half maximum |
 | Voigt | convolution of Gaussian and Lorentzian contributions |
 | ROI | interval used for fitting and integration |
-| IRSAC | iterative self-absorption correction |
+| IRSAC | iterative self-absorption compensation |
 | SA | self-absorption |
 | LOO | leave-one-out recalculation after removing one line |
 | CV | coefficient of variation |

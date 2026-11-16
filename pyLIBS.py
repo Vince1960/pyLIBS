@@ -44,6 +44,8 @@ from pylibs.core.instrument_response import (
     serialize_response_paths,
 )
 from pylibs.core.preprocessing import subtract_dark
+from pylibs.core.baseline import remove_baseline
+from pylibs.gui.baseline_dialog import BaselineRemovalDialog
 from pylibs.core.time_resolved import natural_sort_key, process_time_resolved_pairs, time_resolved_output_path, validate_output_prototype
 from pylibs.core.analysis_workflow import (
     irsac_correction_status,
@@ -1980,18 +1982,18 @@ class OptionsWindow(tk.Toplevel):
         ttk.Button(g_db, text="LIBS++", command=lambda: self.use_bundled_database("LIBS.db")).grid(row=1, column=0, padx=3, pady=3, sticky="w")
         ttk.Button(g_db, text="NIST ASD 5.12", command=lambda: self.use_bundled_database("LIBS_NIST_5_12.db")).grid(row=1, column=1, padx=3, pady=3, sticky="e")
 
-        g_sa = self.group(right, "Self-absorption correction (IRSAC2)", 4, 0)
+        g_sa = self.group(right, "Self-absorption compensation", 4, 0)
         ttk.Label(
             g_sa,
             text=(
-                "IRSAC2 parameters, reference lines and correction criteria are "
+                "IRSAC parameters, reference lines and correction criteria are "
                 "managed in the analysis window."
             ),
             wraplength=310,
         ).grid(row=0, column=0, columnspan=2, padx=4, pady=4, sticky="w")
         ttk.Button(
             g_sa,
-            text="Open IRSAC2...",
+            text="Open IRSAC...",
             command=self.master_app.show_self_absorption,
         ).grid(row=1, column=0, columnspan=2, padx=4, pady=4, sticky="ew")
 
@@ -3708,6 +3710,7 @@ class BatchStatisticsWindow(tk.Toplevel):
         self.operation_row = operation_row
         self.convert_csv_button = ttk.Button(operation_row,text="Convert CSV to ASCII XY",command=self.convert_csv_to_ascii)
         self.convert_csv_button.pack(side="left")
+        ttk.Button(operation_row, text="Baseline Removal", command=self.baseline_removal).pack(side="left", padx=3)
         ttk.Button(operation_row,text="Convert Andor SIF to ASCII XY",command=self.convert_sif_to_ascii).pack(side="left", padx=3)
         ttk.Button(operation_row,text="Convert ARYELLE to ASCII XY",command=self.convert_aryelle_to_ascii).pack(side="left", padx=3)
         self.listbox=tk.Listbox(self)
@@ -3844,6 +3847,13 @@ class BatchStatisticsWindow(tk.Toplevel):
 
     def paths(self):
         return [self.listbox.get(i) for i in range(self.listbox.size())]
+
+    def baseline_removal(self):
+        paths = self.paths()
+        if not paths:
+            _showinfo(self, "Baseline Removal", "Add spectra to the batch list first.")
+            return
+        BaselineBatchDialog(self, paths)
 
     def load_list(self):
         fn=filedialog.askopenfilename(initialdir=remembered_initial_dir(self.master_app.options), filetypes=[("File list", "*.lst"), ("Legacy file list", "*.fls"), ("All","*.*")])
@@ -4227,6 +4237,97 @@ class BatchStatisticsWindow(tk.Toplevel):
         win=SimpleTableWindow(self.master_app, "Total intensity report", ("file","total_intensity"))
         for i,(fn,total) in enumerate(rows):
             win.tree.insert("", "end", iid=str(i), values=(Path(fn).name, f"{total:.6g}"))
+
+class BaselineBatchDialog(tk.Toplevel):
+    """Parameters and safe output handling for batch baseline removal."""
+    def __init__(self, master, paths):
+        super().__init__(master)
+        self.master_window = master
+        self.paths = paths
+        self.title("Batch Baseline Removal")
+        self.resizable(False, False)
+        self.algorithm = tk.StringVar(value="AsLS")
+        self.lam = tk.StringVar(value="1000000")
+        self.p = tk.StringVar(value="0.01")
+        self.iterations = tk.StringVar(value="50")
+        self.tolerance = tk.StringVar(value="0.001")
+        self.clip = tk.BooleanVar(value=False)
+        body = ttk.Frame(self, padding=10)
+        body.pack(fill="both", expand=True)
+        rows = (("Algorithm", self.algorithm), ("Smoothing λ", self.lam), ("Asymmetry p (AsLS)", self.p), ("Maximum iterations", self.iterations), ("Convergence tolerance", self.tolerance))
+        for row, (label, variable) in enumerate(rows):
+            ttk.Label(body, text=label).grid(row=row, column=0, sticky="e", padx=5, pady=3)
+            if label == "Algorithm":
+                ttk.Combobox(body, textvariable=variable, values=("AsLS", "airPLS"), state="readonly", width=18).grid(row=row, column=1, sticky="w", padx=5)
+            else:
+                ttk.Entry(body, textvariable=variable, width=21).grid(row=row, column=1, sticky="w", padx=5)
+        ttk.Checkbutton(body, text="Clip negative corrected intensities to zero", variable=self.clip).grid(row=5, column=0, columnspan=2, sticky="w", pady=5)
+        self.progress = tk.StringVar(value=f"{len(paths)} input file(s); failures are reported and skipped.")
+        ttk.Label(body, textvariable=self.progress, wraplength=440).grid(row=6, column=0, columnspan=2, sticky="w", pady=5)
+        buttons = ttk.Frame(body)
+        buttons.grid(row=7, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(buttons, text="Apply", command=self.apply).pack(side="left", padx=3)
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side="left", padx=3)
+        center_window(self, master)
+
+    def apply(self):
+        output_dir = filedialog.askdirectory(parent=self, title="Choose output directory for baseline-corrected spectra", initialdir=remembered_initial_dir(self.master_window.master_app.options), mustexist=True)
+        if not output_dir:
+            return
+        output_dir = Path(output_dir)
+        outputs = []
+        for path in self.paths:
+            source = Path(path)
+            ext = source.suffix.lower()
+            # Binary/container inputs are exported as ASCII XY; ordinary ASCII
+            # files retain their extension and row organization.
+            suffix = ext if ext in {".txt", ".dat", ".asc", ".trt", ".mch", ".jnd"} else ".dat"
+            outputs.append(output_dir / f"{source.stem}_baseline_corrected{suffix}")
+        if len(set(outputs)) != len(outputs):
+            _showerror(self, "Batch Baseline Removal", "Two or more inputs have the same basename and would produce the same output file. Use separate batches or output directories.")
+            return
+        collisions = [path for path in outputs if path.exists()]
+        if collisions:
+            details = "\n".join(path.name for path in collisions[:12])
+            if not _askyesno(self, "Overwrite Existing Spectra?", "These output files already exist:\n\n" + details + "\n\nOverwrite them?"):
+                return
+        successes, failures = [], []
+        for index, (source, target) in enumerate(zip(self.paths, outputs), 1):
+            self.progress.set(f"Processing {index}/{len(self.paths)}: {Path(source).name}")
+            self.update_idletasks()
+            try:
+                if Path(source).suffix.lower() in {".txt", ".dat", ".asc", ".trt", ".mch", ".jnd"}:
+                    xs, columns = read_ascii_spectrum_columns(source, self.master_window.master_app.options.convert_to_angstrom)
+                    corrected_columns = [remove_baseline(xs, column, algorithm=self.algorithm.get(), lam=float(self.lam.get()), p=float(self.p.get()), max_iter=int(self.iterations.get()), tolerance=float(self.tolerance.get()), clip_negative=self.clip.get())[1] for column in columns]
+                    with open(target, "w", encoding="utf-8") as handle:
+                        try:
+                            for line in Path(source).read_text(encoding="utf-8", errors="ignore").splitlines():
+                                if line.lstrip().startswith("#"):
+                                    handle.write(line + "\n")
+                                else:
+                                    break
+                        except OSError:
+                            pass
+                        for row, wavelength in enumerate(xs):
+                            handle.write(" ".join([f"{wavelength:.10g}"] + [f"{column[row]:.10g}" for column in corrected_columns]) + "\n")
+                else:
+                    spectrum = _load_spectrum_for_open(source, self.master_window.master_app.options, Spectrum)
+                    _, spectrum.y = remove_baseline(spectrum.x, spectrum.y, algorithm=self.algorithm.get(), lam=float(self.lam.get()), p=float(self.p.get()), max_iter=int(self.iterations.get()), tolerance=float(self.tolerance.get()), clip_negative=self.clip.get())
+                    spectrum.save_ascii(str(target))
+                successes.append(target)
+            except Exception as exc:
+                failures.append((Path(source).name, str(exc)))
+        summary = f"Processed {len(successes)} of {len(self.paths)} spectra."
+        if failures:
+            summary += "\n\nFailed:\n" + "\n".join(f"{name}: {error}" for name, error in failures[:15])
+            if len(failures) > 15:
+                summary += f"\n…and {len(failures) - 15} more error(s)."
+            _showwarning(self, "Batch Baseline Removal", summary)
+        else:
+            _showinfo(self, "Batch Baseline Removal", summary)
+        self.master_window.master_app.status(summary.splitlines()[0])
+        self.destroy()
+
 
 class VerticalShiftWindow(tk.Toplevel):
     """Unit4: shift verticale dello spettro principale."""
@@ -8213,9 +8314,9 @@ def _irsac_configuration_mismatch(app: "MainWindow") -> str:
     workflow = getattr(app, "last_self_absorption_result", None)
     if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
         if getattr(app, "irsac_algorithm", "IRSAC2") != "IRSAC2":
-            return "IRSAC2 factors do not match the active correction workflow"
+            return "IRSAC factors do not match the active correction workflow"
         if not getattr(app, "last_irsac2_result", None):
-            return "the applied IRSAC2 result is missing"
+            return "the applied IRSAC result is missing"
         return ""
     if not isinstance(workflow, dict):
         return "the applied IRSAC result is missing"
@@ -8263,9 +8364,9 @@ def _self_absorption_quantification_blocker(app: "MainWindow") -> str:
     workflow = getattr(app, "last_self_absorption_result", None)
     if isinstance(workflow, dict) and workflow.get("algorithm") == "IRSAC2":
         if getattr(app, "irsac_algorithm", "IRSAC2") != "IRSAC2":
-            return "IRSAC2 factors do not match the active correction workflow"
+            return "IRSAC factors do not match the active correction workflow"
         if not getattr(app, "last_irsac2_result", None):
-            return "the applied IRSAC2 result is missing"
+            return "the applied IRSAC result is missing"
         invalid = [
             str(getattr(line, "specie", "line"))
             for line in getattr(app, "template_lines", []) or []
@@ -8273,7 +8374,7 @@ def _self_absorption_quantification_blocker(app: "MainWindow") -> str:
             and (safe_float(getattr(line, "sa_sac", 0.0), 0.0) <= 0.0
                  or not math.isfinite(safe_float(getattr(line, "sa_sac", 0.0), 0.0)))
         ]
-        return "IRSAC2 contains a non-positive or non-finite factor" if invalid else ""
+        return "IRSAC contains a non-positive or non-finite factor" if invalid else ""
     if not isinstance(workflow, dict):
         return "the applied self-absorption assessment is missing"
     mode = str(workflow.get("mode", "") or "").strip().lower()
@@ -13065,7 +13166,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
     def __init__(self, master):
         super().__init__(master)
         self.master_app = master
-        self.title("Self-Absorption Check")
+        self.title("Self-absorption compensation")
         self.geometry("1050x525")
         self.minsize(900, 460)
         self._rows = []
@@ -13075,18 +13176,10 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.apply_sac_button = ttk.Button(top, text="Apply correction", command=self.apply_sac)
         self.apply_sac_button.pack(side="left")
         ttk.Label(top, text="IRSAC implementation").pack(side="left", padx=(8, 3))
-        self.algorithm_var = tk.StringVar(value=getattr(master, "irsac_algorithm", "IRSAC1"))
-        self.algorithm_combo = ttk.Combobox(
-            top, textvariable=self.algorithm_var,
-            values=("IRSAC1 (original)", "IRSAC2 (new)"),
-            state="readonly", width=23,
-        )
-        self.algorithm_var.set(
-            "IRSAC2 (new)" if self.algorithm_var.get().startswith("IRSAC2")
-            else "IRSAC1 (original)"
-        )
-        self.algorithm_combo.pack(side="left")
-        self.algorithm_combo.bind("<<ComboboxSelected>>", self._on_algorithm_changed)
+        # Internal compatibility key is retained for saved sessions; the UI
+        # exposes only the supported IRSAC workflow.
+        self.algorithm_var = tk.StringVar(value="IRSAC2 (new)")
+        self.master_app.irsac_algorithm = "IRSAC2"
         ttk.Label(top, text="Mode").pack(side="left", padx=(12, 3))
         configured_mode = _option_key_from_label(
             _SELF_ABSORPTION_MODE_LABELS,
@@ -13492,7 +13585,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 window.compute()
             except Exception:
                 pass
-            self.summary_var.set("IRSAC2 selected; see the IRSAC2 self-absorption window.")
+            self.summary_var.set("IRSAC selected; see the self-absorption compensation window.")
             return getattr(self.master_app, "last_irsac2_result", None)
         self.master_app.irsac_algorithm = "IRSAC1"
         fitted_areas = {
@@ -13670,7 +13763,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         if not lines:
             self.summary_var.set("No assigned analytical lines are available")
             if show_message:
-                _showinfo(self, "Self-Absorption Check", "Assigned analytical lines are required before assessing self-absorption.")
+                _showinfo(self, "Self-absorption compensation", "Assigned analytical lines are required before assessing self-absorption.")
             return None
         mode = self.mode_var.get().strip().lower()
         self.master_app.options.irsac_mode = mode
@@ -13772,7 +13865,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
         self.master_app.irsac_algorithm = "IRSAC2" if use_irsac2 else "IRSAC1"
         if use_irsac2:
             self.master_app.show_self_absorption()
-            self.summary_var.set("IRSAC2 selected; calculate and inspect results in its separate window.")
+            self.summary_var.set("IRSAC selected; calculate and inspect results in its results window.")
         else:
             self.summary_var.set("IRSAC1 selected (original pyLIBS 1.2.1 implementation).")
         return "break"
@@ -13834,7 +13927,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
                 window.remove()
             else:
                 window.apply()
-            self.summary_var.set("IRSAC2 correction state updated in its results window.")
+            self.summary_var.set("IRSAC compensation state updated in its results window.")
             self._update_apply_sac_button()
             return
         self.master_app.irsac_algorithm = "IRSAC1"
@@ -13876,7 +13969,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             if not selected_rows:
                 _showinfo(
                     self,
-                    "Self-absorption correction",
+                    "Self-absorption compensation",
                     (
                         "No supported correction row is selected.\n\n"
                         "Read the diagnostic details first. A manual override remains "
@@ -13946,7 +14039,7 @@ class SelfAbsorptionCheckWindow(tk.Toplevel):
             _refresh_selective_irsac_temperature(self.master_app)
         _sync_self_absorption_temperature(self.master_app, state)
 
-        msg = f"Self-absorption correction applied to {enabled_rows} line(s)" if state else "Self-absorption correction removed"
+        msg = f"Self-absorption compensation applied to {enabled_rows} line(s)" if state else "Self-absorption compensation removed"
         self.summary_var.set(msg)
         self.master_app.status(msg)
         self._update_apply_sac_button()
@@ -14730,7 +14823,7 @@ class CFLibsOPCWindow(tk.Toplevel):
             if point.get("line") is not None
         ):
             raise ValueError(
-                "Remove the self-absorption correction before generating OPC. "
+                "Remove the self-absorption compensation before generating OPC. "
                 "In Palleschi's procedure SAC remains separate from the composite OPC response."
             )
         rows = []
@@ -21795,6 +21888,7 @@ def build_retro_menu(self):
     _add_menu_cascade(self, util_menu, "Signal Processing", processing_menu, "fit.png")
     _add_menu_command(self, processing_menu, shortcut_items, "Intensity Offset...", self.show_spectrum_offset, "Ctrl+F2", "<Control-F2>", "")
     _add_menu_command(self, processing_menu, shortcut_items, "Smooth Spectrum", self.smooth_main_spectrum, "Ctrl+F3", "<Control-F3>", "")
+    _add_menu_command(self, processing_menu, shortcut_items, "Baseline Removal...", self.show_baseline_removal, "", "", "fit.png")
     _add_menu_command(self, processing_menu, shortcut_items, "Convert nm to Å", self.convert_nm_to_angstrom, "Ctrl+F4", "<Control-F4>", "")
 
     line_menu = tk.Menu(util_menu, tearoff=0)
@@ -21835,7 +21929,7 @@ def build_retro_menu(self):
     _add_menu_command(self, plasma_menu, shortcut_items, "Electron Density from Hα...", self.show_ne_halpha, "", "", "H_alpha.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "Saha-Boltzmann Plot...", self.show_saha_boltzmann, "", "", "calculator.png")
     plasma_menu.add_separator()
-    _add_menu_command(self, plasma_menu, shortcut_items, "Self-Absorption Correction (IRSAC2)...", self.show_self_absorption, "", "", "self_absorption.png")
+    _add_menu_command(self, plasma_menu, shortcut_items, "Self-absorption compensation...", self.show_self_absorption, "", "", "self_absorption.png")
     _add_menu_command(self, plasma_menu, shortcut_items, "SAC Factors...", self.show_sac_window, "", "", "calibration.png")
     plasma_menu.add_separator()
     _add_menu_command(self, plasma_menu, shortcut_items, "LTE Check (McWhirter)...", lambda: self.show_lte_check(), "", "", "lte.png")
@@ -22339,6 +22433,12 @@ def smooth_main_spectrum(self):
         return
     self.spectra[0].smooth()
     self.redraw()
+
+def show_baseline_removal(self):
+    if not self.spectra:
+        _showinfo(self, "Baseline Removal", "Load a spectrum before removing its baseline.")
+        return None
+    return BaselineRemovalDialog(self)
 
 def convert_nm_to_angstrom(self):
     invalidate_self_absorption_analysis(self)
@@ -24076,7 +24176,7 @@ def _cflibs_export_tables(self):
                      "atomic_mass", "line_population_factor", "LOO_max_relative_change", "replicate_composition_CV"], result_rows),
         "info": info_rows(self.master_app, [["kT (eV)", getattr(self, "last_kt", None)],
                                              ["Ne (cm-3)", getattr(self, "last_ne", None)],
-                                             ["IRSAC implementation", getattr(self.master_app, "irsac_algorithm", "IRSAC2")],
+                                             ["IRSAC implementation", "IRSAC"],
                                              ["Skipped lines", getattr(self, "last_skipped", None)]]),
     }
 
@@ -24134,7 +24234,7 @@ _RETRO_METHODS = [
     close_template_from_menu, clear_template_data, invalidate_cflibs_results, invalidate_self_absorption_analysis, notify_template_changed, _nearest_spectrum_point, _template_match_index, _merge_template_line, add_template_peak_at, delete_template_peak_at, _click, find_peaks_basic, show_manual, show_about, on_close,
     ask_open_spectrum, ask_import_multiple, ask_save_spectrum, full_x, full_y,
     full_y_main_visible_x,
-    expand_x_50, full_scale, show_options, restore_factory_settings, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_batch_statistics, show_statistics,
+    expand_x_50, full_scale, show_options, restore_factory_settings, show_vertical_shift, show_spectrum_shift, show_spectrum_offset, show_baseline_removal, show_batch_statistics, show_statistics,
     show_auto_element_identification, show_saha_boltzmann, show_cf_libs,
     show_lte_check, show_selfconsistent, show_uncertainty, show_outliers,
     show_self_absorption, save_session, save_session_as, open_session,

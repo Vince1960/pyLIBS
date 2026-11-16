@@ -62,7 +62,7 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
             "toggle_log", "full_x", "full_y", "expand_x_50", "full_scale",
             "save_window_positions", "load_window_positions", "show_response_window",
             "apply_response_now", "show_wavelength_calibration", "show_spectrum_shift",
-            "show_spectrum_offset", "smooth_main_spectrum", "convert_nm_to_angstrom",
+            "show_spectrum_offset", "show_baseline_removal", "smooth_main_spectrum", "convert_nm_to_angstrom",
             "load_template_from_menu", "show_template_manager", "template_info_from_menu",
             "close_template_from_menu", "show_batch_statistics", "show_statistics",
             "show_goto_dialog", "find_peaks_basic", "show_trace_lines",
@@ -115,6 +115,8 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
                 "Batch and Statistics",
             ],
         )
+        processing = cascade(utilities, "Signal Processing")
+        self.assertIn("Baseline Removal...", labels(processing, "command"))
         self.assertEqual(
             labels(analysis, "cascade"),
             [
@@ -132,7 +134,7 @@ class ProfessionalMenuStructureTests(unittest.TestCase):
         quantitative = cascade(analysis, "Quantitative Analysis")
         self.assertIn("Electron Density from Hα...", labels(plasma, "command"))
         self.assertIn(
-            "Self-Absorption Correction (IRSAC2)...",
+            "Self-absorption compensation...",
             labels(plasma, "command"),
         )
         self.assertIn("SAC Factors...", labels(plasma, "command"))

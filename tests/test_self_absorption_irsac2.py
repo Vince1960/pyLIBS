@@ -43,11 +43,11 @@ class TestElSherbini(unittest.TestCase):
 
 
 class TestIRSAC(unittest.TestCase):
-    def test_visible_modes_expose_irsac2_only(self):
+    def test_visible_modes_use_irsac_name_and_expose_no_legacy_choice(self):
         labels = tuple(MODES)
 
-        self.assertIn("IRSAC2 (recommended)", labels)
-        self.assertFalse(any("IRSAC1" in label for label in labels))
+        self.assertIn("IRSAC (recommended)", labels)
+        self.assertFalse(any("IRSAC1" in label or "IRSAC2" in label for label in labels))
 
     def lines(self, attenuate=None, kt=0.9, noise=0.0, seed=1):
         rng = random.Random(seed)
