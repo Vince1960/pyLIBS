@@ -3705,7 +3705,9 @@ class BatchStatisticsWindow(tk.Toplevel):
         self.baseline_correction_button = ttk.Button(
             bottom, text="Baseline correction", command=self.baseline_removal
         )
-        self.baseline_correction_button.pack(side="left", padx=(3, 9))
+        self.baseline_correction_button.pack(
+            side="left", padx=(3, int(round(self.winfo_fpixels("15p"))))
+        )
         self.time_resolved_button = ttk.Button(bottom,text="Time-Resolved Spectra",command=self.time_resolved_spectra)
         self.time_resolved_button.pack(side="left")
         ttk.Button(bottom,text="Close",command=self.destroy).pack(side="right", padx=3)
